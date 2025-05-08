@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE proof_requests SET proof_status = $1 WHERE id = $2 and proof_status = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a0cff0e20bd4604685e94bace16be6f06fa0b5cc3d9d31110e09242213805639"
+}

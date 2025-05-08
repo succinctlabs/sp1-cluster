@@ -1,0 +1,39 @@
+appName: artifact-client
+
+# Only used by CI - does not affect deployment.
+replicaCount: 1
+
+redis:
+  # Only one Redis instance (master)
+  architecture: standalone
+
+  # No ACL due to user secret issues. Fix if we need ACL.
+  auth:
+    enabled: true
+    password:
+    acl:
+      enabled: false
+
+  master:
+    # Expose Redis as a NodePort.
+    # A NodePort allows access from outside the cluster.
+    service:
+      type: ClusterIP
+      port: 6379
+      targetPort: 6379
+
+    # If pod dies, data is lost. Fix if we need persistence.
+    persistence:
+      enabled: false
+
+    configuration: |
+      protected-mode no
+
+      acllog-max-len 128
+
+      io-threads 16
+      maxmemory 30gb
+      maxmemory-policy allkeys-lru
+      hz 100
+
+      latency-monitor-threshold 100

@@ -1,0 +1,15 @@
+[package]
+name = "sp1-cluster-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bincode.workspace = true
+clap.workspace = true
+eyre.workspace = true
+opentelemetry_sdk.workspace = true
+sp1-cluster-artifact = { workspace = true }
+sp1-cluster-common = { workspace = true }
+sp1-sdk = { workspace = true }
+tokio.workspace = true
+tracing.workspace = true

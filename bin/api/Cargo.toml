@@ -1,0 +1,20 @@
+[package]
+name = "sp1-cluster-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sp1-cluster-common = { workspace = true }
+
+alloy.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+dotenv.workspace = true
+opentelemetry_sdk.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+time.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tonic-web.workspace = true
+tracing.workspace = true

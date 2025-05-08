@@ -1,0 +1,29 @@
+[package]
+name = "sp1-cluster-artifact"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sp1-cluster-common = { workspace = true }
+
+anyhow.workspace = true
+async-scoped = { workspace = true, features = ["use-tokio"] }
+async-trait.workspace = true
+aws-config.workspace = true
+aws-sdk-s3.workspace = true
+aws-smithy-async.workspace = true
+backoff.workspace = true
+bincode.workspace = true
+bytes.workspace = true
+deadpool-redis.workspace = true
+lazy_static.workspace = true
+mti.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+zstd.workspace = true
+
+[build-dependencies]

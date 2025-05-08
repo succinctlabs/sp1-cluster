@@ -1,0 +1,34 @@
+[package]
+name = "sp1-cluster-coordinator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sp1-cluster-common.workspace = true
+sp1-sdk.workspace = true
+spn-metrics.workspace = true
+
+anyhow.workspace = true
+async-trait.workspace = true
+config.workspace = true
+ctrlc.workspace = true
+dashmap.workspace = true
+dotenv.workspace = true
+eyre.workspace = true
+hex.workspace = true
+http.workspace = true
+lazy_static.workspace = true
+mti.workspace = true
+opentelemetry_sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-web.workspace = true
+tower.workspace = true
+tracing.workspace = true
+
+[build-dependencies]
+chrono.workspace = true
+

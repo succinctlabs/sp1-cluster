@@ -1,0 +1,130 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT * FROM proof_requests WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "proof_status",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "requester",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "execution_status",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "execution_failure_cause",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "execution_cycles",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "execution_gas",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "execution_public_values_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 8,
+        "name": "stdin_artifact_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "program_artifact_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "proof_artifact_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "options_artifact_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "cycle_limit",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 13,
+        "name": "gas_limit",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 14,
+        "name": "deadline",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 15,
+        "name": "handled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 16,
+        "name": "metadata",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 18,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "eda370087a85de4839dd9e865778c61b3807071ad2725a4c8f6627338d9c5c7a"
+}

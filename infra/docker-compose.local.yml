@@ -1,0 +1,80 @@
+services:
+  redis:
+    extends:
+      file: docker-compose.yml
+      service: redis
+
+  postgresql:
+    extends:
+      file: docker-compose.yml
+      service: postgresql
+
+  api:
+    extends:
+      file: docker-compose.yml
+      service: api
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    command: ["/bin/sh", "-c", "/api"]
+
+  coordinator:
+    extends:
+      file: docker-compose.yml
+      service: coordinator
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    command: ["/bin/sh", "-c", "/coordinator"]
+
+  cpu-node:
+    extends:
+      file: docker-compose.yml
+      service: cpu-node
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    command: ["/bin/sh", "-c", "/node"]
+
+  gpu0:
+    extends:
+      file: docker-compose.yml
+      service: gpu0
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.node_gpu
+    command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
+
+  gpu1:
+    extends: gpu0
+
+  gpu2:
+    extends: gpu0
+
+  gpu3:
+    extends: gpu0
+
+  gpu4:
+    extends: gpu0
+
+  gpu5:
+    extends: gpu0
+
+  gpu6:
+    extends: gpu0
+
+  gpu7:
+    extends: gpu0
+
+  fulfiller:
+    extends:
+      file: docker-compose.yml
+      service: fulfiller
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    command: ["/bin/sh", "-c", "/fulfiller"]
+
+volumes:
+  redis_data:
+  postgresql_data:

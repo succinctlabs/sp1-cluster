@@ -1,0 +1,61 @@
+[package]
+name = "sp1-cluster-worker"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["native-gnark"]
+native-gnark = ["sp1-sdk/native-gnark"]
+gpu = ["dep:moongate-core", "dep:moongate-prover"]
+
+[dependencies]
+sp1-cluster-artifact = { workspace = true }
+sp1-cluster-common = { workspace = true }
+sp1-core-executor = { workspace = true }
+sp1-core-machine = { workspace = true, features = ["bigint-rug"] }
+sp1-prover = { workspace = true }
+sp1-recursion-circuit = { workspace = true }
+sp1-recursion-compiler = { workspace = true }
+sp1-recursion-core = { workspace = true }
+sp1-sdk = { workspace = true }
+sp1-stark = { workspace = true }
+
+moongate-core = { workspace = true, optional = true }
+moongate-prover = { workspace = true, optional = true }
+
+p3-baby-bear = { workspace = true }
+p3-challenger = { workspace = true }
+p3-field = { workspace = true }
+p3-matrix = { workspace = true }
+
+anyhow.workspace = true
+async-channel.workspace = true
+async-trait.workspace = true
+backoff.workspace = true
+cfg-if.workspace = true
+eyre.workspace = true
+futures.workspace = true
+hashbrown.workspace = true
+jemallocator.workspace = true
+lazy_static.workspace = true
+log.workspace = true
+lru.workspace = true
+mti.workspace = true
+opentelemetry.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+spn-metrics.workspace = true
+sys-info.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+
+[build-dependencies]
+vergen-git2.workspace = true

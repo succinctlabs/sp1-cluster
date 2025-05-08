@@ -1,0 +1,34 @@
+appName: coordinator
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/succinctlabs/cluster-private
+  pullPolicy: IfNotPresent
+  tag: server-0b17a2b
+
+# Expose metrics server to cluster and API server as a NodePort.
+# A NodePort allows access from outside the cluster.
+services:
+  - name: metrics
+    type: ClusterIP
+    port: 9090
+    targetPort: 9090
+  - name: grpc
+    type: ClusterIP
+    port: 50051
+    targetPort: 50051
+
+extraEnv: {}
+
+extraEnvFrom: []
+
+resources:
+  requests: {}
+  limits: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

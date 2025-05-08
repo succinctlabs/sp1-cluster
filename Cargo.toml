@@ -1,0 +1,133 @@
+
+[workspace]
+members = ["bin/*", "crates/*"]
+resolver = "2"
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+repository = "https://github.com/succinctlabs/cluster"
+keywords = []
+categories = []
+
+[workspace.dependencies]
+
+# Workspace
+sp1-cluster-artifact = { path = "crates/artifact" }
+sp1-cluster-common = { path = "crates/common" }
+sp1-cluster-worker = { path = "crates/worker" }
+
+# P3
+p3-baby-bear = "=0.2.3-succinct"
+p3-challenger = "=0.2.3-succinct"
+p3-field = "=0.2.3-succinct"
+p3-matrix = "=0.2.3-succinct"
+
+# Moongate
+moongate-core = { git = "https://github.com/succinctlabs/moongate", branch = "chris/vapp" }
+moongate-prover = { git = "https://github.com/succinctlabs/moongate", branch = "chris/vapp" }
+
+# SP1
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3", features = ["bigint-rug"] }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
+sp1-recursion-core = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
+sp1-stark = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
+spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
+spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
+
+# Misc
+alloy = { version = "0.14.0", default-features = false, features = ["serde"] }
+alloy-primitives = { version = "1.2.0", default-features = false, features = ["serde"] }
+alloy-signer-local = { version = "0.14.0" }
+anyhow = "1.0.95"
+async-channel = "2.3.1"
+async-scoped = "0.9.0"
+async-trait = "0.1.85"
+aws-config = { version = "1.1.7", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1.84.0"
+aws-smithy-async = "1.2.5"
+axum = "0.8.4"
+backoff = "0.4.0"
+bincode = "1.3.3"
+bytes = "1.10.1"
+cfg-if = "1.0.0"
+chrono = { version = "0.4.40", features = ["alloc", "now"] }
+clap = { version = "4.4", features = ["derive", "env"] }
+config = "0.14.0"
+ctrlc = { version = "3.4.5", features = ["termination"] }
+dashmap = "6.1.0"
+deadpool-redis = "0.20.0"
+dirs = "6.0.0"
+dotenv = "0.15.0"
+eyre = "0.6.12"
+futures = "0.3.31"
+hashbrown = "0.15.3"
+hex = "0.4.3"
+http = "1.3.1"
+if-addrs = "0.13.4"
+jemallocator = "0.5.4"
+lazy_static = "1.5.0"
+log = "0.4.27"
+lru = "0.14.0"
+mti = "1.0.7-beta.1"
+opentelemetry = "0.23.0"
+opentelemetry-appender-tracing = "0.4.0"
+opentelemetry-otlp = "0.16.0"
+opentelemetry_sdk = "0.23.0"
+prost = "0.13.5"
+rand = "0.9.0"
+reqwest = "0.12.12"
+rustls = "0.23.27"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.138"
+sqlx = { version = "0.8.5", features = [ "runtime-tokio", "tls-native-tls", "macros", "postgres", "time" ] }
+sys-info = "0.9.1"
+sysinfo = "0.33.1"
+time = { version = "0.3.41", features = ["serde"] }
+tokio = { version = "1.45.0", features = ["full"] }
+tokio-stream = "0.1"
+tonic = { version = "0.12.3", features = ["tls"] }
+tonic-build = "0.12.3"
+tonic-web = "0.12.3"
+tower = "0.5.2"
+tracing = "0.1.41"
+tracing-opentelemetry = "0.24.0"
+tracing-subscriber = "0.3.19"
+vergen-git2 = { version = "1.0.1", default-features = false, features = [
+    "build",
+    "cargo",
+    "rustc",
+    "si",
+] }
+zstd = "0.13.3"
+
+[workspace.metadata.cargo-shear]
+ignored = ["prost"]
+
+[profile.release]
+debug = true
+
+[profile.release.build-override]
+opt-level = 3
+
+[profile.release.package.moongate-core]
+debug = false
+
+# Enable a small amount of optimization in the dev profile.
+[profile.dev]
+opt-level = 1
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.moongate-core]
+debug = false
+
+[profile.dev.build-override]
+opt-level = 3

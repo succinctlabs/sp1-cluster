@@ -1,0 +1,12 @@
+**/rust-toolchain
+**/target/
+.env
+.env.*
+!/.env.example
+infra/
+
+docker-compose.yml
+docker-compose.override.yml
+.dockerignore
+
+.git

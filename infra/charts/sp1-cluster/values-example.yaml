@@ -1,0 +1,192 @@
+# Example values.yaml
+
+# Expects a secret `cluster-secrets` with the following entries:
+# DATABASE_URL=postgresql://postgres:postgrespassword@postgresql:5432/postgres
+# REDIS_NODES=redis://:redispassword@redis-master:6379/0
+# PRIVATE_KEY=
+#
+# See https://kubernetes.io/docs/tasks/configmap-secret/managing-secret-using-kubectl/#create-a-secret
+
+# Also expects a secret `ghcr-secret` (for `imagePullSecrets`) if using a private image repo.
+# See https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+
+global:
+  redis:
+    # Change this to a secure password.
+    password: redispassword
+
+redis-store:
+  enabled: true
+  redis:
+    fullnameOverride: redis
+    master:
+      resources:
+        limits:
+          memory: "30Gi"
+        requests:
+          memory: "30Gi"
+    # Recommended to place on a non-worker machine.
+    # nodeSelector: {}
+    # tolerations: []
+    # affinity: {}
+
+cpu-node:
+  enabled: true
+  replicaCount: 1
+  # Workaround to allow circuit artifacts volume to be writable, since hostPath volumes are only
+  # writable by root.
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+    fsGroup: 0
+  # Mount circuit artifacts from the host so that the artifacts are preserved across restarts.
+  volumes:
+    - name: sp1-circuits
+      hostPath:
+        # Change this to any desired path on the host where circuit artifacts should be stored.
+        path: /tmp/.sp1/circuits
+        type: DirectoryOrCreate
+  volumeMounts:
+    - name: sp1-circuits
+      mountPath: /root/.sp1/circuits
+  extraEnv:
+    NODE_COORDINATOR_RPC: http://coordinator-grpc:50051
+    # Set this based on how many GB of RAM is available.
+    WORKER_MAX_WEIGHT_OVERRIDE: "32"
+    NODE_ARTIFACT_STORE: redis
+    NODE_REDIS_NODES:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: REDIS_NODES
+  resources:
+    # At least 32 GB of RAM is necessary for Plonk.
+    requests:
+      cpu: 4
+      memory: 32Gi
+    limits:
+      cpu: 8
+      memory: 32Gi
+  image:
+    tag: "base-855e945"
+  imagePullSecrets:
+    - name: ghcr-secret
+  # Recommended to place on a non-GPU machine with a powerful CPU.
+  # nodeSelector: {}
+  # tolerations: []
+  # affinity: {}
+
+gpu-node:
+  enabled: true
+  replicaCount: 2
+  extraEnv:
+    NODE_COORDINATOR_RPC: http://coordinator-grpc:50051
+    # Set this based on how many GB of normal RAM is available.
+    WORKER_MAX_WEIGHT_OVERRIDE: "24"
+    NODE_ARTIFACT_STORE: redis
+    NODE_REDIS_NODES:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: REDIS_NODES
+  resources:
+    requests:
+      # Each GPU pod should have at least 16GB RAM and as many cores as possible.
+      # Also, only certain GPUs with >=24GB RAM are supported.
+      nvidia.com/gpu: 1
+      cpu: 32.0
+      memory: 24Gi
+    limits:
+      nvidia.com/gpu: 1
+      cpu: 32.0
+      memory: 24Gi
+  image:
+    tag: "node-gpu-855e945"
+  imagePullSecrets:
+    - name: ghcr-secret
+
+api:
+  enabled: true
+  extraEnv:
+    API_GRPC_ADDR: 0.0.0.0:50051
+    API_HTTP_ADDR: 0.0.0.0:3000
+    API_AUTO_MIGRATE: "true"
+    API_DATABASE_URL:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: DATABASE_URL
+  replicaCount: 1
+  image:
+    tag: "base-855e945"
+  imagePullSecrets:
+    - name: ghcr-secret
+  # Recommended to place on a non-worker machine.
+  # nodeSelector: {}
+  # tolerations: []
+  # affinity: {}
+
+coordinator:
+  enabled: true
+  extraEnv:
+    COORDINATOR_CLUSTER_RPC: http://api-grpc:50051
+    COORDINATOR_METRICS_ADDR: 0.0.0.0:9090
+    COORDINATOR_ADDR: 0.0.0.0:50051
+  image:
+    tag: "base-855e945"
+  imagePullSecrets:
+    - name: ghcr-secret
+  # Recommended to place on a non-worker machine.
+  # nodeSelector: {}
+  # tolerations: []
+  # affinity: {}
+
+postgresql:
+  enabled: true
+  fullnameOverride: postgresql
+  auth:
+    # Change this to a secure password.
+    postgresPassword: postgrespassword
+  primary:
+    # Optionally, enable persistence to retain proof request data across restarts.
+    persistence:
+      enabled: false
+    # Recommended to place on a non-worker machine.
+    # nodeSelector: {}
+    # tolerations: []
+    # affinity: {}
+  backup:
+    enabled: false
+  service:
+    type: ClusterIP
+    port: 5432
+
+fulfiller:
+  # The fulfiller is only necessary for fulfilling proofs on the Prover Network.
+  enabled: false
+  extraEnv:
+    FULFILLER_CLUSTER_RPC: http://coordinator-grpc:50051
+    FULFILLER_LOG_FORMAT: Pretty
+    FULFILLER_CLUSTER_ARTIFACT_STORE: redis
+    # Ensure these five env vars are set correctly.
+    FULFILLER_RPC_GRPC_ADDR: https://rpc.testnet-private.succinct.xyz
+    FULFILLER_VERSION: sp1-v5.0.0
+    FULFILLER_DOMAIN: SPN_SEPOLIA_V1_DOMAIN
+    FULFILLER_CLUSTER_REDIS_NODES:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: REDIS_NODES
+    FULFILLER_SP1_PRIVATE_KEY:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: PRIVATE_KEY
+  image:
+    tag: "base-855e945"
+  imagePullSecrets:
+    - name: ghcr-secret
+  # Recommended to place on a non-worker machine.
+  # nodeSelector: {}
+  # tolerations: []
+  # affinity: {}

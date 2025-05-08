@@ -1,0 +1,19 @@
+
+███████╗██████╗  ██╗     ██████╗██╗     ██╗   ██╗███████╗████████╗███████╗██████╗
+██╔════╝██╔══██╗███║    ██╔════╝██║     ██║   ██║██╔════╝╚══██╔══╝██╔════╝██╔══██╗
+███████╗██████╔╝╚██║    ██║     ██║     ██║   ██║███████╗   ██║   █████╗  ██████╔╝
+╚════██║██╔═══╝  ██║    ██║     ██║     ██║   ██║╚════██║   ██║   ██╔══╝  ██╔══██╗
+███████║██║      ██║    ╚██████╗███████╗╚██████╔╝███████║   ██║   ███████╗██║  ██║
+╚══════╝╚═╝      ╚═╝     ╚═════╝╚══════╝ ╚═════╝ ╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝
+
+Successfully deployed {{ .Release.Name }}!
+
+## Check all pods & deployments in this release:
+kubectl get pods,deploy -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+## View logs:
+kubectl logs -f -n {{ .Release.Namespace }} -l 'app in (api,coordinator,cpu-node,gpu-node)' --tail=100
+
+## Troubleshooting:
+kubectl describe pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+kubectl get events -n {{ .Release.Namespace }} --sort-by='.lastTimestamp'

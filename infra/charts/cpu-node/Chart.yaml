@@ -1,0 +1,8 @@
+apiVersion: v2
+name: cpu-node
+description: Succinct SP1 Prover Service CPU Node.
+icon: https://testnet.succinct.xyz/images/succinct-arcade-logo.svg
+
+type: application
+
+version: 0.1.9

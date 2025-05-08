@@ -1,0 +1,31 @@
+[package]
+name = "sp1-cluster-fulfiller"
+description = "Proof request fulfiller for SPN."
+readme = "README.md"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+categories = { workspace = true }
+
+[dependencies]
+sp1-cluster-artifact = { workspace = true }
+sp1-cluster-common = { workspace = true }
+
+spn-artifacts = { workspace = true }
+spn-metrics = { workspace = true }
+spn-network-types = { workspace = true }
+spn-utils = { workspace = true }
+
+alloy-primitives = { workspace = true }
+alloy-signer-local = { workspace = true }
+anyhow = { workspace = true }
+config = { workspace = true }
+dotenv = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+rustls = { workspace = true, features = ["ring"] }
+serde = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }

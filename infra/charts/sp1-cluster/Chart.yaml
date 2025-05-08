@@ -1,0 +1,38 @@
+apiVersion: v2
+name: sp1-cluster
+description: Umbrella chart for Succinct SP1 Cluster.
+icon: https://testnet.succinct.xyz/images/succinct-arcade-logo.svg
+
+type: application
+
+version: 0.1.0
+
+dependencies:
+  - name: redis-store
+    repository: "file://../redis-store"
+    version: "*"
+    condition: redis-store.enabled
+  - name: postgresql
+    repository: "https://charts.bitnami.com/bitnami"
+    version: "16.7.0"
+    condition: postgresql.enabled
+  - name: api
+    repository: "file://../api"
+    version: "*"
+    condition: api.enabled
+  - name: coordinator
+    repository: "file://../coordinator"
+    version: "*"
+    condition: coordinator.enabled
+  - name: cpu-node
+    repository: "file://../cpu-node"
+    version: "*"
+    condition: cpu-node.enabled
+  - name: gpu-node
+    repository: "file://../gpu-node"
+    version: "*"
+    condition: gpu-node.enabled
+  - name: fulfiller
+    repository: "file://../fulfiller"
+    version: "*"
+    condition: fulfiller.enabled

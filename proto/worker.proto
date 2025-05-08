@@ -1,0 +1,273 @@
+// Proto definition (worker.proto)
+syntax = "proto3";
+package worker;
+
+import "google/protobuf/empty.proto";
+
+service WorkerService {
+    // Open a server->client stream to register the worker and receive tasks to work on.
+    rpc Open(OpenRequest) returns (stream ServerMessage);
+
+    // Tell the server that the worker is closing and cannot receive any more tasks.
+    rpc Close(CloseRequest) returns (google.protobuf.Empty);
+
+    // Send a heartbeat with tasks that the worker is currently working on.
+    rpc Heartbeat(HeartbeatRequest) returns (google.protobuf.Empty);
+
+    // Notify the server that a task has been completed.
+    rpc CompleteTask(CompleteTaskRequest) returns (google.protobuf.Empty);
+
+    // Notify the server that a task has failed.
+    rpc FailTask(FailTaskRequest) returns (google.protobuf.Empty);
+
+    // Create a new task.
+    rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
+
+    // Get the statuses of tasks that are currently being worked on.
+    rpc GetTaskStatuses(GetTaskStatusesRequest) returns (GetTaskStatusesResponse);
+
+    // Notify the server that a proof has been completed.
+    rpc CompleteProof(CompleteProofRequest) returns (google.protobuf.Empty);
+
+    // Notify the server that a proof has failed.
+    rpc FailProof(FailProofRequest) returns (google.protobuf.Empty);
+
+    // Create a proof.
+    rpc CreateProof(CreateProofRequest) returns (CreateProofResponse);
+
+    // Create a dummy proof.
+    rpc CreateDummyProof(CreateDummyProofRequest) returns (google.protobuf.Empty);
+
+    // Cancel a proof.
+    rpc CancelProof(CancelProofRequest) returns (google.protobuf.Empty);
+
+    // Open a server->client stream to receive notifications on tasks that are subscribed to.
+    rpc OpenSub(OpenSubRequest) returns (stream ServerSubMessage);
+
+    // Update the server with new tasks that the client wants to wait for.
+    rpc UpdateSub(UpdateSubRequest) returns (google.protobuf.Empty);
+
+    // Acknowledge that the client has received a task update from the server.
+    rpc AckSub(AckSubRequest) returns (google.protobuf.Empty);
+
+    // Check that the server is still alive.
+    rpc Healthcheck(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+    // Get stats about the coordinator.
+    rpc GetStats(google.protobuf.Empty) returns (GetStatsResponse);
+}
+
+// Task types
+
+enum WorkerType {
+    UNSPECIFIED_WORKER_TYPE = 0;
+    CPU = 1;
+    GPU = 2;
+    ALL = 3;
+    NONE = 4;
+}
+
+enum TaskType {
+    UNSPECIFIED_TASK_TYPE = 0;
+    CONTROLLER = 1;
+    PROVE_SHARD = 2;
+    RECURSION_REDUCE = 3;
+    RECURSION_DEFERRED = 4;
+    SHRINK_WRAP = 5;
+    SETUP_VKEY = 6;
+    MARKER_DEFERRED_RECORD = 7;
+    PLONK_WRAP = 8;
+    GROTH16_WRAP = 9;
+}
+
+enum TaskStatus {
+    UNSPECIFIED_STATUS = 0;
+    PENDING = 2;
+    RUNNING = 3;
+    SUCCEEDED = 4;
+    FAILED_RETRYABLE = 5;
+    FAILED_FATAL = 6;
+}
+
+message TaskData {
+    TaskType task_type = 1;
+    repeated string inputs = 2;
+    repeated string outputs = 3;
+    string metadata = 4;
+    string proof_id = 5;
+    optional string parent_id = 6;
+    uint32 weight = 7;
+    string requester = 8;
+}
+
+// RPC Messages
+
+message OpenRequest {
+    string worker_id = 1;
+    WorkerType worker_type = 2;
+    uint32 max_weight = 3;
+}
+
+message ServerMessage {
+    oneof message {
+        WorkerTask new_task = 1;
+        CancelTask cancel_task = 2;
+        ServerHeartbeat server_heartbeat = 3;
+    }
+}
+
+message WorkerTask {
+    string task_id = 1;
+    TaskData data = 2;
+    string metadata = 3;
+}
+
+message CancelTask {
+    string proof_id = 1;
+    string task_id = 2;
+}
+
+message ServerHeartbeat {}
+
+message CloseRequest {
+    string worker_id = 1;
+}
+
+message HeartbeatRequest {
+    string worker_id = 1;
+    repeated string active_task_proof_ids = 2;
+    repeated string active_task_ids = 3;
+    uint32 current_weight = 4;
+}
+
+message CompleteTaskRequest {
+    string worker_id = 1;
+    string proof_id = 2;
+    string task_id = 3;
+    string metadata = 4;
+}
+
+message FailTaskRequest {
+    string worker_id = 1;
+    string proof_id = 2;
+    string task_id = 3;
+    bool retryable = 4;
+}
+
+message CreateTaskRequest {
+    string worker_id = 1;
+    TaskData data = 2;
+}
+
+message CreateTaskResponse {
+    string task_id = 1;
+}
+
+message GetTaskStatusesRequest {
+    string worker_id = 1;
+    string proof_id = 2;
+    repeated string task_ids = 3;
+}
+
+message GetTaskStatusesResponse {
+    repeated TaskStatusMapEntry statuses = 1;
+}
+
+message TaskStatusMapEntry {
+    TaskStatus key = 1;
+    TaskIDList value = 2;
+}
+
+message TaskIDList { repeated string ids = 1; }
+
+message CompleteProofRequest {
+    string worker_id = 1;
+    string proof_id = 2;
+}
+
+message FailProofRequest {
+    string worker_id = 1;
+    string proof_id = 2;
+    optional string task_id = 3;
+}
+
+message CreateProofRequest {
+    string proof_id = 1;
+    repeated string inputs = 2;
+    repeated string outputs = 3;
+    string requester = 4;
+    int64 expires_at = 5;
+}
+
+message CreateProofResponse {
+    string task_id = 1;
+}
+
+message CreateDummyProofRequest {
+    string worker_id = 1;
+    string proof_id = 2;
+    string requester = 3;
+    int64 expires_at = 4;
+}
+
+message CancelProofRequest {
+    string worker_id = 1;
+    string proof_id = 2;
+}
+
+message OpenSubRequest {
+    string sub_id = 1;
+    string proof_id = 2;
+    repeated string task_ids = 3;
+}
+
+message ServerSubMessage {
+    string msg_id = 1;
+    oneof message {
+        TaskResult task_result = 2;
+        EndOfStream end_of_stream = 3;
+        UnknownTask unknown_task = 4;
+        ServerSubHeartbeat server_heartbeat = 5;
+    }
+}
+
+message TaskResult {
+    string task_id = 1;
+    TaskStatus task_status = 2;
+}
+
+message EndOfStream {}
+
+message UnknownTask {
+    string proof_id = 1;
+    string task_id = 2;
+}
+
+message ServerSubHeartbeat {}
+
+message UpdateSubRequest {
+    string sub_id = 1;
+    repeated string task_ids = 2;
+}
+
+message AckSubRequest {
+    string sub_id = 1;
+    string msg_id = 2;
+}
+
+message GetStatsResponse {
+    string coordinator_version = 1;
+    string sp1_circuit_version = 2;
+    uint64 total_tasks = 3;
+    uint32 active_tasks = 4;
+    uint32 cpu_workers = 5;
+    uint32 gpu_workers = 6;
+    uint32 cpu_utilization_current = 7;
+    uint32 cpu_utilization_max = 8;
+    uint32 gpu_utilization_current = 9;
+    uint32 gpu_utilization_max = 10;
+    uint32 active_proofs = 11;
+    uint32 cpu_queue = 12;
+    uint32 gpu_queue = 13;
+    uint32 active_subscribers = 14;
+}

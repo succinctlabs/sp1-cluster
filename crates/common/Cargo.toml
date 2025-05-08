@@ -1,0 +1,28 @@
+[package]
+name = "sp1-cluster-common"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+backoff = { workspace = true, features = ["futures", "tokio"] }
+eyre.workspace = true
+futures.workspace = true
+if-addrs.workspace = true
+lazy_static.workspace = true
+log.workspace = true
+opentelemetry.workspace = true
+opentelemetry-appender-tracing.workspace = true
+opentelemetry-otlp = { workspace = true, features = ["tokio", "logs"] }
+opentelemetry_sdk = { workspace = true, features = ["logs", "logs_level_enabled", "rt-tokio"] }
+prost.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[build-dependencies]
+chrono.workspace = true
+tonic-build.workspace = true

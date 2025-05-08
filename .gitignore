@@ -1,0 +1,30 @@
+# Cargo build
+**/target
+
+# Cargo config
+.cargo
+
+# Profile-guided optimization
+/tmp
+pgo-data.profdata
+
+# MacOS nuisances
+.DS_Store
+
+# Environment variables
+**/.env*
+!**/.env.example
+
+# Contract bindings
+**/codegen
+
+# Release copybara
+**/RELEASE_TEMP_SUBREPO
+copybara.jar
+
+/node_modules
+
+**/charts/*.tgz
+
+values-*.yaml
+!values-example.yaml

@@ -1,0 +1,24 @@
+dependencies:
+- name: redis-store
+  repository: file://../redis-store
+  version: 0.1.3
+- name: postgresql
+  repository: https://charts.bitnami.com/bitnami
+  version: 16.7.0
+- name: api
+  repository: file://../api
+  version: 0.1.5
+- name: coordinator
+  repository: file://../coordinator
+  version: 0.1.5
+- name: cpu-node
+  repository: file://../cpu-node
+  version: 0.1.9
+- name: gpu-node
+  repository: file://../gpu-node
+  version: 0.1.25
+- name: fulfiller
+  repository: file://../fulfiller
+  version: 0.1.5
+digest: sha256:43042400f27fdc86bc80eef87840a1c26daaf8d0e0c2b5268d5f5161e24fdfe3
+generated: "2025-06-12T00:37:58.303033897Z"

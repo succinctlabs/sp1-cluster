@@ -1,0 +1,26 @@
+{{- if gt (int .Values.replicaCount) 0 }}
+
+{{- range .Values.services }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Values.appName }}-{{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ $.Values.appName }}
+spec:
+  type: {{ .type }}
+  ports:
+  - port: {{ .port }}
+    targetPort: {{ .targetPort }}
+    {{- if and .nodePort (eq .type "NodePort") }}
+    nodePort: {{ .nodePort }}
+    {{- end }}
+    protocol: TCP
+    name: {{ .name }}
+  selector:
+    app: {{ $.Values.appName }}
+{{- end }}
+
+{{- end }}

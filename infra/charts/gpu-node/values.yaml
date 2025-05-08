@@ -1,0 +1,30 @@
+appName: gpu-node
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/succinctlabs/cluster-private
+  # repository: 421253708207.dkr.ecr.us-east-2.amazonaws.com/succinct-cluster
+  pullPolicy: IfNotPresent
+  tag: client-gpu-a00f4c4
+
+# Expose metrics server to cluster
+services:
+  - name: metrics
+    type: ClusterIP
+    port: 9090
+    targetPort: 9090
+
+extraEnv:
+
+extraEnvFrom: []
+
+resources:
+  requests: {}
+  limits: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

@@ -1,0 +1,124 @@
+name: Lint
+
+env:
+  FOUNDRY_PROFILE: "ci"
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on:
+      [
+        "runs-on",
+        "runner=32cpu-linux-x64",
+        "run-id=${{ github.run_id }}",
+        "spot=false",
+        "tag=lint",
+      ]
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    steps:
+      - name: Checkout repository and submodules
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.PRIVATE_PULL_TOKEN }}
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.1"
+
+      # Needed for build.rs
+      - name: Install protoc
+        run: |
+          PROTOC_ZIP=protoc-29.4-linux-x86_64.zip
+          curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v29.4/$PROTOC_ZIP
+          sudo unzip -o $PROTOC_ZIP -d /usr/local bin/protoc
+          sudo unzip -o $PROTOC_ZIP -d /usr/local 'include/*'
+          rm -f $PROTOC_ZIP
+
+      - name: Setup GCC
+        uses: Dup4/actions-setup-gcc@v1
+        with:
+          version: latest
+
+      - name: rust-cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+            ~/.rustup/
+          key: rust-nightly-2025-03-12-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: rust-nightly-2025-03-12-
+
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly-2025-03-12
+          profile: minimal
+          override: true
+          components: rustfmt, clippy
+
+      - name: Setup private git access
+        run: |
+          git config --global --replace-all url."https://${PRIVATE_PULL_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global --add url."https://${PRIVATE_PULL_TOKEN}@github.com/".insteadOf "git@github.com:"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
+        env:
+          PRIVATE_PULL_TOKEN: ${{ secrets.PRIVATE_PULL_TOKEN }}
+
+      - name: Run cargo fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --manifest-path Cargo.toml --all -- --check -v
+        env:
+          CARGO_INCREMENTAL: 1
+
+      - name: Run cargo clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --manifest-path Cargo.toml --all-features --all-targets -- -D warnings -A incomplete-features
+        env:
+          CARGO_INCREMENTAL: 1
+
+      - name: Run cargo test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --manifest-path Cargo.toml
+        env:
+          CARGO_INCREMENTAL: 1
+
+      - name: Install cargo shear and cargo sort
+        run: |
+          # Ignore error if it's installed already
+          cargo shear --help || cargo install cargo-shear --locked
+          cargo sort --help || cargo install cargo-sort --locked
+
+      - name: Run cargo shear
+        uses: actions-rs/cargo@v1
+        with:
+          command: shear
+          args: --fix
+
+      - name: Run cargo sort
+        uses: actions-rs/cargo@v1
+        with:
+          command: sort
+          args: -g -w
+
+      - name: Error if changes
+        run: |
+          git diff --exit-code

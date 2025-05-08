@@ -1,0 +1,10 @@
+apiVersion: v2
+name: redis-store
+description: Succinct SP1 Cluster Redis Artifact Store.
+
+dependencies:
+  - name: redis
+    version: 20.13.1 # uses Redis version 7.4.2
+    repository: "https://charts.bitnami.com/bitnami"
+
+version: 0.1.3

@@ -1,0 +1,8 @@
+apiVersion: v2
+name: coordinator
+description: Succinct SP1 Cluster Coordinator.
+icon: https://testnet.succinct.xyz/images/succinct-arcade-logo.svg
+
+type: application
+
+version: 0.1.5

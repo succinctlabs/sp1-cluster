@@ -1,0 +1,208 @@
+name: Build and Push Docker to ECR
+on: [push]
+
+env:
+  ECR_REPOSITORY: 421253708207.dkr.ecr.us-east-1.amazonaws.com/sp1-cluster
+  GHCR_REPOSITORY: ghcr.io/${{ github.repository }}
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      SHORT_SHA: ${{ steps.short_sha.outputs.SHORT_SHA }}
+    steps:
+      - name: Generate short SHA
+        id: short_sha
+        run: echo "SHORT_SHA=`echo ${GITHUB_SHA} | cut -c1-7`" >> $GITHUB_OUTPUT
+
+  build-base:
+    needs: setup
+    runs-on:
+      [
+        "runs-on",
+        "runner=32cpu-linux-x64",
+        "run-id=${{ github.run_id }}",
+        "spot=false",
+        "tag=base",
+        "disk=large",
+      ]
+    steps:
+      - name: Cleanup disk space
+        run: |
+          df -h
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.PRIVATE_PULL_TOKEN }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache
+        uses: actions/cache@v3
+        id: cache
+        with:
+          path: |
+            cargo-git
+            cargo-registry
+            target
+          key: cache-base-${{ hashFiles('infra/Dockerfile') }}
+          restore-keys: |
+            cache-base-
+      - name: inject cache into docker
+        uses: reproducible-containers/buildkit-cache-dance@v3.1.0
+        with:
+          cache-map: |
+            {
+              "cargo-git": "/usr/local/cargo/git",
+              "cargo-registry": "/usr/local/cargo/registry",
+              "target": "/app/target"
+            }
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: private
+
+      - name: Build and Push Base image to ECR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./infra/Dockerfile
+          push: true
+          tags: ${{ env.ECR_REPOSITORY }}:base-${{ needs.setup.outputs.SHORT_SHA }}
+          build-args: |
+            GITHUB_TOKEN=${{ secrets.PRIVATE_PULL_TOKEN }}
+            VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+      - name: Log into GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REPOSITORY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Base image to GHCR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./infra/Dockerfile
+          push: true
+          tags: ${{ env.GHCR_REPOSITORY }}:base-${{ needs.setup.outputs.SHORT_SHA }}
+          build-args: |
+            GITHUB_TOKEN=${{ secrets.PRIVATE_PULL_TOKEN }}
+            VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+  build-node-gpu:
+    needs: setup
+    runs-on:
+      [
+        "runs-on",
+        "runner=32cpu-linux-x64",
+        "run-id=${{ github.run_id }}",
+        "spot=false",
+        "tag=node-gpu",
+        "disk=large",
+      ]
+    steps:
+      - name: Cleanup disk space
+        run: |
+          df -h
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+          token: ${{ secrets.PRIVATE_PULL_TOKEN }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache
+        uses: actions/cache@v3
+        id: cache
+        with:
+          path: |
+            cargo-git
+            cargo-registry
+            target
+          key: cache-node-gpu-${{ hashFiles('infra/Dockerfile.node_gpu') }}
+          restore-keys: |
+            cache-node-gpu-
+      - name: inject cache into docker
+        uses: reproducible-containers/buildkit-cache-dance@v3.1.0
+        with:
+          cache-map: |
+            {
+              "cargo-git": "/root/.cargo/git",
+              "cargo-registry": "/root/.cargo/registry",
+              "target": "/app/target"
+            }
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: private
+
+      - name: Build and Push Node GPU image to ECR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/Dockerfile.node_gpu
+          push: true
+          tags: ${{ env.ECR_REPOSITORY }}:node-gpu-${{ needs.setup.outputs.SHORT_SHA }}
+          build-args: |
+            GITHUB_TOKEN=${{ secrets.PRIVATE_PULL_TOKEN }}
+            VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
+          cache-from: type=gha,scope=node-gpu
+          cache-to: type=gha,mode=max,scope=node-gpu
+
+      - name: Log into GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REPOSITORY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Node GPU image to GHCR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/Dockerfile.node_gpu
+          push: true
+          tags: ${{ env.GHCR_REPOSITORY }}:node-gpu-${{ needs.setup.outputs.SHORT_SHA }}
+          build-args: |
+            GITHUB_TOKEN=${{ secrets.PRIVATE_PULL_TOKEN }}
+            VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
+          cache-from: type=gha,scope=node-gpu
+          cache-to: type=gha,mode=max,scope=node-gpu

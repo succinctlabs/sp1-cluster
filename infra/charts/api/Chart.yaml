@@ -1,0 +1,8 @@
+apiVersion: v2
+name: api
+description: Succinct SP1 Cluster API.
+icon: https://testnet.succinct.xyz/images/succinct-arcade-logo.svg
+
+type: application
+
+version: 0.1.5
