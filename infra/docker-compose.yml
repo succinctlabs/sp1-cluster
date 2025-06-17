@@ -185,6 +185,18 @@ services:
       - redis
     command: ["/bin/sh", "-c", "/fulfiller"]
 
+  # Bidder Service
+  bidder:
+    image: succinctlabs/sp1-cluster:base-8e83b83
+    environment:
+      - BIDDER_LOG_FORMAT=Pretty
+      - BIDDER_VERSION=sp1-v5.0.0
+      - BIDDER_DOMAIN=SPN_SEPOLIA_V1_DOMAIN
+      - BIDDER_METRICS_ADDR=0.0.0.0:9090
+      - BIDDER_RPC_GRPC_ADDR=${RPC_GRPC_ADDR}
+      - BIDDER_SP1_PRIVATE_KEY=${SP1_PRIVATE_KEY}
+    command: ["/bin/sh", "-c", "/bidder"]
+
 volumes:
   redis_data:
   postgresql_data:

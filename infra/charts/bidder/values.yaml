@@ -1,0 +1,22 @@
+appName: bidder
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/succinctlabs/cluster
+  pullPolicy: IfNotPresent
+  tag: base-0b17a2b
+
+extraEnv: {}
+
+extraEnvFrom: []
+
+resources:
+  requests: {}
+  limits: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

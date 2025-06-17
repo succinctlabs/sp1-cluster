@@ -1,0 +1,16 @@
+{{- if gt (int .Values.replicaCount) 0 }}
+                                                               
+Successfully deployed {{ .Values.appName }} with {{ .Values.replicaCount }} replica(s)!
+
+## Check deployment status:
+  kubectl get pods -n {{ .Release.Namespace }} -l app={{ .Values.appName }}
+  kubectl get deployment {{ .Values.appName }} -n {{ .Release.Namespace }}
+
+## View logs:
+  kubectl logs -f -n {{ .Release.Namespace }} -l app={{ .Values.appName }}
+
+## Troubleshooting:
+  kubectl describe pods -n {{ .Release.Namespace }} -l app={{ .Values.appName }}
+  kubectl get events -n {{ .Release.Namespace }} --sort-by='.lastTimestamp'
+
+{{- end }}

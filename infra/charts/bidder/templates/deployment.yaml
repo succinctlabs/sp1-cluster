@@ -1,0 +1,62 @@
+{{- if gt (int .Values.replicaCount) 0 }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.appName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.appName }}
+
+# Deployment
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.appName }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.appName }}
+    
+    # Pod
+    spec:
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}
+      imagePullSecrets:
+        {{- range .Values.imagePullSecrets }}
+        - name: {{ .name }}
+        {{- end }}
+      containers:
+      - name: {{ .Values.appName }}
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["/bin/sh", "-c", "/bidder"]
+        env:
+        - name: RUST_BACKTRACE
+          value: "full"
+        - name: BIDDER_METRICS_ADDR
+          value: "0.0.0.0:9090"
+        {{- range $key, $value := .Values.extraEnv }}
+        - name: {{ $key }}
+          {{- if kindIs "string" $value }}
+          value: {{ $value | quote }}
+          {{- else if $value.valueFrom }}
+          valueFrom:
+            {{- toYaml $value.valueFrom | nindent 12 }}
+          {{- else }}
+          value: {{ $value.value | quote }}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.extraEnvFrom }}
+        envFrom:
+          {{- toYaml .Values.extraEnvFrom | nindent 10 }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+
+{{- end }}

@@ -36,3 +36,7 @@ dependencies:
     repository: "file://../fulfiller"
     version: "*"
     condition: fulfiller.enabled
+  - name: bidder
+    repository: "file://../bidder"
+    version: "*"
+    condition: bidder.enabled

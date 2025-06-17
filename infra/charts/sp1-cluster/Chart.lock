@@ -20,5 +20,8 @@ dependencies:
 - name: fulfiller
   repository: file://../fulfiller
   version: 0.1.5
-digest: sha256:43042400f27fdc86bc80eef87840a1c26daaf8d0e0c2b5268d5f5161e24fdfe3
-generated: "2025-06-12T00:37:58.303033897Z"
+- name: bidder
+  repository: file://../bidder
+  version: 0.1.5
+digest: sha256:7926a3d0560bccff293f687036705bff8c86e2ccc3808aa9d893942583a322dc
+generated: "2025-06-17T19:49:52.649336073Z"

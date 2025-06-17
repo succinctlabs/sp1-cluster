@@ -75,6 +75,15 @@ services:
       dockerfile: infra/Dockerfile
     command: ["/bin/sh", "-c", "/fulfiller"]
 
+  bidder:
+    extends:
+      file: docker-compose.yml
+      service: bidder
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    command: ["/bin/sh", "-c", "/bidder"]
+
 volumes:
   redis_data:
   postgresql_data:

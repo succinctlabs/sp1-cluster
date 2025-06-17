@@ -6958,6 +6958,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sp1-cluster-bidder"
+version = "1.0.0"
+dependencies = [
+ "alloy",
+ "alloy-signer-local",
+ "anyhow",
+ "config",
+ "dotenv",
+ "futures",
+ "hex",
+ "rand 0.9.1",
+ "rustls 0.23.27",
+ "serde",
+ "spn-metrics",
+ "spn-network-types",
+ "spn-utils",
+ "tokio",
+ "tonic 0.12.3",
+ "tracing",
+]
+
+[[package]]
 name = "sp1-cluster-cli"
 version = "0.1.0"
 dependencies = [
