@@ -29,7 +29,7 @@ services:
 
   # API Service
   api:
-    image: succinctlabs/sp1-cluster:base-9b55fce
+    image: ghcr.io/succinctlabs/cluster:base-latest
     environment:
       - API_GRPC_ADDR=0.0.0.0:50051
       - API_HTTP_ADDR=0.0.0.0:3000
@@ -42,7 +42,7 @@ services:
 
   # Coordinator Service
   coordinator:
-    image: succinctlabs/sp1-cluster:base-9b55fce
+    image: ghcr.io/succinctlabs/cluster:base-latest
     environment:
       - COORDINATOR_CLUSTER_RPC=http://api:50051
       - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
@@ -55,7 +55,7 @@ services:
 
   # CPU Node
   cpu:
-    image: succinctlabs/sp1-cluster:base-9b55fce
+    image: ghcr.io/succinctlabs/cluster:base-latest
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=32
@@ -79,7 +79,7 @@ services:
 
   # CPU Node
   mixed:
-    image: succinctlabs/sp1-cluster:base-9b55fce
+    image: ghcr.io/succinctlabs/cluster:base-latest
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=32
@@ -103,7 +103,7 @@ services:
 
   # GPU Node
   gpu0:
-    image: succinctlabs/sp1-cluster:node-gpu-9b55fce
+    image: ghcr.io/succinctlabs/cluster:node-gpu-latest
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=24
@@ -169,7 +169,7 @@ services:
 
   # Fulfiller Service
   fulfiller:
-    image: succinctlabs/sp1-cluster:base-9b55fce
+    image: ghcr.io/succinctlabs/cluster:base-latest
     environment:
       - FULFILLER_CLUSTER_RPC=http://api:50051
       - FULFILLER_LOG_FORMAT=Pretty
@@ -187,7 +187,7 @@ services:
 
   # Bidder Service
   bidder:
-    image: succinctlabs/sp1-cluster:base-9b55fce
+    image: ghcr.io/succinctlabs/cluster:base-latest
     environment:
       - BIDDER_LOG_FORMAT=Pretty
       - BIDDER_VERSION=sp1-v5.0.0
