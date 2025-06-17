@@ -3,7 +3,7 @@ appName: api
 replicaCount: 1
 
 image:
-  repository: ghcr.io/succinctlabs/cluster-private
+  repository: ghcr.io/succinctlabs/cluster
   pullPolicy: IfNotPresent
   tag: api-0b17a2b
 
