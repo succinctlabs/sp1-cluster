@@ -188,9 +188,23 @@ impl<A: ArtifactClient> Fulfiller<A> {
             .await?
             .into_inner()
             .nonce;
+        let Ok(request_id) = hex::decode(request.id.clone()) else {
+            tracing::warn!("ignoring request with invalid id {}", request.id);
+
+            // Update the status to fulfilled on the cluster.
+            self.cluster
+                .update_proof_request(ProofRequestUpdateRequest {
+                    proof_id: request.id,
+                    handled: Some(true),
+                    ..Default::default()
+                })
+                .map_err(|e| anyhow!("failed to update proof request status: {}", e))
+                .await?;
+            return Ok(());
+        };
         let body = FulfillProofRequestBody {
             nonce,
-            request_id: hex::decode(request.id.clone()).context("failed to decode request_id")?,
+            request_id,
             proof: proof_bytes,
             reserved_metadata: None,
             domain: self.domain.clone().to_vec(),
@@ -209,7 +223,6 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 handled: Some(true),
                 ..Default::default()
             })
-            // .update_proof_status(request.id, ProofRequestStatus::Fulfilled)
             .map_err(|e| anyhow!("failed to update proof request status: {}", e))
             .await?;
 
@@ -228,12 +241,6 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 handled: Some(false),
                 ..Default::default()
             })
-            // .get_filtered_proof_requests(
-            //     Some(ProofRequestStatus::Unclaimed),
-            //     None,
-            //     Some(time_now()),
-            //     Some(REQUEST_LIMIT),
-            // )
             .map_err(|e| anyhow!("failed to get requests: {}", e))
             .await?;
         self.metrics.failable_requests.set(requests.len() as f64);
@@ -509,10 +516,8 @@ impl<A: ArtifactClient> Fulfiller<A> {
         let cluster_requests_resp = self
             .cluster
             .get_proof_requests(ProofRequestListRequest {
-                // proof_status: vec![ProofRequestStatus::Pending.into()],
                 limit: Some(REQUEST_LIMIT),
                 minimum_deadline: Some(time_now()),
-                // handled: Some(false),
                 ..Default::default()
             })
             .map_err(|e| anyhow!("failed to get requests: {}", e))
