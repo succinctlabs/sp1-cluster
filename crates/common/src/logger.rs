@@ -36,11 +36,10 @@ pub fn init(resource: Resource) {
 
         let otlp_endpoint = get_otlp_endpoint();
         let env_filter = build_env_filter(None);
-        let tracing_disabled = std::env::var("TRACING_ENABLED")
+        let tracing_enabled = std::env::var("TRACING_ENABLED")
             .map(|s| s == "true")
             .unwrap_or(false);
-        let telemetry: Box<dyn Layer<Registry> + Send + Sync> = if tracing_disabled {
-            println!("TRACING_DISABLED=true, skipping tracer initialization");
+        let telemetry: Box<dyn Layer<Registry> + Send + Sync> = if !tracing_enabled {
             Box::new(tracing_opentelemetry::layer().with_filter(env_filter))
         } else {
             let tracer = opentelemetry_otlp::new_pipeline()
