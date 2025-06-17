@@ -68,7 +68,7 @@ cpu-node:
       cpu: 8
       memory: 32Gi
   image:
-    tag: "base-b2f1d10"
+    tag: "base-9b55fce"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-GPU machine with a powerful CPU.
@@ -101,7 +101,7 @@ gpu-node:
       cpu: 32.0
       memory: 24Gi
   image:
-    tag: "node-gpu-b2f1d10"
+    tag: "node-gpu-9b55fce"
   imagePullSecrets:
     - name: ghcr-secret
 
@@ -118,7 +118,7 @@ api:
           key: DATABASE_URL
   replicaCount: 1
   image:
-    tag: "base-b2f1d10"
+    tag: "base-9b55fce"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.
@@ -133,7 +133,7 @@ coordinator:
     COORDINATOR_METRICS_ADDR: 0.0.0.0:9090
     COORDINATOR_ADDR: 0.0.0.0:50051
   image:
-    tag: "base-b2f1d10"
+    tag: "base-9b55fce"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.
@@ -183,7 +183,7 @@ fulfiller:
           name: cluster-secrets
           key: PRIVATE_KEY
   image:
-    tag: "base-b2f1d10"
+    tag: "base-9b55fce"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.
@@ -195,18 +195,18 @@ bidder:
   # The bidder is only necessary for bidding on proofs on the Prover Network.
   enabled: false
   extraEnv:
-    FULFILLER_LOG_FORMAT: Pretty
+    BIDDER_LOG_FORMAT: Pretty
     # Ensure these four env vars are set correctly.
-    FULFILLER_RPC_GRPC_ADDR: https://rpc.sepolia.succinct.xyz
-    FULFILLER_VERSION: sp1-v5.0.0
-    FULFILLER_DOMAIN: SPN_SEPOLIA_V1_DOMAIN
-    FULFILLER_SP1_PRIVATE_KEY:
+    BIDDER_RPC_GRPC_ADDR: https://rpc.sepolia.succinct.xyz
+    BIDDER_VERSION: sp1-v5.0.0
+    BIDDER_DOMAIN: SPN_SEPOLIA_V1_DOMAIN
+    BIDDER_SP1_PRIVATE_KEY:
       valueFrom:
         secretKeyRef:
           name: cluster-secrets
           key: PRIVATE_KEY
   image:
-    tag: "base-b2f1d10"
+    tag: "base-9b55fce"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.

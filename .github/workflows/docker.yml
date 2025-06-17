@@ -84,7 +84,9 @@ jobs:
           context: .
           file: ./infra/Dockerfile
           push: true
-          tags: ${{ env.ECR_REPOSITORY }}:base-${{ needs.setup.outputs.SHORT_SHA }}
+          tags: |
+            ${{ env.ECR_REPOSITORY }}:base-${{ needs.setup.outputs.SHORT_SHA }}
+            ${{ github.ref == 'refs/heads/main' && format('{0}:base-latest', env.ECR_REPOSITORY) || '' }}
           build-args: |
             GITHUB_TOKEN=${{ secrets.PRIVATE_PULL_TOKEN }}
             VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
@@ -104,7 +106,9 @@ jobs:
           context: .
           file: ./infra/Dockerfile
           push: true
-          tags: ${{ env.GHCR_REPOSITORY }}:base-${{ needs.setup.outputs.SHORT_SHA }}
+          tags: |
+            ${{ env.GHCR_REPOSITORY }}:base-${{ needs.setup.outputs.SHORT_SHA }}
+            ${{ github.ref == 'refs/heads/main' && format('{0}:base-latest', env.GHCR_REPOSITORY) || '' }}
           build-args: |
             GITHUB_TOKEN=${{ secrets.PRIVATE_PULL_TOKEN }}
             VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
@@ -180,7 +184,9 @@ jobs:
           context: .
           file: infra/Dockerfile.node_gpu
           push: true
-          tags: ${{ env.ECR_REPOSITORY }}:node-gpu-${{ needs.setup.outputs.SHORT_SHA }}
+          tags: |
+            ${{ env.ECR_REPOSITORY }}:node-gpu-${{ needs.setup.outputs.SHORT_SHA }}
+            ${{ github.ref == 'refs/heads/main' && format('{0}:node-gpu-latest', env.ECR_REPOSITORY) || '' }}
           build-args: |
             GITHUB_TOKEN=${{ secrets.PRIVATE_PULL_TOKEN }}
             VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
@@ -200,7 +206,9 @@ jobs:
           context: .
           file: infra/Dockerfile.node_gpu
           push: true
-          tags: ${{ env.GHCR_REPOSITORY }}:node-gpu-${{ needs.setup.outputs.SHORT_SHA }}
+          tags: |
+            ${{ env.GHCR_REPOSITORY }}:node-gpu-${{ needs.setup.outputs.SHORT_SHA }}
+            ${{ github.ref == 'refs/heads/main' && format('{0}:node-gpu-latest', env.GHCR_REPOSITORY) || '' }}
           build-args: |
             GITHUB_TOKEN=${{ secrets.PRIVATE_PULL_TOKEN }}
             VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
