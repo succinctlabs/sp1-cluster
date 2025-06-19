@@ -25,6 +25,7 @@ copybara.jar
 /node_modules
 
 **/charts/*.tgz
+**/node_modules
 
 values-*.yaml
 !values-example.yaml
