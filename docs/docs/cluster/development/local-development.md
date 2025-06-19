@@ -55,16 +55,15 @@ You can run the cluster services directly from source without Docker. This setup
 
 To get started:
 
-- Run the desired binaries from `target/debug/`
+- Run the desired binaries from `target/release/`
 - Ensure environment variables match `.env.example` or customize as needed
-- Services include the coordinator, GPU nodes, CPU nodes, etc.
 
 ## Testing Proofs
 
 You can use the provided CLI tool to send test proof requests to your running cluster:
 
 ```bash
-./bin/cli
+cargo run --bin sp1-cluster-cli
 ```
 
 See the [Testing Guide](./deployment/testing) for detailed usage examples.
