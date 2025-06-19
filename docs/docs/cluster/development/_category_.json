@@ -1,0 +1,9 @@
+{
+  "label": "Development",
+  "position": 1,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "description": "Learn how to setup the SP1 Cluster for development."
+  }
+}
