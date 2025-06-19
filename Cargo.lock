@@ -52,7 +52,7 @@ dependencies = [
 [[package]]
 name = "air"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/moongate?branch=chris%2Fvapp#a85d191cc1f46a372d68ac735b89cbf3c7502134"
+source = "git+https://github.com/succinctlabs/moongate?branch=cluster#f1130edad6f062441f1222bb78a622a4de77e3cf"
 dependencies = [
  "lazy_static",
  "p3-air",
@@ -4434,7 +4434,7 @@ dependencies = [
 [[package]]
 name = "moongate-core"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/moongate?branch=chris%2Fvapp#a85d191cc1f46a372d68ac735b89cbf3c7502134"
+source = "git+https://github.com/succinctlabs/moongate?branch=cluster#f1130edad6f062441f1222bb78a622a4de77e3cf"
 dependencies = [
  "air",
  "bincode",
@@ -4479,7 +4479,7 @@ dependencies = [
 [[package]]
 name = "moongate-prover"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/moongate?branch=chris%2Fvapp#a85d191cc1f46a372d68ac735b89cbf3c7502134"
+source = "git+https://github.com/succinctlabs/moongate?branch=cluster#f1130edad6f062441f1222bb78a622a4de77e3cf"
 dependencies = [
  "bincode",
  "clap",
@@ -6904,8 +6904,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-build"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "anyhow",
  "cargo_metadata 0.18.1",
@@ -7148,8 +7148,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-core-executor"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -7186,8 +7186,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-core-machine"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "bincode",
  "cbindgen",
@@ -7241,8 +7241,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-cuda"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "bincode",
  "ctrlc",
@@ -7257,8 +7257,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-curves"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "cfg-if",
  "dashu",
@@ -7279,8 +7279,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-derive"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -7288,8 +7288,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-primitives"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "bincode",
  "blake3",
@@ -7307,8 +7307,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-prover"
-version = "5.0.1"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "anyhow",
  "bincode",
@@ -7351,8 +7351,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-recursion-circuit"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "hashbrown 0.14.5",
  "itertools 0.13.0",
@@ -7385,8 +7385,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-recursion-compiler"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "backtrace",
  "itertools 0.13.0",
@@ -7406,8 +7406,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-recursion-core"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "backtrace",
  "cbindgen",
@@ -7448,8 +7448,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-recursion-derive"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -7457,8 +7457,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-recursion-gnark-ffi"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "anyhow",
  "bincode",
@@ -7482,11 +7482,10 @@ dependencies = [
 
 [[package]]
 name = "sp1-sdk"
-version = "5.0.3"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.6"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "alloy-primitives",
- "alloy-sol-types",
  "anyhow",
  "async-trait",
  "backoff",
@@ -7527,8 +7526,8 @@ dependencies = [
 
 [[package]]
 name = "sp1-stark"
-version = "5.0.0"
-source = "git+https://github.com/succinctlabs/sp1.git?branch=ernesto%2Fsdk-v5-network-v3#64b86eb8ba4c03b7146f75b8a76d10cfb3662fbd"
+version = "5.0.5"
+source = "git+https://github.com/succinctlabs/sp1.git?branch=dev#3f6d3658a7fc0641f8b25841b66ff6b3cc2da027"
 dependencies = [
  "arrayref",
  "hashbrown 0.14.5",
