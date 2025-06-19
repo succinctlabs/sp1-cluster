@@ -27,14 +27,14 @@ moongate-core = { git = "https://github.com/succinctlabs/moongate", branch = "ch
 moongate-prover = { git = "https://github.com/succinctlabs/moongate", branch = "chris/vapp" }
 
 # SP1
-sp1-core-executor = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
-sp1-core-machine = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3", features = ["bigint-rug"] }
-sp1-prover = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
-sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
-sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
-sp1-recursion-core = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
-sp1-sdk = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
-sp1-stark = { git = "https://github.com/succinctlabs/sp1.git", branch = "ernesto/sdk-v5-network-v3" }
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev", features = ["bigint-rug"] }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
+sp1-recursion-core = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
+sp1-stark = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
 spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
