@@ -169,7 +169,7 @@ services:
 
   # Fulfiller Service
   fulfiller:
-    image: ghcr.io/succinctlabs/cluster:base-latest
+    image: ghcr.io/succinctlabs/cluster:base-4f9c369
     environment:
       - FULFILLER_CLUSTER_RPC=http://api:50051
       - FULFILLER_LOG_FORMAT=Pretty
@@ -187,7 +187,7 @@ services:
 
   # Bidder Service
   bidder:
-    image: ghcr.io/succinctlabs/cluster:base-latest
+    image: ghcr.io/succinctlabs/cluster:base-4f9c369
     environment:
       - BIDDER_LOG_FORMAT=Pretty
       - BIDDER_VERSION=sp1-v5.0.0

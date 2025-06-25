@@ -161,11 +161,10 @@ impl Bidder {
             .into_inner()
             .nonce;
         // Generate a random bid amount from 90-110.
-        let amount = rand::rng().random_range(90..110);
         let body = BidRequestBody {
             nonce,
             request_id: hex::decode(request_id).context("failed to decode request_id")?,
-            amount: amount.to_string(),
+            amount: "1".to_string(),
             domain: self.domain_bytes.clone(),
             prover: prover.to_vec(),
             variant: TransactionVariant::BidVariant.into(),
