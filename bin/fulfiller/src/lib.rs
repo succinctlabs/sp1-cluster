@@ -17,7 +17,7 @@ use spn_artifacts::{extract_artifact_name, Artifact};
 use spn_network_types::{
     prover_network_client::ProverNetworkClient, ExecutionStatus, FailFulfillmentRequest,
     FailFulfillmentRequestBody, FulfillProofRequest, FulfillProofRequestBody, FulfillmentStatus,
-    GetNonceRequest, GetOwnerRequest, MessageFormat, Signable,
+    GetNonceRequest, GetOwnerRequest, MessageFormat, Signable, TransactionVariant,
 };
 use spn_utils::time_now;
 use tokio::{task::JoinSet, time::sleep};
@@ -208,6 +208,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
             proof: proof_bytes,
             reserved_metadata: None,
             domain: self.domain.clone().to_vec(),
+            variant: TransactionVariant::FulfillVariant.into(),
         };
         let fulfill_request = FulfillProofRequest {
             format: MessageFormat::Binary.into(),
