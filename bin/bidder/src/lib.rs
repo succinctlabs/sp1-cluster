@@ -12,7 +12,7 @@ use tracing::{error, info, instrument};
 
 use spn_network_types::{
     prover_network_client::ProverNetworkClient, BidRequest, BidRequestBody, FulfillmentStatus,
-    GetNonceRequest, GetOwnerRequest, MessageFormat, Signable,
+    GetNonceRequest, GetOwnerRequest, MessageFormat, Signable, TransactionVariant,
 };
 use spn_utils::time_now;
 
@@ -168,6 +168,7 @@ impl Bidder {
             amount: amount.to_string(),
             domain: self.domain_bytes.clone(),
             prover: prover.to_vec(),
+            variant: TransactionVariant::BidVariant.into(),
         };
         let bid_request = BidRequest {
             format: MessageFormat::Binary.into(),

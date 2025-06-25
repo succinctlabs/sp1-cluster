@@ -35,10 +35,10 @@ sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1.git", bran
 sp1-recursion-core = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
 sp1-sdk = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
 sp1-stark = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
-spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
-spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
-spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
-spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-artifacts = { git = "https://github.com/succinctlabs/network", rev = "v0.2.0" }
+spn-metrics = { git = "https://github.com/succinctlabs/network", rev = "v0.2.0" }
+spn-network-types = { git = "https://github.com/succinctlabs/network", rev = "v0.2.0", features = ["network"] }
+spn-utils = { git = "https://github.com/succinctlabs/network", rev = "v0.2.0" }
 
 # Misc
 alloy = { version = "0.14.0", default-features = false, features = ["serde"] }
