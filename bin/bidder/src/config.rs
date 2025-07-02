@@ -1,4 +1,4 @@
-use alloy::primitives::B256;
+use alloy::primitives::{B256, U256};
 use config::{Config, ConfigError, Environment};
 use serde::Deserialize;
 
@@ -13,6 +13,12 @@ pub struct Settings {
     pub log_format: LogFormat,
     #[serde(deserialize_with = "deserialize_domain")]
     pub domain: B256,
+    /// Total cluster throughput in million gas per second
+    pub throughput_mgas: f64,
+    /// Maximum number of concurrent proofs the cluster can handle
+    pub max_concurrent_proofs: u32,
+    /// Token bid amount per PGU in wei
+    pub bid_amount: U256,
 }
 
 impl Settings {

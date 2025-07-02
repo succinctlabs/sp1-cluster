@@ -480,6 +480,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             // Cleanup proof if there's no more active tasks. Drop it after state is released.
             let removed = if proof.active_tasks == 0 {
                 tracing::info!("Proof {} has no more active tasks, removing", proof_id);
+                P::on_proof_deleted(&mut state, &proof_id);
                 Some(state.proofs.remove(&proof_id))
             } else {
                 None
@@ -487,7 +488,14 @@ impl<P: AssignmentPolicy> Coordinator<P> {
 
             P::post_task_success_update_state(&mut state, task_type);
 
-            P::post_task_update_state(&mut state, proof_extra, task_extra, task_weight);
+            P::post_task_update_state(
+                &mut state,
+                proof_extra,
+                task_extra,
+                task_weight,
+                &proof_id,
+                task_type,
+            );
 
             tracing::debug!(
                 "Complete task {} for proof {}, {} tasks remaining",
@@ -744,14 +752,21 @@ impl<P: AssignmentPolicy> Coordinator<P> {
     ) {
         let worker = state.workers.remove(&worker_id).unwrap();
         // Reassign any tasks that were running on this worker.
-        for task in &worker.active_tasks {
-            let Some(proof) = state.proofs.get(&task.0) else {
+        for (proof_id, task_id) in &worker.active_tasks {
+            let Some(proof) = state.proofs.get(proof_id) else {
                 continue;
             };
             let proof_extra = proof.extra.clone();
-            let task = proof.tasks.get(&task.1).cloned();
+            let task = proof.tasks.get(task_id).cloned();
             if let Some(task) = task {
-                P::post_task_update_state(state, proof_extra, task.extra.clone(), task.data.weight);
+                P::post_task_update_state(
+                    state,
+                    proof_extra,
+                    task.extra.clone(),
+                    task.data.weight,
+                    proof_id,
+                    task.data.task_type(),
+                );
                 self.enqueue_task(state, task).await;
             }
         }
@@ -864,6 +879,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         // Cleanup proof if there's no more active tasks. Drop it after state is released.
         let removed = if !manual_proof_fail && proof.active_tasks == 0 {
             tracing::info!("Proof {} has no more active tasks, removing", proof_id);
+            P::on_proof_deleted(&mut state, &proof_id);
             Some(state.proofs.remove(&proof_id))
         } else {
             None
@@ -877,7 +893,14 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         }
 
         // Have the policy update any state it needs to.
-        P::post_task_update_state(&mut state, proof_extra, task_extra, task_weight);
+        P::post_task_update_state(
+            &mut state,
+            proof_extra,
+            task_extra,
+            task_weight,
+            &proof_id,
+            task.data.task_type(),
+        );
 
         // Update worker state.
         if let Some(worker) = state.workers.get_mut(&worker_id) {
@@ -1049,6 +1072,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         track_latency!("coordinator.fail_proof", {
             let sender = state.proofs_tx.clone();
             // Cancel all tasks
+            P::on_proof_deleted(state, &proof_id);
             let proof = state.proofs.remove(&proof_id);
             let Some(proof) = proof else {
                 tracing::warn!("proof {} not found", proof_id);
@@ -1107,6 +1131,8 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                                 proof.extra.clone(),
                                 task.extra.clone(),
                                 task.data.weight,
+                                &proof_id,
+                                task.data.task_type(),
                             );
                         }
                     }

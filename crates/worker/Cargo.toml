@@ -39,7 +39,6 @@ cfg-if.workspace = true
 eyre.workspace = true
 futures.workspace = true
 hashbrown.workspace = true
-jemallocator.workspace = true
 lazy_static.workspace = true
 log.workspace = true
 lru.workspace = true

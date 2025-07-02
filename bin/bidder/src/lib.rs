@@ -1,18 +1,17 @@
 use std::time::Duration;
 
 use crate::metrics::BidderMetrics;
-use alloy::primitives::Address;
+use alloy::primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use futures::future::join_all;
-use rand::Rng;
 use tokio::time::sleep;
 use tonic::transport::Channel;
 use tracing::{error, info, instrument};
 
 use spn_network_types::{
     prover_network_client::ProverNetworkClient, BidRequest, BidRequestBody, FulfillmentStatus,
-    GetNonceRequest, GetOwnerRequest, MessageFormat, Signable, TransactionVariant,
+    GetNonceRequest, GetOwnerRequest, MessageFormat, ProofMode, Signable, TransactionVariant,
 };
 use spn_utils::time_now;
 
@@ -26,6 +25,9 @@ pub mod metrics;
 /// network.
 const REFRESH_INTERVAL_SEC: u64 = 3;
 
+/// Safety buffer in seconds to account for network delays and processing overhead
+const BUFFER_SEC: u64 = 30;
+
 /// The maximum number of requests to handle in a single refresh loop.
 const REQUEST_LIMIT: u32 = 100;
 
@@ -36,15 +38,25 @@ pub struct Bidder {
     signer: PrivateKeySigner,
     metrics: BidderMetrics,
     domain_bytes: Vec<u8>,
+    /// Total cluster throughput in million gas per second
+    throughput_mgas: f64,
+    /// Maximum number of concurrent proofs the cluster can handle
+    max_concurrent_proofs: u32,
+    /// Token bid amount per PGU in wei
+    bid_amount: U256,
 }
 
 impl Bidder {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         network: ProverNetworkClient<Channel>,
         version: String,
         signer: PrivateKeySigner,
         metrics: BidderMetrics,
         domain_bytes: Vec<u8>,
+        throughput_mgas: f64,
+        max_concurrent_proofs: u32,
+        bid_amount: U256,
     ) -> Self {
         Self {
             network,
@@ -52,11 +64,48 @@ impl Bidder {
             signer,
             metrics,
             domain_bytes,
+            throughput_mgas,
+            max_concurrent_proofs,
+            bid_amount,
         }
     }
 
+    /// Calculate if we can fulfill a proof request within its deadline
+    fn can_fulfill_proof(
+        &self,
+        active_proofs: u32,
+        gas_limit: u64,
+        deadline_secs: u64,
+        mode: ProofMode,
+    ) -> bool {
+        // Calculate effective throughput per proof when at max capacity
+        let effective_throughput = self.throughput_mgas / self.max_concurrent_proofs as f64;
+
+        // Calculate time needed to complete this proof (in seconds)
+        let completion_time_secs = (gas_limit as f64 / 1_000_000.0) / effective_throughput;
+
+        // Add buffer for safety
+        let mut total_time_needed = completion_time_secs + BUFFER_SEC as f64;
+
+        match mode {
+            ProofMode::Groth16 => {
+                total_time_needed += 30.0;
+            }
+            ProofMode::Plonk => {
+                total_time_needed += 80.0;
+            }
+            _ => {}
+        }
+
+        // Check if we have enough time and capacity
+        let has_capacity = active_proofs < self.max_concurrent_proofs;
+        let has_time = total_time_needed <= deadline_secs as f64;
+
+        has_capacity && has_time
+    }
+
     /// Runs the bidder loop.
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(mut self) -> Result<()> {
         info!("starting the bidder");
 
         // Get the prover.
@@ -84,9 +133,8 @@ impl Bidder {
 
     /// Checks for requested proof requests that are in the network and
     #[instrument(skip_all)]
-    async fn bid_requests(&self, prover: Address) -> Result<()> {
-        // Get all requested unexecutable requests from the network that are assigned to our
-        // address.
+    async fn bid_requests(&mut self, prover: Address) -> Result<()> {
+        // Get all requests from the network that are biddable.
         let request = spn_network_types::GetFilteredProofRequestsRequest {
             version: Some(self.version.clone()),
             fulfillment_status: Some(FulfillmentStatus::Requested.into()),
@@ -112,24 +160,57 @@ impl Bidder {
         let requests = network_requests_resp.into_inner().requests;
         self.metrics.biddable_requests.set(requests.len() as f64);
 
+        // Get all requests from the network assigned to our address so we know how many additional
+        // requests we can bid on.
+        // Note this is done after the biddable requests query to ensure a proof is not ommitted
+        // from both queries if it became assigned just after the assigned query.
+        let assigned_requests = self
+            .network
+            .clone()
+            .get_filtered_proof_requests(spn_network_types::GetFilteredProofRequestsRequest {
+                version: Some(self.version.clone()),
+                fulfillment_status: Some(FulfillmentStatus::Assigned.into()),
+                execution_status: None,
+                execute_fail_cause: None,
+                minimum_deadline: Some(time_now()),
+                vk_hash: None,
+                requester: None,
+                fulfiller: Some(prover.to_vec()),
+                limit: Some(REQUEST_LIMIT),
+                page: None,
+                from: None,
+                to: None,
+                mode: None,
+                not_bid_by: None,
+                settlement_status: None,
+            })
+            .await?
+            .into_inner()
+            .requests;
+        let mut active_proofs = assigned_requests.len() as u32;
+
         if requests.is_empty() {
             info!("found no biddable requests");
             return Ok(());
         }
         info!("found {} biddable requests", requests.len());
 
-        let failure_tasks = requests.into_iter().map(|request| {
+        let mut failure_tasks = Vec::new();
+        for request in requests {
             let self_clone = self.clone();
+            let mode = request.mode();
             let request_id = hex::encode(request.request_id);
 
-            tokio::spawn(async move {
-                if request.cycle_limit > 10_000_000 {
-                    info!(
-                        "skipping request 0x{} with cycle limit {}",
-                        request_id, request.cycle_limit
-                    );
-                    return;
-                }
+            let request_duration = request.deadline.saturating_sub(time_now());
+            if !self.can_fulfill_proof(active_proofs, request.gas_limit, request_duration, mode) {
+                info!(
+                    "Cannot fulfill request 0x{} with gas limit {} and deadline in {}s",
+                    request_id, request.gas_limit, request_duration
+                );
+                continue;
+            }
+            active_proofs += 1;
+            failure_tasks.push(tokio::spawn(async move {
                 match self_clone.bid_request(prover, &request_id).await {
                     Ok(_) => {
                         info!("bid on request 0x{}", request_id);
@@ -141,8 +222,8 @@ impl Bidder {
                         self_clone.metrics.request_bid_failures.increment(1);
                     }
                 }
-            })
-        });
+            }));
+        }
 
         join_all(failure_tasks).await;
 
@@ -160,11 +241,11 @@ impl Bidder {
             .await?
             .into_inner()
             .nonce;
-        // Generate a random bid amount from 90-110.
+        let amount = self.bid_amount;
         let body = BidRequestBody {
             nonce,
             request_id: hex::decode(request_id).context("failed to decode request_id")?,
-            amount: "1".to_string(),
+            amount: amount.to_string(),
             domain: self.domain_bytes.clone(),
             prover: prover.to_vec(),
             variant: TransactionVariant::BidVariant.into(),

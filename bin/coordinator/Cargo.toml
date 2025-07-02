@@ -17,6 +17,7 @@ dotenv.workspace = true
 eyre.workspace = true
 hex.workspace = true
 http.workspace = true
+jemallocator.workspace = true
 lazy_static.workspace = true
 mti.workspace = true
 opentelemetry_sdk.workspace = true

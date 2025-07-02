@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, str::FromStr};
 
 use alloy_signer_local::PrivateKeySigner;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dotenv::dotenv;
 use sp1_cluster_bidder::{config::Settings, grpc, metrics::BidderMetrics, Bidder};
 use spn_metrics::{
@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
         .expect("Failed to install rustls crypto provider");
 
     // Load configuration
-    let settings = Settings::new()?;
+    let settings = Settings::new().context("Failed to load bidder env")?;
 
     // Initialize logging
     spn_utils::init_logger(settings.log_format);
@@ -81,6 +81,9 @@ async fn main() -> Result<()> {
         signer,
         metrics,
         settings.domain.to_vec(),
+        settings.throughput_mgas,
+        settings.max_concurrent_proofs,
+        settings.bid_amount,
     );
 
     // Spawn the bidder task.

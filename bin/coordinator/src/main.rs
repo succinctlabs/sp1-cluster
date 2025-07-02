@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use jemallocator::Jemalloc;
 use mti::prelude::{MagicTypeIdExt, V7};
 use sp1_cluster_common::client::ClusterServiceClient;
 use sp1_cluster_common::logger;
@@ -10,7 +11,7 @@ use sp1_cluster_coordinator::cluster::{spawn_proof_claimer_task, spawn_proof_sta
 use sp1_cluster_coordinator::config::Settings;
 use sp1_cluster_coordinator::latency::print_latency;
 use sp1_cluster_coordinator::metrics::initialize_metrics;
-use sp1_cluster_coordinator::policy::default::DefaultPolicy;
+use sp1_cluster_coordinator::policy::balanced::BalancedPolicy;
 use sp1_cluster_coordinator::util::{
     spawn_coordinator_periodic_task, spawn_heartbeat_task, OkService,
 };
@@ -24,6 +25,9 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::{transport::Server, Request, Response, Status};
 use tonic_web::GrpcWebLayer;
 
+#[global_allocator]
+pub static ALLOCATOR: Jemalloc = Jemalloc;
+
 /// The worker service.
 #[derive(Default)]
 struct WorkerService {
@@ -31,7 +35,7 @@ struct WorkerService {
     subscribers: DashMap<String, SubscriberHandler>,
 
     /// The coordinator.
-    coordinator: Arc<Coordinator<DefaultPolicy>>,
+    coordinator: Arc<Coordinator<BalancedPolicy>>,
 }
 
 #[tonic::async_trait]
@@ -492,7 +496,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap()
         .set_metrics(metrics.clone());
 
-    let (completed_tx, completed_rx) = mpsc::unbounded_channel::<ProofResult<DefaultPolicy>>();
+    let (completed_tx, completed_rx) = mpsc::unbounded_channel::<ProofResult<BalancedPolicy>>();
     let task_map = Arc::new(DashMap::<String, ProofRequestStatus>::new());
     let api_rpc =
         std::env::var("COORDINATOR_CLUSTER_RPC").unwrap_or("http://127.0.0.1:50051".to_string());

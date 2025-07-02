@@ -4,7 +4,6 @@
 
 use crate::error::TaskError;
 use crate::metrics::WorkerMetrics;
-use jemallocator::Jemalloc;
 use lazy_static::lazy_static;
 use lru::LruCache;
 use opentelemetry::Context;
@@ -95,9 +94,6 @@ pub struct TaskResult {
     pub task_type: TaskType,
     pub task_id: String,
 }
-
-#[global_allocator]
-pub static ALLOCATOR: Jemalloc = Jemalloc;
 
 impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
     #[allow(clippy::too_many_arguments)]

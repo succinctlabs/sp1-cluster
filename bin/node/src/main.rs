@@ -1,6 +1,7 @@
 use cfg_if::cfg_if;
 use dashmap::DashMap;
 use eyre::Result;
+use jemallocator::Jemalloc;
 use opentelemetry::KeyValue;
 use rand::Rng;
 use sp1_cluster_artifact::redis::RedisArtifactClient;
@@ -25,6 +26,9 @@ use std::time::{Duration, Instant};
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
+
+#[global_allocator]
+pub static ALLOCATOR: Jemalloc = Jemalloc;
 
 type ActiveTask = (TaskData, JoinHandle<()>, Instant);
 

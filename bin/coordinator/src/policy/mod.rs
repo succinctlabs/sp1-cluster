@@ -1,3 +1,4 @@
+pub mod balanced;
 pub mod default;
 
 use std::{fmt::Debug, sync::Arc};
@@ -54,6 +55,8 @@ pub trait AssignmentPolicy: Sized + Clone + Default + Send + Sync + 'static {
         proof_extra: Self::ProofState,
         task_extra: Self::TaskState,
         task_weight: u32,
+        proof_id: &str,
+        task_type: TaskType,
     );
 
     /// Get debug info for `Self::ProofState`.
@@ -82,4 +85,11 @@ pub trait AssignmentPolicy: Sized + Clone + Default + Send + Sync + 'static {
 
     /// Get the length of the GPU queue.
     fn gpu_queue_len(state: &CoordinatorState<Self>) -> u32;
+
+    /// Called when a proof is deleted/removed from the coordinator.
+    /// Allows policies to clean up any proof-specific state.
+    fn on_proof_deleted(state: &mut CoordinatorState<Self>, proof_id: &str) {
+        // Default implementation does nothing
+        let _ = (state, proof_id);
+    }
 }

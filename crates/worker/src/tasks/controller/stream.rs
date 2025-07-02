@@ -1025,7 +1025,8 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                     || (open_rx.is_closed()
                         && open_rx.is_empty()
                         && running_map.is_empty()
-                        && tasks_being_created == 0)
+                        && tasks_being_created == 0
+                        && gotten_leaves_count)
                 {
                     if !ready_map.is_empty() {
                         log::error!(

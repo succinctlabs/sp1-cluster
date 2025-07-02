@@ -22,6 +22,7 @@ dashmap.workspace = true
 dirs.workspace = true
 dotenv.workspace = true
 eyre.workspace = true
+jemallocator.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 rand.workspace = true

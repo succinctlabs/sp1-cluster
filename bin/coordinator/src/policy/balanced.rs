@@ -1,6 +1,6 @@
 use std::{
     cmp::{max, Reverse},
-    collections::BinaryHeap,
+    collections::{BinaryHeap, HashMap},
     sync::Arc,
     time::SystemTime,
 };
@@ -13,13 +13,17 @@ use crate::{estimate_duration, track_latency, Coordinator, CoordinatorState, Pro
 
 use super::AssignmentPolicy;
 
+/// Balanced policy with per-proof GPU task queues
 #[derive(Clone, Default)]
-pub struct DefaultPolicy {
+pub struct BalancedPolicy {
     pub cpu_queue: BinaryHeap<Reverse<QueuedTask>>,
-    pub gpu_queue: BinaryHeap<Reverse<QueuedTask>>,
+    /// Map of proof_id to its GPU tasks queue
+    pub gpu_queues: HashMap<String, BinaryHeap<Reverse<QueuedTask>>>,
+    /// Total weight of GPU tasks currently assigned per proof_id
+    pub proof_gpu_weights: HashMap<String, u32>,
 }
 
-impl DefaultPolicy {
+impl BalancedPolicy {
     fn get_queued_task(state: &CoordinatorState<Self>, task: &Task<Self>) -> QueuedTask {
         let proof = state
             .proofs
@@ -36,6 +40,41 @@ impl DefaultPolicy {
             created_at,
         }
     }
+
+    /// Find the next task from the proof with the lowest GPU weight allocation
+    /// Returns the proof_id and the next task to be assigned
+    fn find_next_balanced_task(&self) -> Option<&QueuedTask> {
+        if self.gpu_queues.is_empty() {
+            return None;
+        }
+
+        let mut best_result = None;
+        let mut lowest_weight = u32::MAX;
+        let mut oldest_time = SystemTime::UNIX_EPOCH;
+
+        for (proof_id, queue) in &self.gpu_queues {
+            if queue.is_empty() {
+                continue;
+            }
+
+            let current_weight = self.proof_gpu_weights.get(proof_id).copied().unwrap_or(0);
+
+            // Get the proof creation time from the first task in queue for tiebreaking
+            let queue_task = &queue.peek().unwrap().0;
+            let proof_created_at = queue_task.proof_created_at;
+
+            if current_weight < lowest_weight
+                || (current_weight == lowest_weight && proof_created_at < oldest_time)
+            {
+                lowest_weight = current_weight;
+                oldest_time = proof_created_at;
+                best_result = Some(queue_task);
+            }
+        }
+
+        best_result
+    }
+
     async fn assign_task(
         coord: &Arc<Coordinator<Self>>,
         state: &mut CoordinatorState<Self>,
@@ -51,7 +90,6 @@ impl DefaultPolicy {
             }
 
             // Assign task by finding worker that will be available soonest.
-            // OPT: use BinaryHeap instead of Vec.
             let mut best_worker = None;
             let mut best_worker_time = u128::MAX;
             let task_weight = task.data.weight;
@@ -110,19 +148,36 @@ impl DefaultPolicy {
                     .unwrap();
                 mut_task.worker = Some(worker.id.clone());
                 mut_task.status = TaskStatus::Running;
+
+                // Update proof GPU weight tracking for GPU tasks
+                if worker_type == WorkerType::Gpu {
+                    *state
+                        .policy
+                        .proof_gpu_weights
+                        .entry(task.data.proof_id.clone())
+                        .or_insert(0) += task_weight;
+                }
             } else {
                 tracing::debug!("no worker available");
             }
+
             if let Some(worker) = &best_worker {
                 coord.send_task(&task, worker, "null");
 
-                // Pop the task from the queue
+                // Pop the task from the appropriate queue
                 match worker_type {
                     WorkerType::Cpu => {
                         state.policy.cpu_queue.pop();
                     }
                     WorkerType::Gpu => {
-                        state.policy.gpu_queue.pop();
+                        // Pop from the specific proof's GPU queue
+                        if let Some(queue) = state.policy.gpu_queues.get_mut(&task.data.proof_id) {
+                            queue.pop();
+                            // Clean up empty queues
+                            if queue.is_empty() {
+                                state.policy.gpu_queues.remove(&task.data.proof_id);
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -134,17 +189,12 @@ impl DefaultPolicy {
 }
 
 #[async_trait::async_trait]
-impl AssignmentPolicy for DefaultPolicy {
+impl AssignmentPolicy for BalancedPolicy {
     type ProofState = ();
-
     type TaskState = ();
-
     type TaskInputMetadata = ();
-
     type TaskResultMetadata = ();
-
     type ProofResultMetadata = ();
-
     type WorkerState = ();
 
     fn create_proof_state(
@@ -158,7 +208,15 @@ impl AssignmentPolicy for DefaultPolicy {
         let worker_type = WorkerType::from_task_type(task.data.task_type());
         match worker_type {
             WorkerType::Cpu => state.policy.cpu_queue.push(Reverse(queued_task)),
-            WorkerType::Gpu => state.policy.gpu_queue.push(Reverse(queued_task)),
+            WorkerType::Gpu => {
+                // Add to the proof-specific GPU queue
+                state
+                    .policy
+                    .gpu_queues
+                    .entry(task.data.proof_id.clone())
+                    .or_default()
+                    .push(Reverse(queued_task));
+            }
             _ => {}
         }
     }
@@ -173,13 +231,22 @@ impl AssignmentPolicy for DefaultPolicy {
     fn post_task_success_update_state(_state: &mut CoordinatorState<Self>, _task_type: TaskType) {}
 
     fn post_task_update_state(
-        _state: &mut CoordinatorState<Self>,
+        state: &mut CoordinatorState<Self>,
         _proof_extra: Self::ProofState,
         _task_extra: Self::TaskState,
-        _task_weight: u32,
-        _proof_id: &str,
-        _task_type: TaskType,
+        task_weight: u32,
+        proof_id: &str,
+        task_type: TaskType,
     ) {
+        // Decrement GPU weight when a GPU task completes
+        if WorkerType::from_task_type(task_type) == WorkerType::Gpu {
+            if let Some(current_weight) = state.policy.proof_gpu_weights.get_mut(proof_id) {
+                *current_weight = current_weight.saturating_sub(task_weight);
+                if *current_weight == 0 {
+                    state.policy.proof_gpu_weights.remove(proof_id);
+                }
+            }
+        }
     }
 
     fn debug_proof(_proof: &Self::ProofState) -> &str {
@@ -190,6 +257,7 @@ impl AssignmentPolicy for DefaultPolicy {
         _state: &mut CoordinatorState<Self>,
         mut worker: Worker<Self>,
     ) -> Worker<Self> {
+        // Weight cleanup is handled in post_task_update_state when tasks complete
         worker.next_free_time = 0;
         worker.weight = 0;
         worker
@@ -207,37 +275,51 @@ impl AssignmentPolicy for DefaultPolicy {
     ) -> Result<(), Status> {
         track_latency!("assign_tasks", {
             if state.shutting_down
-                || (state.policy.gpu_queue.is_empty() && state.policy.cpu_queue.is_empty())
+                || (state.policy.gpu_queues.is_empty() && state.policy.cpu_queue.is_empty())
             {
                 return Ok(());
             }
 
-            // Assign GPU tasks
-            while !state.policy.gpu_queue.is_empty() {
-                // Get the first task in the queue
-                let queue_task = state.policy.gpu_queue.peek().unwrap();
+            // Assign GPU tasks using balanced allocation
+            while !state.policy.gpu_queues.is_empty() {
+                // Find the next task from the most under-allocated proof
+                let queue_task = match state.policy.find_next_balanced_task() {
+                    Some(result) => result,
+                    None => break,
+                };
+                let proof_id = queue_task.proof_id.clone();
 
-                let task =
-                    coord.get_task_internal(&state, &queue_task.0.proof_id, &queue_task.0.id);
+                let task = coord.get_task_internal(&state, &proof_id, &queue_task.id);
                 if task.is_none() {
-                    tracing::warn!("gpu queue task {} not found", queue_task.0.id);
-                    // TODO: proof cancelled?
-                    state.policy.gpu_queue.pop();
+                    tracing::warn!("gpu queue task {} not found", queue_task.id);
+                    // Remove the invalid task from queue
+                    if let Some(queue) = state.policy.gpu_queues.get_mut(&proof_id) {
+                        queue.pop();
+                        if queue.is_empty() {
+                            state.policy.gpu_queues.remove(&proof_id);
+                        }
+                    }
                     continue;
                 }
                 let task = task.unwrap();
+
                 // If the task is already finalized, remove it from the queue
                 if task.status == TaskStatus::Succeeded || task.status == TaskStatus::FailedFatal {
                     tracing::warn!(
                         "gpu queue task is already finalized {} {}",
-                        queue_task.0.proof_id,
-                        queue_task.0.id
+                        proof_id,
+                        task.id
                     );
-                    state.policy.gpu_queue.pop();
+                    if let Some(queue) = state.policy.gpu_queues.get_mut(&proof_id) {
+                        queue.pop();
+                        if queue.is_empty() {
+                            state.policy.gpu_queues.remove(&proof_id);
+                        }
+                    }
                     continue;
                 }
 
-                // Safely unwrap the task since we checked above
+                // Try to assign the task
                 let worker = Self::assign_task(coord, &mut state, task).await?;
                 if worker.is_none() {
                     // No available workers, break out of the loop
@@ -245,7 +327,7 @@ impl AssignmentPolicy for DefaultPolicy {
                 }
             }
 
-            // Assign CPU tasks
+            // Assign CPU tasks (unchanged from default policy)
             while !state.policy.cpu_queue.is_empty() {
                 // Get the first task in the queue
                 let queue_task = state.policy.cpu_queue.peek().unwrap();
@@ -254,11 +336,11 @@ impl AssignmentPolicy for DefaultPolicy {
                     coord.get_task_internal(&state, &queue_task.0.proof_id, &queue_task.0.id);
                 if task.is_none() {
                     tracing::warn!("cpu queue task {} not found", queue_task.0.id);
-                    // TODO: proof cancelled?
                     state.policy.cpu_queue.pop();
                     continue;
                 }
                 let task = task.unwrap();
+
                 // If the task is already finalized, remove it from the queue
                 if task.status == TaskStatus::Succeeded || task.status == TaskStatus::FailedFatal {
                     tracing::warn!(
@@ -270,7 +352,7 @@ impl AssignmentPolicy for DefaultPolicy {
                     continue;
                 }
 
-                // Safely unwrap the task since we checked above
+                // Try to assign the task
                 let worker = Self::assign_task(coord, &mut state, task).await?;
                 if worker.is_none() {
                     // No available workers, break out of the loop
@@ -285,11 +367,21 @@ impl AssignmentPolicy for DefaultPolicy {
     fn get_proof_result_metadata(_proof: &Proof<Self>) -> Self::ProofResultMetadata {}
 
     fn gpu_queue_len(state: &CoordinatorState<Self>) -> u32 {
-        state.policy.gpu_queue.len() as u32
+        state
+            .policy
+            .gpu_queues
+            .values()
+            .map(|q| q.len() as u32)
+            .sum()
     }
 
     fn cpu_queue_len(state: &CoordinatorState<Self>) -> u32 {
         state.policy.cpu_queue.len() as u32
+    }
+
+    fn on_proof_deleted(state: &mut CoordinatorState<Self>, proof_id: &str) {
+        // Clean up GPU weight tracking for this proof
+        state.policy.proof_gpu_weights.remove(proof_id);
     }
 }
 
