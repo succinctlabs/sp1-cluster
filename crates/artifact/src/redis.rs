@@ -2,16 +2,16 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
-use deadpool_redis::redis::AsyncCommands;
+use deadpool_redis::redis::{AsyncCommands, HashFieldExpirationOptions, SetExpiry, SetOptions};
 use deadpool_redis::{Config, Connection as RedisConnection, Pool, PoolConfig, Runtime};
 use sp1_cluster_common::util::backoff_retry;
 use tokio::task::JoinSet;
 use tracing::instrument;
 
-use crate::s3::S3ArtifactClient;
 use crate::{ArtifactClient, ArtifactId, ArtifactType};
 
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
+const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
 
 /// FNV-1a hash
 #[inline]
@@ -72,12 +72,12 @@ impl RedisArtifactClient {
 
     async fn par_download_file(
         &self,
-        artifact_type: ArtifactType,
-        id: &str,
+        _: ArtifactType,
+        key: &str,
     ) -> Result<Vec<u8>, backoff::Error<anyhow::Error>> {
-        let mut conn = self.get_redis_connection(id).await?;
+        let mut conn = self.get_redis_connection(key).await?;
         let now = std::time::Instant::now();
-        let key = S3ArtifactClient::get_s3_key_from_id(artifact_type, id);
+        let key = key.to_string();
 
         // Check if it's a hash (chunked) or regular key
         let total_chunks: usize = conn
@@ -103,7 +103,7 @@ impl RedisArtifactClient {
         // Download chunks in parallel
         for chunk_idx in 0..total_chunks {
             let key = key.clone();
-            let id_clone = id.to_string();
+            let id_clone = key.to_string();
             let mut conn = self.get_redis_connection(&id_clone).await?;
             join_set.spawn(async move {
                 let chunk: Vec<u8> = conn.hget(format!("{}:chunks", key), chunk_idx).await?;
@@ -144,19 +144,24 @@ impl RedisArtifactClient {
     async fn par_upload_file(
         &self,
         artifact_type: ArtifactType,
-        id: &str,
+        key: &str,
         serialized: &[u8],
     ) -> Result<(), backoff::Error<anyhow::Error>> {
-        let mut conn = self.get_redis_connection(id).await?;
+        let mut conn = self.get_redis_connection(key).await?;
         let now = std::time::Instant::now();
-        let key = S3ArtifactClient::get_s3_key_from_id(artifact_type, id);
+        let key = key.to_string();
         // TODO: only compress if it's larger than some threshold.
         let serialized =
             zstd::encode_all(serialized, 0).map_err(|e| backoff::Error::permanent(e.into()))?;
         let size = serialized.len();
 
         if serialized.len() <= CHUNK_SIZE {
-            conn.set::<_, _, ()>(key, serialized)
+            let mut options = SetOptions::default();
+            if !matches!(artifact_type, ArtifactType::Program) {
+                options = options.with_expiration(SetExpiry::EX(ARTIFACT_TIMEOUT_SECONDS));
+            }
+
+            conn.set_options::<_, _, ()>(key, serialized, options)
                 .await
                 .map_err(|e| backoff::Error::transient(e.into()))?;
         } else {
@@ -167,12 +172,17 @@ impl RedisArtifactClient {
             // Upload chunks in parallel
             for (chunk_idx, chunk) in chunks.enumerate() {
                 let key = key.clone();
-                let id_clone = id.to_string();
+                let id_clone = key.to_string();
                 let chunk = chunk.to_vec();
                 let mut conn = self.get_redis_connection(&id_clone).await?;
                 join_set.spawn(async move {
-                    let _: () = conn
-                        .hset(format!("{}:chunks", key), chunk_idx, chunk)
+                    let mut options = HashFieldExpirationOptions::default();
+                    if !matches!(artifact_type, ArtifactType::Program) {
+                        options = options.set_expiration(SetExpiry::EX(ARTIFACT_TIMEOUT_SECONDS));
+                    }
+
+                    let _: usize = conn
+                        .hset_ex(format!("{}:chunks", key), &options, &[(chunk_idx, chunk)])
                         .await?;
                     Ok::<(), anyhow::Error>(())
                 });
@@ -221,19 +231,62 @@ impl ArtifactClient for RedisArtifactClient {
         .map_err(|e| anyhow!(e))
     }
 
-    async fn exists(
-        &self,
-        artifact: &impl ArtifactId,
-        artifact_type: ArtifactType,
-    ) -> Result<bool> {
+    async fn exists(&self, artifact: &impl ArtifactId, _: ArtifactType) -> Result<bool> {
         let mut conn = self
             .get_redis_connection(artifact.id())
             .await
             .map_err(|e| anyhow!(e))?;
         let mut conn2 = conn.clone();
-        let key = S3ArtifactClient::get_s3_key_from_id(artifact_type, artifact.id());
+        let key = artifact.id();
         let (res, chunks) =
-            tokio::try_join!(conn.exists(&key), conn2.exists(format!("{}:chunks", key)))?;
+            tokio::try_join!(conn.exists(key), conn2.exists(format!("{}:chunks", key)))?;
         Ok(res || chunks)
+    }
+
+    async fn delete(&self, artifact: &impl ArtifactId, _: ArtifactType) -> Result<()> {
+        let mut conn = self
+            .get_redis_connection(artifact.id())
+            .await
+            .map_err(|e| anyhow!(e))?;
+        let mut conn2 = conn.clone();
+        let key = artifact.id();
+        let _: (u64, u64) =
+            tokio::try_join!(conn.unlink(key), conn2.unlink(format!("{}:chunks", key)))?;
+        Ok(())
+    }
+
+    async fn delete_batch(&self, artifacts: &[impl ArtifactId], _: ArtifactType) -> Result<()> {
+        if artifacts.is_empty() {
+            return Ok(());
+        }
+
+        // Group artifacts by Redis node
+        let mut node_groups: std::collections::HashMap<usize, Vec<String>> =
+            std::collections::HashMap::new();
+        for artifact in artifacts {
+            let node_idx = get_connection_idx(artifact.id(), self.connection_pools.len());
+            let entry = node_groups.entry(node_idx).or_default();
+            entry.push(artifact.id().to_string());
+            entry.push(format!("{}:chunks", artifact.id()));
+        }
+
+        // Delete from each node in parallel
+        let mut tasks = Vec::new();
+        for (node_idx, keys) in node_groups {
+            let pool = self.connection_pools[node_idx].clone();
+            let keys = keys.clone();
+            tasks.push(tokio::spawn(async move {
+                let mut conn = pool.get().await?;
+                let deleted_count: u64 = conn.unlink(&keys).await?;
+                Ok::<u64, anyhow::Error>(deleted_count)
+            }));
+        }
+
+        // Wait for all deletions to complete
+        for task in tasks {
+            task.await??;
+        }
+
+        Ok(())
     }
 }

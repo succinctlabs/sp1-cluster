@@ -17,6 +17,7 @@ use p3_matrix::dense::DenseMatrix;
 use sp1_cluster_artifact::Artifact;
 use sp1_cluster_artifact::ArtifactBatch;
 use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_artifact::ArtifactType;
 use sp1_cluster_common::proto::WorkerTask;
 use sp1_core_executor::SP1ReduceProof;
 use sp1_prover::{DeviceProvingKey, InnerSC, SP1CircuitWitness, SP1RecursionProverError};
@@ -444,6 +445,14 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         let (verify_result, _) = try_join!(verify_future, upload_promise)?;
         verify_result?;
 
+        // Clean up input artifact since it's processed into a reduce proof
+        self.artifact_client
+            .try_delete(
+                &data.inputs[0],
+                sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType,
+            )
+            .await;
+
         Ok(TaskMetadata::new(
             gpu_time.load(std::sync::atomic::Ordering::Relaxed),
         ))
@@ -572,6 +581,11 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
 
         let (verify_result, _) = try_join!(verify_handle, upload_future)?;
         verify_result?;
+
+        // Clean up input artifacts since they're now combined into a single proof
+        self.artifact_client
+            .try_delete_batch(&data.inputs[0..2], ArtifactType::UnspecifiedArtifactType)
+            .await;
 
         Ok(TaskMetadata::new(
             gpu_time.load(std::sync::atomic::Ordering::Relaxed),

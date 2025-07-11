@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_artifact::{ArtifactClient, ArtifactType};
 use sp1_cluster_common::proto::{ProofRequestStatus, WorkerTask};
 use sp1_core_executor::SP1ReduceProof;
 use sp1_prover::OuterSC;
@@ -104,6 +104,11 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 ProofRequestStatus::Completed,
             )
             .await?;
+
+        // Clean up input artifacts since they're replaced by the final proof
+        self.artifact_client
+            .try_delete_batch(&data.inputs[0..2], ArtifactType::UnspecifiedArtifactType)
+            .await;
 
         Ok(TaskMetadata::default())
     }

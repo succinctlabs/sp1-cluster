@@ -350,4 +350,20 @@ impl ArtifactClient for S3ArtifactClient {
             }
         }
     }
+
+    async fn delete(
+        &self,
+        _artifact: &impl ArtifactId,
+        _artifact_type: ArtifactType,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn delete_batch(
+        &self,
+        _artifacts: &[impl ArtifactId],
+        _artifact_type: ArtifactType,
+    ) -> Result<()> {
+        Ok(())
+    }
 }

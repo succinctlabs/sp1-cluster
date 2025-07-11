@@ -313,6 +313,14 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             })?;
         }
 
+        // Clean up input shard since it's no longer needed
+        client
+            .try_delete(
+                &data.inputs[2],
+                sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType,
+            )
+            .await;
+
         Ok(TaskMetadata::new(
             gpu_time.load(std::sync::atomic::Ordering::Relaxed),
         ))

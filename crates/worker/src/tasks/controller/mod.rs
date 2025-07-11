@@ -15,8 +15,8 @@ use p3_baby_bear::BabyBear;
 use p3_field::AbstractField;
 use serde::{Deserialize, Serialize};
 use shards::{DeferredEvents, ShardEventData};
-use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_artifact::{Artifact, ArtifactBatch};
+use sp1_cluster_artifact::{ArtifactClient, ArtifactType};
 use sp1_cluster_common::proto::{ProofRequestStatus, TaskStatus, TaskType, WorkerTask};
 use sp1_core_executor::ExecutionRecord;
 use sp1_core_executor::{DeferredProofVerification, SP1ReduceProof};
@@ -83,6 +83,13 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             None
         };
 
+        let (all_precompile_artifacts_tx, mut all_precompile_artifacts_rx) =
+            tokio::sync::oneshot::channel::<Vec<Artifact>>();
+
+        let (common_tx, common_rx) = tokio::sync::watch::channel::<
+            Option<(StarkVerifyingKey<CoreSC>, CommonProveShardInput, Artifact)>,
+        >(None);
+
         let (proof, pv, vk) = {
             // Setup channels. Some channels are bounded to limit memory usage.
             let (prove_inputs_tx, prove_inputs_rx) =
@@ -107,10 +114,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             let program = self.prover.get_program(&elf)?;
 
             let mut join_set = tokio::task::JoinSet::<Result<(), TaskError>>::new();
-
-            let (common_tx, common_rx) = tokio::sync::watch::channel::<
-                Option<(StarkVerifyingKey<CoreSC>, CommonProveShardInput, Artifact)>,
-            >(None);
             let prover = self.prover.clone();
             let worker_client = self.worker_client.clone();
             let artifact_client = self.artifact_client.clone();
@@ -167,6 +170,11 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
 
                             let vk: StarkVerifyingKey<CoreSC> =
                                 artifact_client.download(&vk_artifact).await.unwrap();
+
+                            // Clean up VKey setup artifact
+                            artifact_client
+                                .try_delete(&vk_artifact, ArtifactType::UnspecifiedArtifactType)
+                                .await;
 
                             vkey_cache.lock().await.put(elf_artifact_id, vk.clone());
                             vk
@@ -258,6 +266,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                         prove_inputs_tx,
                         final_record_rx,
                         self.prover_opts.core_opts.split_opts,
+                        all_precompile_artifacts_tx,
                     )
                     .instrument(info_span!("pack_precompiles")),
             );
@@ -495,6 +504,27 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 .upload_proof(&data.outputs[0], result)
                 .await?;
         }
+
+        // Clean up precompile artifacts
+        if let Ok(precompile_artifacts) = all_precompile_artifacts_rx.try_recv() {
+            if !precompile_artifacts.is_empty() {
+                self.artifact_client
+                    .try_delete_batch(&precompile_artifacts, ArtifactType::UnspecifiedArtifactType)
+                    .await;
+            }
+        }
+
+        // Clean up stdin since it's no longer needed
+        let mut artifacts_to_cleanup = vec![data.inputs[1].clone()];
+
+        // Add common prove shard input artifact
+        if let Some((_, _, common_artifact)) = common_rx.borrow().as_ref() {
+            artifacts_to_cleanup.push(common_artifact.0.clone());
+        }
+
+        self.artifact_client
+            .try_delete_batch(&artifacts_to_cleanup, ArtifactType::UnspecifiedArtifactType)
+            .await;
 
         // Mark proof as completed.
         self.worker_client

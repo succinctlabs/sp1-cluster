@@ -220,12 +220,17 @@ impl<A: ArtifactClient> Fulfiller<A> {
         // Update the status to fulfilled on the cluster.
         self.cluster
             .update_proof_request(ProofRequestUpdateRequest {
-                proof_id: request.id,
+                proof_id: request.id.clone(),
                 handled: Some(true),
                 ..Default::default()
             })
             .map_err(|e| anyhow!("failed to update proof request status: {}", e))
             .await?;
+
+        // Clean up the proof artifact since it's no longer needed
+        self.cluster_artifact_client
+            .try_delete(&id, sp1_cluster_artifact::ArtifactType::Proof)
+            .await;
 
         Ok(())
     }

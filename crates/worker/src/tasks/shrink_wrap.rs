@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
 use opentelemetry::Context;
-use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_artifact::{ArtifactClient, ArtifactType};
 use sp1_cluster_common::proto::WorkerTask;
 use sp1_core_executor::SP1ReduceProof;
 use sp1_prover::InnerSC;
@@ -51,6 +51,11 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         self.artifact_client
             .upload(&data.outputs[0], wrap_proof)
             .await?;
+
+        // Clean up input artifact since it's replaced by the wrapped proof
+        self.artifact_client
+            .try_delete(&data.inputs[0], ArtifactType::UnspecifiedArtifactType)
+            .await;
 
         Ok(TaskMetadata::new(
             gpu_time.load(std::sync::atomic::Ordering::Relaxed),

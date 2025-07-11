@@ -116,6 +116,26 @@ pub trait ArtifactClient: Send + Sync + Clone + 'static {
     async fn exists(&self, artifact: &impl ArtifactId, artifact_type: ArtifactType)
         -> Result<bool>;
 
+    async fn delete(&self, artifact: &impl ArtifactId, artifact_type: ArtifactType) -> Result<()>;
+
+    async fn delete_batch(
+        &self,
+        artifacts: &[impl ArtifactId],
+        artifact_type: ArtifactType,
+    ) -> Result<()>;
+
+    async fn try_delete(&self, artifact: &impl ArtifactId, artifact_type: ArtifactType) {
+        if let Err(e) = self.delete(artifact, artifact_type).await {
+            tracing::warn!("Failed to delete artifact {}: {:?}", artifact.id(), e);
+        }
+    }
+
+    async fn try_delete_batch(&self, artifacts: &[impl ArtifactId], artifact_type: ArtifactType) {
+        if let Err(e) = self.delete_batch(artifacts, artifact_type).await {
+            tracing::warn!("Failed to delete artifact batch: {:?}", e);
+        }
+    }
+
     async fn upload_with_type<T: Serialize + Send + Sync>(
         &self,
         artifact: &impl ArtifactId,
@@ -246,5 +266,23 @@ impl ArtifactClient for InMemoryArtifactClient {
     ) -> Result<bool> {
         let artifacts = self.artifacts.lock().await;
         Ok(artifacts.contains_key(artifact.id()))
+    }
+
+    async fn delete(&self, artifact: &impl ArtifactId, _artifact_type: ArtifactType) -> Result<()> {
+        let mut artifacts = self.artifacts.lock().await;
+        artifacts.remove(artifact.id());
+        Ok(())
+    }
+
+    async fn delete_batch(
+        &self,
+        artifacts: &[impl ArtifactId],
+        _artifact_type: ArtifactType,
+    ) -> Result<()> {
+        let mut artifact_map = self.artifacts.lock().await;
+        for artifact in artifacts {
+            artifact_map.remove(artifact.id());
+        }
+        Ok(())
     }
 }
