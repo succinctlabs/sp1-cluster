@@ -19,6 +19,8 @@ The fulfiller connects to the API server in order to sync the state of the Prove
 
 The coordinator is a gRPC server built using Tonic that coordinates task assignment. When tasks are assigned to workers, they are sent through a one-directional gRPC stream to that worker for minimal latency. The coordinator constantly polls the API server for new or cancelled proof requests and updates the in-memory state accordingly. If a worker node crashes or a task fails for a retryable reason, the coordinator will automatically reassign tasks to another worker node.
 
+There are multiple AssignmentPolicy implementations that can be used to determine how tasks are assigned to workers. The default policy is `Balanced` which balances worker utilization across all active proofs. This policy allows proof completion times to be more easily predictable based on the total cluster throughput and how many active proofs there are, which makes the bidding logic in the bidder simpler.
+
 ### Node
 
 The node is the actual process that runs on each worker machine which handles proving tasks. There is a Cargo feature flag `gpu` which uses `moongate`, Succinct's GPU prover library, to accelerate proving tasks. The node connects to the coordinator service to receive tasks to work on, update task/proof status, and possibly create new tasks.
@@ -34,6 +36,10 @@ The node runs tasks of several types:
 | Recursion Deferred | GPU | Process a deferred proof (an SP1 Compressed proof being verified by the program in the VM) into a proof that can be compressed with other recursion proofs. | Deferred Proof Input | Recursion Proof |
 | Shrink + Wrap | GPU | Compress a recursion proof into a smaller proof that can be verified in the Groth16/Plonk wrapper. | Recursion Proof | Shrink + Wrap Proof |
 | Groth16/Plonk | CPU | Generate a Groth16/Plonk proof from the result of Shrink + Wrap. | Shrink + Wrap Proof | Groth16/Plonk Proof |
+
+### Bidder
+
+The bidder looks for new requests on the Prover Network and bids on them based on the parameters set in the bidder environment variables. Using `BIDDER_THROUGHPUT_MGAS` and `BIDDER_MAX_CONCURRENT_PROOFS`, the bidder only bids on proofs the cluster can fulfill in time (with some buffer). If it wins any bids, they become assigned to the prover and the fulfiller will pick them up.
 
 ### Fulfiller
 

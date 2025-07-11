@@ -29,7 +29,7 @@ services:
 
   # API Service
   api:
-    image: ghcr.io/succinctlabs/cluster:base-latest
+    image: ghcr.io/succinctlabs/cluster:base-cf1926b
     environment:
       - API_GRPC_ADDR=0.0.0.0:50051
       - API_HTTP_ADDR=0.0.0.0:3000
@@ -42,7 +42,7 @@ services:
 
   # Coordinator Service
   coordinator:
-    image: ghcr.io/succinctlabs/cluster:base-latest
+    image: ghcr.io/succinctlabs/cluster:base-cf1926b
     environment:
       - COORDINATOR_CLUSTER_RPC=http://api:50051
       - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
@@ -55,7 +55,7 @@ services:
 
   # CPU Node
   cpu:
-    image: ghcr.io/succinctlabs/cluster:base-latest
+    image: ghcr.io/succinctlabs/cluster:base-cf1926b
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=32
@@ -79,7 +79,7 @@ services:
 
   # CPU Node
   mixed:
-    image: ghcr.io/succinctlabs/cluster:base-latest
+    image: ghcr.io/succinctlabs/cluster:base-cf1926b
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=32
@@ -103,7 +103,7 @@ services:
 
   # GPU Node
   gpu0:
-    image: ghcr.io/succinctlabs/cluster:node-gpu-latest
+    image: ghcr.io/succinctlabs/cluster:node-gpu-cf1926b
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=24
@@ -169,7 +169,7 @@ services:
 
   # Fulfiller Service
   fulfiller:
-    image: ghcr.io/succinctlabs/cluster:base-4f9c369
+    image: ghcr.io/succinctlabs/cluster:base-cf1926b
     environment:
       - FULFILLER_CLUSTER_RPC=http://api:50051
       - FULFILLER_LOG_FORMAT=Pretty
@@ -187,7 +187,7 @@ services:
 
   # Bidder Service
   bidder:
-    image: ghcr.io/succinctlabs/cluster:base-4f9c369
+    image: ghcr.io/succinctlabs/cluster:base-cf1926b
     environment:
       - BIDDER_LOG_FORMAT=Pretty
       - BIDDER_VERSION=sp1-v5.0.0
@@ -195,6 +195,9 @@ services:
       - BIDDER_METRICS_ADDR=0.0.0.0:9090
       - BIDDER_RPC_GRPC_ADDR=${RPC_GRPC_ADDR}
       - BIDDER_SP1_PRIVATE_KEY=${SP1_PRIVATE_KEY}
+      - BIDDER_THROUGHPUT_MGAS=1
+      - BIDDER_MAX_CONCURRENT_PROOFS=1
+      - BIDDER_BID_AMOUNT=1
     command: ["/bin/sh", "-c", "/bidder"]
 
 volumes:
