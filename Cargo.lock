@@ -3695,7 +3695,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -4119,7 +4119,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.53.2",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -5672,7 +5672,7 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -7611,7 +7611,7 @@ dependencies = [
 [[package]]
 name = "spn-artifact-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?rev=v0.2.0#05ed9e3c60466ab92d8970ed6d5b4288d14f74b9"
+source = "git+https://github.com/succinctlabs/network?branch=main#c32b4839de9e04f4317ecff6eb0e50a91b5a8669"
 dependencies = [
  "prost 0.13.5",
  "prost-build",
@@ -7623,7 +7623,7 @@ dependencies = [
 [[package]]
 name = "spn-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?rev=v0.2.0#05ed9e3c60466ab92d8970ed6d5b4288d14f74b9"
+source = "git+https://github.com/succinctlabs/network?branch=main#c32b4839de9e04f4317ecff6eb0e50a91b5a8669"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -7644,7 +7644,7 @@ dependencies = [
 [[package]]
 name = "spn-metrics"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?rev=v0.2.0#05ed9e3c60466ab92d8970ed6d5b4288d14f74b9"
+source = "git+https://github.com/succinctlabs/network?branch=main#c32b4839de9e04f4317ecff6eb0e50a91b5a8669"
 dependencies = [
  "axum 0.7.9",
  "eyre",
@@ -7663,7 +7663,7 @@ dependencies = [
 [[package]]
 name = "spn-network-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?rev=v0.2.0#05ed9e3c60466ab92d8970ed6d5b4288d14f74b9"
+source = "git+https://github.com/succinctlabs/network?branch=main#c32b4839de9e04f4317ecff6eb0e50a91b5a8669"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -7681,7 +7681,7 @@ dependencies = [
 [[package]]
 name = "spn-utils"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?rev=v0.2.0#05ed9e3c60466ab92d8970ed6d5b4288d14f74b9"
+source = "git+https://github.com/succinctlabs/network?branch=main#c32b4839de9e04f4317ecff6eb0e50a91b5a8669"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -9194,7 +9194,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -9268,19 +9268,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-core"
-version = "0.61.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0fdd3ddb90610c7638aa2b3a3ab2904fb9e5cdbecc643ddb3647212781c4ae3"
-dependencies = [
- "windows-implement 0.60.0",
- "windows-interface 0.59.1",
- "windows-link",
- "windows-result 0.3.4",
- "windows-strings 0.4.2",
-]
-
-[[package]]
 name = "windows-implement"
 version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9303,17 +9290,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-implement"
-version = "0.60.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a47fddd13af08290e67f4acabf4b459f647552718f683a7b415d290ac744a836"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.104",
-]
-
-[[package]]
 name = "windows-interface"
 version = "0.57.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9329,17 +9305,6 @@ name = "windows-interface"
 version = "0.58.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "053c4c462dc91d3b1504c6fe5a726dd15e216ba718e84a0e46a88fbe5ded3515"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.104",
-]
-
-[[package]]
-name = "windows-interface"
-version = "0.59.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd9211b69f8dcdfa817bfd14bf1c97c9188afa36f4750130fcdf3f400eca9fa8"
 dependencies = [
  "proc-macro2",
  "quote",
