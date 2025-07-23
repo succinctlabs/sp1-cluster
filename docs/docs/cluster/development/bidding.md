@@ -13,7 +13,9 @@ This value should be set based on your hardware capabilities and your desired re
 whereas setting it too low may underutilize your cluster's capacity.
 
 ## Concurrent Proofs
-The parameter `BIDDER_MAX_CONCURRENT_PROOFS` controls the maximum number of proof requests your cluster can bid on simultaneously. It controls parallelism and resource allocation across multiple proof requests. Too many concurrent proofs can lead to memory exhaustion or context switching overhead, whereas too few may leave computational resources idle.
+The parameter `BIDDER_MAX_CONCURRENT_PROOFS` limits the maximum number of proof requests your cluster can work on simultaneously. Once the cluster is working on `BIDDER_MAX_CONCURRENT_PROOFS` proofs, the bidder will not bid on additional proofs until the number goes down.
+
+The bidder assumes that each proof the cluster is working on will have `BIDDER_THROUGHPUT_MGAS / BIDDER_MAX_CONCURRENT_PROOFS` throughput, and will use this value to calculate whether there is enough time to fulfill new proofs. If there isn't enough time, it won't bid on these potential proofs.
 
 ## Bid
 The parameter `BIDDER_BID_AMOUNT` controls your bid price in PROVE tokens per MPGUs. The Succinct Prover Network uses a reverse auction mechanism to assign proof requests; lower bids are more competitive. This parameter represents your cost per MPGUs of computational work. Lower values increase your chances of winning bids but reduce profit margins. Higher values decrease competitiveness but increase potential profits per proof. Market dynamics will determine the optimal bid level.
