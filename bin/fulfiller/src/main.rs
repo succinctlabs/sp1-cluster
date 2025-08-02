@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
                 std::env::var("FULFILLER_S3_CONCURRENCY")
                     .map(|s| s.parse().unwrap_or(32))
                     .unwrap_or(32),
+                false,
             )
             .await)
             .await
