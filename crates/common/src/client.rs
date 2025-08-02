@@ -23,9 +23,10 @@ pub async fn reconnect_with_backoff(addr: &str) -> Result<Channel> {
         let channel = Endpoint::from_shared(addr.to_string())
             .map_err(|e| backoff::Error::Permanent(eyre::eyre!(e)))?
             .keep_alive_while_idle(true)
-            .keep_alive_timeout(Duration::from_secs(15))
+            .http2_keep_alive_interval(Duration::from_secs(15))
+            .keep_alive_timeout(Duration::from_secs(60))
             .tcp_keepalive(Some(Duration::from_secs(15)))
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(60))
             .connect()
             .await
             .map_err(|e| {
