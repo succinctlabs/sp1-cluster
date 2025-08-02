@@ -476,18 +476,24 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         };
 
         // Verify compressed proof in another thread.
-        if let SP1Proof::Compressed(proof) = &proof {
+        let maybe_verify_future = if let SP1Proof::Compressed(proof) = &proof {
             let proof_clone = proof.clone();
             let prover_clone = self.prover.clone();
             let span = info_span!("verify compressed proof");
-            tokio::task::spawn_blocking(move || {
+            Some(tokio::task::spawn_blocking(move || {
                 let _guard = span.enter();
                 if let Err(e) =
                     prover_clone.verify_compressed(&proof_clone, &SP1VerifyingKey { vk })
                 {
-                    tracing::error!("verify_compressed failed: {:?}", e);
+                    return Err(TaskError::Fatal(anyhow!(
+                        "verify_compressed failed: {:?}",
+                        e
+                    )));
                 }
-            });
+                Ok(())
+            }))
+        } else {
+            None
         };
 
         // Upload final result.
@@ -525,6 +531,11 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         self.artifact_client
             .try_delete_batch(&artifacts_to_cleanup, ArtifactType::UnspecifiedArtifactType)
             .await;
+
+        // Ensure final proof verifies.
+        if let Some(verify_future) = maybe_verify_future {
+            verify_future.await.unwrap()?;
+        }
 
         // Mark proof as completed.
         self.worker_client
