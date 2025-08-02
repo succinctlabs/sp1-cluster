@@ -44,17 +44,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 &wrap_proof.proof,
             )
         } else {
-            // Wait for plonk artifacts to be ready if they aren't ready yet
-            loop {
-                if self
-                    .circuits_available
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    break;
-                }
-                log::info!("Waiting for circuit artifacts to be ready");
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
             let circuit_type = match mode {
                 ProofMode::Plonk => "plonk",
                 ProofMode::Groth16 => "groth16",

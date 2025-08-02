@@ -1,12 +1,13 @@
 use cfg_if::cfg_if;
 use dashmap::DashMap;
 use eyre::Result;
+use flate2::read::GzDecoder;
 use jemallocator::Jemalloc;
 use opentelemetry::KeyValue;
 use rand::Rng;
 use sp1_cluster_artifact::redis::RedisArtifactClient;
 use sp1_cluster_artifact::s3::S3ArtifactClient;
-use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_artifact::{ArtifactClient, ArtifactType};
 use sp1_cluster_common::proto::{
     self, server_message, CloseRequest, CompleteTaskRequest, FailTaskRequest, HeartbeatRequest,
     TaskData, WorkerType,
@@ -19,11 +20,13 @@ use sp1_cluster_worker::SP1Worker;
 use sp1_sdk::SP1_CIRCUIT_VERSION;
 use std::collections::HashSet;
 use std::env;
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
+use tar::Archive;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
@@ -80,6 +83,7 @@ async fn main() -> Result<()> {
             std::env::var("NODE_S3_CONCURRENCY")
                 .map(|s| s.parse().unwrap_or(32))
                 .unwrap_or(32),
+            false,
         )
         .await;
         run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client).await?;
@@ -102,11 +106,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Install circuit artifacts.
+/// Install circuit artifacts using chunked parallel downloads.
 ///
-/// This function is very similar to sp1_sdk::install::try_install_circuit_artifacts, but it
-/// additionally avoids partially downloaded artifacts.
-fn install_circuit_artifacts(artifact_type: &str) -> PathBuf {
+/// This function downloads circuit artifacts using S3 chunked parallel downloads for better
+/// performance, then extracts them using the same tar approach as the SDK.
+fn install_circuit_artifacts(artifact_type: &str, artifact_client: S3ArtifactClient) -> PathBuf {
     let home_dir = dirs::home_dir().unwrap();
     let final_dir = match artifact_type {
         "groth16" => sp1_sdk::install::groth16_circuit_artifacts_dir(),
@@ -114,8 +118,7 @@ fn install_circuit_artifacts(artifact_type: &str) -> PathBuf {
         _ => panic!("invalid artifact type: {}", artifact_type),
     };
     if final_dir.exists() {
-        // If dir is not empty, assume it has the correct artifacts.
-        // TODO: Check digest here.
+        // Clear the directory every time, since contents may not be valid.
         if std::fs::read_dir(&final_dir).unwrap().next().is_some() {
             return final_dir;
         }
@@ -132,7 +135,44 @@ fn install_circuit_artifacts(artifact_type: &str) -> PathBuf {
     if let Err(e) = std::fs::create_dir_all(&temp_dir) {
         tracing::info!("Not creating temp dir: {:?}", e);
     }
-    sp1_sdk::install::install_circuit_artifacts(temp_dir.clone(), artifact_type);
+    // Use chunked parallel download with provided client.
+    let rt_handle = tokio::runtime::Handle::current();
+    rt_handle.block_on(async {
+        // Download tar.gz bytes using chunked parallel download.
+        let download_start = std::time::Instant::now();
+        let tar_gz_bytes = artifact_client
+            .par_download_file(ArtifactType::Circuit, SP1_CIRCUIT_VERSION)
+            .await
+            .expect("failed to download circuit artifacts");
+        let download_duration = download_start.elapsed();
+        tracing::info!(
+            "{} download completed in {:.2} seconds ({} bytes)",
+            artifact_type,
+            download_duration.as_secs_f64(),
+            tar_gz_bytes.len()
+        );
+
+        // Extract artifacts.
+        let extract_start = std::time::Instant::now();
+        let gz = GzDecoder::new(Cursor::new(tar_gz_bytes));
+        let mut archive = Archive::new(gz);
+        archive
+            .unpack(&temp_dir)
+            .expect("failed to extract archive");
+        let extract_duration = extract_start.elapsed();
+        tracing::info!(
+            "{} extraction completed in {:.2} seconds",
+            artifact_type,
+            extract_duration.as_secs_f64()
+        );
+
+        let total_duration = download_start.elapsed();
+        tracing::info!(
+            "{} total download + extract completed in {:.2} seconds",
+            artifact_type,
+            total_duration.as_secs_f64()
+        );
+    });
 
     // Move to final location.
     std::fs::rename(&temp_dir, &final_dir).unwrap();
@@ -172,6 +212,54 @@ async fn run_worker<A: ArtifactClient>(
             }
         };
 
+        let worker_type_str = env::var("WORKER_TYPE").expect("WORKER_TYPE is not set");
+        let worker_type = WorkerType::from_str_name(&worker_type_str).expect("invalid worker type");
+        tracing::info!("worker type: {:?}", worker_type);
+
+        // For CPU workers, download circuit artifacts before connecting.
+        if worker_type != WorkerType::Gpu {
+            let start_time = std::time::Instant::now();
+            tracing::info!("Downloading circuit artifacts before connecting to server");
+
+            // Create a single S3ArtifactClient for both downloads.
+            let concurrency = std::env::var("S3_CONCURRENCY")
+                .map(|s| s.parse().unwrap_or(32))
+                .unwrap_or(32);
+            let region = "us-east-2".to_string();
+            let bucket = "sp1-circuits".to_string();
+            tracing::info!(
+                "Creating S3ArtifactClient - concurrency: {}, region: {}, bucket: {}",
+                concurrency,
+                region,
+                bucket
+            );
+            let artifact_client = S3ArtifactClient::new(region, bucket, concurrency, true).await;
+
+            // Download groth16 and plonk artifacts concurrently using shared client.
+            let (_, _) = tokio::try_join!(
+                tokio::task::spawn_blocking({
+                    let artifact_client = artifact_client.clone();
+                    move || {
+                        tracing::info!("Downloading groth16 artifacts");
+                        install_circuit_artifacts("groth16", artifact_client)
+                    }
+                }),
+                tokio::task::spawn_blocking({
+                    let artifact_client = artifact_client.clone();
+                    move || {
+                        tracing::info!("Downloading plonk artifacts");
+                        install_circuit_artifacts("plonk", artifact_client)
+                    }
+                })
+            )?;
+
+            let elapsed = start_time.elapsed();
+            tracing::info!(
+                "Circuit artifacts ready after {:.1} seconds",
+                elapsed.as_secs_f64()
+            );
+        }
+
         // Setup logging/tracing resource values.
         let params = vec![
             KeyValue::new("service.name", "sp1-api2-client"),
@@ -202,28 +290,6 @@ async fn run_worker<A: ArtifactClient>(
 
         let tasks: Arc<DashMap<(String, String), ActiveTask>> = Arc::new(DashMap::new());
 
-        let worker_type_str = env::var("WORKER_TYPE").expect("WORKER_TYPE is not set");
-        let worker_type = WorkerType::from_str_name(&worker_type_str).expect("invalid worker type");
-        tracing::info!("worker type: {:?}", worker_type);
-
-        let circuits_available = Arc::new(AtomicBool::new(false));
-        // Download circuit artifacts in the background
-        let circuits_available_clone = circuits_available.clone();
-        // Don't download circuit artifacts for GPU workers
-        if worker_type != WorkerType::Gpu {
-            tokio::task::spawn_blocking(move || {
-                tracing::info!("downloading circuit artifacts");
-                let start_time = std::time::Instant::now();
-                install_circuit_artifacts("groth16");
-                install_circuit_artifacts("plonk");
-                circuits_available_clone.store(true, std::sync::atomic::Ordering::Relaxed);
-                let elapsed = start_time.elapsed();
-                tracing::info!(
-                    "circuit artifacts ready after {:.1} min",
-                    elapsed.as_secs() / 60
-                );
-            });
-        }
         let gpu_semaphore = Arc::new(Semaphore::new(1));
 
         // Gather memory metrics.
@@ -261,7 +327,6 @@ async fn run_worker<A: ArtifactClient>(
         // Create worker.
         let worker = Arc::new(SP1Worker::new(
             prover.clone(),
-            circuits_available,
             gpu_semaphore,
             metrics, // Pass metrics to worker
             client.clone(),

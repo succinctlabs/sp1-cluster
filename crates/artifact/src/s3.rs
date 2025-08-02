@@ -33,7 +33,12 @@ pub struct S3ArtifactClient {
 }
 
 impl S3ArtifactClient {
-    pub async fn new(region: String, bucket: String, concurrency: usize) -> Self {
+    pub async fn new(
+        region: String,
+        bucket: String,
+        concurrency: usize,
+        no_credentials: bool,
+    ) -> Self {
         let s3_client = {
             let mut base = aws_config::load_defaults(BehaviorVersion::latest())
                 .await
@@ -41,6 +46,10 @@ impl S3ArtifactClient {
             let timeout_config = TimeoutConfig::builder()
                 .operation_attempt_timeout(Duration::from_secs(120))
                 .build();
+            if no_credentials {
+                // Anonymous credentials for public artifacts.
+                base.set_credentials_provider(None);
+            }
             base.set_retry_config(Some(
                 RetryConfig::standard()
                     .with_max_attempts(7)
@@ -83,6 +92,7 @@ impl S3ArtifactClient {
             ArtifactType::Program => "programs",
             ArtifactType::Stdin => "stdins",
             ArtifactType::Proof => "proofs",
+            ArtifactType::Circuit => "",
         }
     }
 
@@ -90,7 +100,11 @@ impl S3ArtifactClient {
         format!("{}/{}", Self::get_s3_prefix(artifact_type), id)
     }
 
-    async fn par_download_file(&self, artifact_type: ArtifactType, id: &str) -> Result<Vec<u8>> {
+    pub async fn par_download_file(
+        &self,
+        artifact_type: ArtifactType,
+        id: &str,
+    ) -> Result<Vec<u8>> {
         let key = Self::get_s3_key_from_id(artifact_type, id);
 
         let size = self

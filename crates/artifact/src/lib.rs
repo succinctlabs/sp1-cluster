@@ -16,6 +16,7 @@ pub enum ArtifactType {
     Program,
     Stdin,
     Proof,
+    Circuit,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
