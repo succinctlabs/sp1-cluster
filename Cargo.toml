@@ -65,7 +65,6 @@ deadpool-redis = "0.22.0"
 dirs = "6.0.0"
 dotenv = "0.15.0"
 eyre = "0.6.12"
-flate2 = "1.1.2"
 futures = "0.3.31"
 hashbrown = "0.15.3"
 hex = "0.4.3"
@@ -89,7 +88,6 @@ serde_json = "1.0.138"
 sqlx = { version = "0.8.5", features = [ "runtime-tokio", "tls-native-tls", "macros", "postgres", "time" ] }
 sys-info = "0.9.1"
 sysinfo = "0.33.1"
-tar = "0.4.44"
 time = { version = "0.3.41", features = ["serde"] }
 tokio = { version = "1.45.0", features = ["full"] }
 tokio-stream = "0.1"
