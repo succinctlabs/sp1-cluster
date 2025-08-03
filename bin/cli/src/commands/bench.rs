@@ -131,7 +131,6 @@ impl BenchCommand {
                 common.s3_region.clone().unwrap(),
                 common.s3_bucket.clone().unwrap(),
                 32,
-                false,
             )
             .await;
             Self::upload(artifact_client, elf, stdin).await?
