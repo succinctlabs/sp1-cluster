@@ -358,10 +358,10 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             )
             .await;
 
-        // Decrement reference count for precompile artifacts only at successful completion
+        // Remove task reference for precompile artifacts only at successful completion
         if let Some(artifacts) = precompile_artifacts {
             for (artifact, _, _) in artifacts {
-                let _ = client.decrement_artifact_ref(&artifact, sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType).await;
+                let _ = client.remove_artifact_ref(&artifact, sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType, &task.task_id).await;
             }
         }
 

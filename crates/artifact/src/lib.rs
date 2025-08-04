@@ -214,17 +214,18 @@ pub trait ArtifactClient: Send + Sync + Clone + 'static {
         self.download_with_type(artifact, ArtifactType::Stdin).await
     }
 
-    /// Increment reference count for an artifact
-    async fn increment_artifact_ref(&self, _artifact_id: &str) -> Result<()> {
+    /// Add task reference for an artifact
+    async fn add_artifact_ref(&self, _artifact_id: &str, _task_id: &str) -> Result<()> {
         // Default implementation does nothing (for non-Redis clients)
         Ok(())
     }
 
-    /// Decrement reference count and delete if zero
-    async fn decrement_artifact_ref(
+    /// Remove task reference and delete artifact if no references remain
+    async fn remove_artifact_ref(
         &self,
         _artifact: &impl ArtifactId,
         _artifact_type: ArtifactType,
+        _task_id: &str,
     ) -> Result<bool> {
         Ok(false)
     }

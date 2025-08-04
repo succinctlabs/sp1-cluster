@@ -684,6 +684,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         sender: Sender<(ShardEventData, bool)>,
         final_record_receiver: tokio::sync::oneshot::Receiver<ExecutionRecord>,
         opts: SplitOpts,
+        task_id: String,
     ) -> Result<(), TaskError> {
         let mut record = DeferredEvents::empty();
         let mut final_receiver = Some(final_record_receiver);
@@ -698,8 +699,8 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                         // Collect artifacts from PrecompileRemote shards
                         if let ShardEventData::PrecompileRemote(artifacts, _, _) = &shard {
                             for (artifact, _, _) in artifacts {
-                                // Increment reference count for precompile artifact that will be used in prove_shard tasks
-                                let _ = self.artifact_client.increment_artifact_ref(&artifact.id()).await;
+                                // Add task reference for precompile artifact that will be used in prove_shard tasks
+                                let _ = self.artifact_client.add_artifact_ref(&artifact.id(), &task_id).await;
                             }
                         }
                         sender.send((shard, false)).await.unwrap();
@@ -773,10 +774,10 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             // Collect artifacts from PrecompileRemote shards
             if let ShardEventData::PrecompileRemote(artifacts, _, _) = &shard {
                 for (artifact, _, _) in artifacts {
-                    // Increment reference count for precompile artifact that will be used in prove_shard tasks
+                    // Add task reference for precompile artifact that will be used in prove_shard tasks
                     let _ = self
                         .artifact_client
-                        .increment_artifact_ref(&artifact.id())
+                        .add_artifact_ref(&artifact.id(), &task_id)
                         .await;
                 }
             }
