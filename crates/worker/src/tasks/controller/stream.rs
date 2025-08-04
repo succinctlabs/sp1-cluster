@@ -766,16 +766,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             .instrument(info_span!("split last"))
             .await;
         for shard in final_shards {
-            // Collect artifacts from PrecompileRemote shards
-            if let ShardEventData::PrecompileRemote(artifacts, _, _) = &shard {
-                for (artifact, start, end) in artifacts {
-                    // Add task reference for precompile artifact that will be used in prove_shard tasks
-                    let _ = self
-                        .artifact_client
-                        .add_ref(artifact, &format!("{}_{}", start, end))
-                        .await;
-                }
-            }
             sender.send((shard, false)).await.unwrap();
         }
 

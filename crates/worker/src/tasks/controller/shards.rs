@@ -345,8 +345,16 @@ impl DeferredEvents {
                     .unwrap()
                     .drain(..index)
                     .collect::<Vec<_>>();
-                // Remove task references for artifacts that are no longer needed in the controller.
-                for (i, (artifact, _, _)) in artifacts.iter().enumerate() {
+                // For each artifact, add refs for the range needed in prove_shard, and then remove
+                // the controller ref if it's been fully split.
+                for (i, (artifact, start, end)) in artifacts.iter().enumerate() {
+                    if let Err(e) = client
+                        .add_ref(artifact, &format!("{}_{}", start, end))
+                        .await
+                    {
+                        tracing::error!("Failed to add ref to artifact {}: {:?}", artifact.id(), e);
+                    }
+                    // If there's a remainder, don't remove the controller ref yet.
                     if i == artifacts.len() - 1 && count > threshold {
                         break;
                     }
