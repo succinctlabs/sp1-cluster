@@ -16,7 +16,7 @@ use anyhow::{anyhow, Result};
 use hashbrown::HashMap;
 use opentelemetry::Context;
 use p3_field::PrimeField32;
-use sp1_cluster_artifact::{Artifact, ArtifactClient};
+use sp1_cluster_artifact::{Artifact, ArtifactClient, ArtifactId};
 use sp1_cluster_common::proto::{TaskStatus, TaskType};
 use sp1_core_executor::{DeferredProofVerification, SP1ReduceProof};
 use sp1_core_executor::{ExecutionRecord, Executor, Program};
@@ -332,7 +332,11 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                         let precompile_shard_artifact = match item.1 .1 {
                             ShardType::Precompile => None,
                             ShardType::Execution => {
-                                Some(self_clone.artifact_client.create_artifact().unwrap())
+                                let artifact = self_clone.artifact_client.create_artifact().unwrap();
+                                // Register the marker task as a user of this artifact
+                                let marker_task_id = format!("marker_task_{}", item.0);
+                                let _ = self_clone.artifact_client.add_artifact_user(&artifact.id(), &marker_task_id).await;
+                                Some(artifact)
                             }
                         };
 
@@ -534,22 +538,24 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
 
             // Spawn workers to download records.
             let download_span = info_span!("download records");
-            let (artifacts_tx, mut artifacts_rx) =
-                tokio::sync::mpsc::unbounded_channel::<Artifact>();
             for _ in 0..PRECOMPILE_RECORD_DOWNLOAD_WORKERS {
                 let completed_tasks_rx = completed_tasks_rx.clone();
                 let downloaded_records_tx = downloaded_records_tx.clone();
                 let client = self.artifact_client.clone();
                 let span = download_span.clone();
-                let artifacts_tx = artifacts_tx.clone();
                 join_set.spawn(
                     async move {
                         while let Ok((index, artifact)) = completed_tasks_rx.recv().await {
                             let record =
                                 client.download::<DeferredEvents>(&artifact).await.unwrap();
 
-                            // Send artifact to cleanup collector
-                            artifacts_tx.send(artifact).unwrap();
+                            // Delete artifact immediately after download using reference counting
+                            let task_id = format!("download_worker_{}", index);
+                            client.try_delete_when_unused(&artifact, &task_id, sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType).await.unwrap_or_else(|e| {
+                                tracing::warn!("Failed to delete artifact {}: {:?}", artifact.id(), e);
+                                false
+                            });
+                            
                             downloaded_records_tx.send((index, record)).unwrap();
                         }
                         Ok(())
@@ -557,30 +563,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                     .instrument(span),
                 );
             }
-            drop(artifacts_tx); // Close the channel when all workers are done
-
-            // Collect artifacts for batch deletion
-            let artifact_client = self.artifact_client.clone();
-            join_set.spawn(
-                async move {
-                    let mut artifacts_to_delete = Vec::new();
-                    while let Some(artifact) = artifacts_rx.recv().await {
-                        artifacts_to_delete.push(artifact);
-                    }
-
-                    // Batch delete all artifacts
-                    if !artifacts_to_delete.is_empty() {
-                        artifact_client
-                            .try_delete_batch(
-                                &artifacts_to_delete,
-                                sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType,
-                            )
-                            .await;
-                    }
-                    Ok(())
-                }
-                .instrument(info_span!("cleanup artifacts")),
-            );
 
             // Send records to next channel in order
             join_set.spawn(
@@ -626,6 +608,11 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                                 // Filter for the execution shards which have an artifact that they upload
                                 // deferred events to.
                                 if let Some((artifact, task)) = deferred {
+                                    // Register this task as a user of the deferred artifact
+                                    if let Err(e) = self.artifact_client.add_artifact_user(&artifact.id(), &task).await {
+                                        tracing::warn!("Failed to register task {} as user of artifact {}: {:?}", task, artifact.id(), e);
+                                    }
+                                    
                                     pending_events.insert(task.clone(), (artifact, received));
                                     sub_tx.send(task).unwrap();
                                     received += 1;
@@ -689,7 +676,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         let mut record = DeferredEvents::empty();
         let mut final_receiver = Some(final_record_receiver);
 
-        let mut all_precompile_artifacts = vec![];
+        let mut all_precompile_artifacts: Vec<Artifact> = vec![];
 
         loop {
             tokio::select! {
@@ -698,10 +685,14 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
 
                     let new_shards = info_span!("split").in_scope(|| record.split(false, opts));
                     for shard in new_shards {
-                        // Collect artifacts from PrecompileRemote shards
+                        // Delete artifacts from PrecompileRemote shards immediately using reference counting
                         if let ShardEventData::PrecompileRemote(artifacts, _, _) = &shard {
                             for (artifact, _, _) in artifacts {
-                                all_precompile_artifacts.push(artifact.clone());
+                                let task_id = format!("pack_precompiles_{}", artifact.id());
+                                self.artifact_client.try_delete_when_unused(artifact, &task_id, sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType).await.unwrap_or_else(|e| {
+                                    tracing::warn!("Failed to delete precompile artifact {}: {:?}", artifact.id(), e);
+                                    false
+                                });
                             }
                         }
                         sender.send((shard, false)).await.unwrap();
@@ -772,17 +763,21 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         // Send out remaining records.
         let final_shards = info_span!("split last").in_scope(|| record.split(true, opts));
         for shard in final_shards {
-            // Collect artifacts from PrecompileRemote shards
+            // Delete artifacts from PrecompileRemote shards immediately using reference counting
             if let ShardEventData::PrecompileRemote(artifacts, _, _) = &shard {
                 for (artifact, _, _) in artifacts {
-                    all_precompile_artifacts.push(artifact.clone());
+                    let task_id = format!("pack_precompiles_final_{}", artifact.id());
+                    self.artifact_client.try_delete_when_unused(artifact, &task_id, sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType).await.unwrap_or_else(|e| {
+                        tracing::warn!("Failed to delete final precompile artifact {}: {:?}", artifact.id(), e);
+                        false
+                    });
                 }
             }
             sender.send((shard, false)).await.unwrap();
         }
 
-        // Send collected artifacts for cleanup
-        let _ = all_precompile_artifacts_tx.send(all_precompile_artifacts);
+        // Send empty list since we no longer collect artifacts for batch cleanup
+        let _ = all_precompile_artifacts_tx.send(vec![]);
 
         Ok(())
     }

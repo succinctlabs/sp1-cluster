@@ -213,6 +213,25 @@ pub trait ArtifactClient: Send + Sync + Clone + 'static {
     async fn download_stdin_bytes(&self, artifact: &impl ArtifactId) -> Result<Vec<u8>> {
         self.download_with_type(artifact, ArtifactType::Stdin).await
     }
+
+    /// Add a task as a user of an artifact (reference counting)
+    async fn add_artifact_user(&self, artifact_id: &str, task_id: &str) -> Result<bool> {
+        // Default implementation does nothing (for backwards compatibility)
+        Ok(true)
+    }
+
+    /// Remove a task as a user of an artifact and delete if no users remain
+    async fn try_delete_when_unused(&self, artifact: &impl ArtifactId, task_id: &str, artifact_type: ArtifactType) -> Result<bool> {
+        // Default implementation just deletes immediately (for backwards compatibility)
+        self.try_delete(artifact, artifact_type).await;
+        Ok(true)
+    }
+
+    /// Clean up all artifacts associated with a task (for crash recovery)
+    async fn cleanup_task_artifacts(&self, task_id: &str) -> Result<Vec<String>> {
+        // Default implementation does nothing (for backwards compatibility)
+        Ok(vec![])
+    }
 }
 
 #[derive(Clone)]
