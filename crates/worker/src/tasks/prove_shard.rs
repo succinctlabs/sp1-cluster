@@ -57,6 +57,13 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             ShardEventData::PrecompileRemote(_, _, _) => true,
         };
 
+        // Extract precompile artifacts before moving input
+        let precompile_artifacts = if let ShardEventData::PrecompileRemote(ref artifacts, _, _) = input {
+            Some(artifacts.clone())
+        } else {
+            None
+        };
+
         let (shard, deferred) = input.into_record(program_clone, self.clone()).await?;
 
         let prover = self.prover.clone();
@@ -350,6 +357,13 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType,
             )
             .await;
+
+        // Decrement reference count for precompile artifacts only at successful completion
+        if let Some(artifacts) = precompile_artifacts {
+            for (artifact, _, _) in artifacts {
+                let _ = client.decrement_artifact_ref(&artifact, sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType).await;
+            }
+        }
 
         Ok(TaskMetadata::new(
             gpu_time.load(std::sync::atomic::Ordering::Relaxed),
