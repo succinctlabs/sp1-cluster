@@ -1,7 +1,9 @@
 use anyhow::anyhow;
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize, Serializer};
-use sp1_cluster_artifact::{util::await_scoped_vec, Artifact, ArtifactClient};
+use sp1_cluster_artifact::{
+    util::await_scoped_vec, Artifact, ArtifactClient, ArtifactId, ArtifactType,
+};
 use sp1_core_executor::{
     events::{MemoryInitializeFinalizeEvent, PrecompileEvent, SyscallEvent},
     syscalls::SyscallCode,
@@ -13,6 +15,10 @@ use std::sync::Arc;
 use tracing::{info_span, instrument};
 
 use crate::{error::TaskError, SP1Worker, WorkerService};
+
+/// String used as task_id for add_ref to ensure precompile artifacts are not cleaned up before they
+/// are fully split into multiple shards.
+const CONTROLLER_PRECOMPILE_ARTIFACT_REF: &str = "_controller";
 
 /// A view of a shared Vec of memory events.
 ///
@@ -281,14 +287,28 @@ impl DeferredEvents {
     }
 
     /// Append the events from another DeferredEvents to self. Analogous to `ExecutionRecord::append`.
-    pub fn append(&mut self, other: DeferredEvents) {
+    pub async fn append(&mut self, other: DeferredEvents, client: &impl ArtifactClient) {
         for (code, events) in other.0 {
+            // Add task references for artifacts so they are not cleaned up before they are fully split.
+            for (artifact, _, _) in &events {
+                if let Err(e) = client
+                    .add_ref(artifact, CONTROLLER_PRECOMPILE_ARTIFACT_REF)
+                    .await
+                {
+                    tracing::error!("Failed to add ref to artifact {}: {:?}", artifact.id(), e);
+                }
+            }
             self.0.entry(code).or_default().extend(events);
         }
     }
 
     /// Split the DeferredEvents into multiple ShardEventData. Similar to `ExecutionRecord::split`.
-    pub fn split(&mut self, last: bool, opts: SplitOpts) -> Vec<ShardEventData> {
+    pub async fn split(
+        &mut self,
+        last: bool,
+        opts: SplitOpts,
+        client: &impl ArtifactClient,
+    ) -> Vec<ShardEventData> {
         let mut shards = Vec::new();
         let keys = self.0.keys().cloned().collect::<Vec<_>>();
         for code in keys {
@@ -325,6 +345,26 @@ impl DeferredEvents {
                     .unwrap()
                     .drain(..index)
                     .collect::<Vec<_>>();
+                // Remove task references for artifacts that are no longer needed in the controller.
+                for (i, (artifact, _, _)) in artifacts.iter().enumerate() {
+                    if i == artifacts.len() - 1 && count > threshold {
+                        break;
+                    }
+                    if let Err(e) = client
+                        .remove_ref(
+                            artifact,
+                            ArtifactType::UnspecifiedArtifactType,
+                            CONTROLLER_PRECOMPILE_ARTIFACT_REF,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            "Failed to remove ref to artifact {}: {:?}",
+                            artifact.id(),
+                            e
+                        );
+                    }
+                }
                 // If there's extra in the last artifact, truncate it and leave it in the front of self.0[code].
                 if count > threshold {
                     let mut new_range = artifacts.last().cloned().unwrap();

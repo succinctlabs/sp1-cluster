@@ -291,11 +291,12 @@ impl ArtifactClient for RedisArtifactClient {
     }
 
     /// Add task reference for an artifact
-    async fn add_artifact_ref(&self, artifact_id: &str, task_id: &str) -> Result<()> {
-        backoff_retry(self.backoff.clone(), || async {
-            let mut conn = self.get_redis_connection(artifact_id).await?;
+    async fn add_ref(&self, artifact: &impl ArtifactId, task_id: &str) -> Result<()> {
+        let id = artifact.id();
+        let key = format!("refs:{}", id);
 
-            let key = format!("refs:{}", artifact_id);
+        backoff_retry(self.backoff.clone(), || async {
+            let mut conn = self.get_redis_connection(id).await?;
 
             // Add task_id to the set of references
             let _: () = conn
@@ -315,7 +316,7 @@ impl ArtifactClient for RedisArtifactClient {
     }
 
     /// Remove task reference and delete artifact if no references remain
-    async fn remove_artifact_ref(
+    async fn remove_ref(
         &self,
         artifact: &impl ArtifactId,
         artifact_type: ArtifactType,

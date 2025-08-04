@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use futures::TryFutureExt;
 use p3_baby_bear::BabyBear;
 use p3_challenger::CanObserve;
-use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_artifact::{ArtifactClient, ArtifactType};
 use sp1_cluster_common::proto::WorkerTask;
 use sp1_core_executor::{RiscvAirId, SP1ReduceProof};
 use sp1_prover::{shapes::SP1CompressProgramShape, CoreSC, SP1CircuitWitness};
@@ -58,11 +58,12 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         };
 
         // Extract precompile artifacts before moving input
-        let precompile_artifacts = if let ShardEventData::PrecompileRemote(ref artifacts, _, _) = input {
-            Some(artifacts.clone())
-        } else {
-            None
-        };
+        let precompile_artifacts =
+            if let ShardEventData::PrecompileRemote(ref artifacts, _, _) = input {
+                Some(artifacts.clone())
+            } else {
+                None
+            };
 
         let (shard, deferred) = input.into_record(program_clone, self.clone()).await?;
 
@@ -361,7 +362,13 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         // Remove task reference for precompile artifacts only at successful completion
         if let Some(artifacts) = precompile_artifacts {
             for (artifact, _, _) in artifacts {
-                let _ = client.remove_artifact_ref(&artifact, sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType, &task.task_id).await;
+                let _ = client
+                    .remove_ref(
+                        &artifact,
+                        ArtifactType::UnspecifiedArtifactType,
+                        &task.task_id,
+                    )
+                    .await;
             }
         }
 

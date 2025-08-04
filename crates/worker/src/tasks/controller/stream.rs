@@ -16,7 +16,7 @@ use anyhow::{anyhow, Result};
 use hashbrown::HashMap;
 use opentelemetry::Context;
 use p3_field::PrimeField32;
-use sp1_cluster_artifact::{Artifact, ArtifactClient, ArtifactId};
+use sp1_cluster_artifact::{Artifact, ArtifactClient};
 use sp1_cluster_common::proto::{TaskStatus, TaskType};
 use sp1_core_executor::{DeferredProofVerification, SP1ReduceProof};
 use sp1_core_executor::{ExecutionRecord, Executor, Program};
@@ -692,15 +692,15 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         loop {
             tokio::select! {
                 Some((_, deferred)) = receiver.recv() => {
-                    record.append(deferred);
+                    record.append(deferred, &self.artifact_client).await;
 
-                    let new_shards = info_span!("split").in_scope(|| record.split(false, opts));
+                    let new_shards = record.split(false, opts, &self.artifact_client).instrument(info_span!("split")).await;
                     for shard in new_shards {
                         // Collect artifacts from PrecompileRemote shards
                         if let ShardEventData::PrecompileRemote(artifacts, _, _) = &shard {
                             for (artifact, _, _) in artifacts {
                                 // Add task reference for precompile artifact that will be used in prove_shard tasks
-                                let _ = self.artifact_client.add_artifact_ref(&artifact.id(), &task_id).await;
+                                let _ = self.artifact_client.add_ref(artifact, &task_id).await;
                             }
                         }
                         sender.send((shard, false)).await.unwrap();
@@ -769,16 +769,16 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         }
 
         // Send out remaining records.
-        let final_shards = info_span!("split last").in_scope(|| record.split(true, opts));
+        let final_shards = record
+            .split(true, opts, &self.artifact_client)
+            .instrument(info_span!("split last"))
+            .await;
         for shard in final_shards {
             // Collect artifacts from PrecompileRemote shards
             if let ShardEventData::PrecompileRemote(artifacts, _, _) = &shard {
                 for (artifact, _, _) in artifacts {
                     // Add task reference for precompile artifact that will be used in prove_shard tasks
-                    let _ = self
-                        .artifact_client
-                        .add_artifact_ref(&artifact.id(), &task_id)
-                        .await;
+                    let _ = self.artifact_client.add_ref(artifact, &task_id).await;
                 }
             }
             sender.send((shard, false)).await.unwrap();

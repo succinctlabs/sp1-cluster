@@ -215,13 +215,13 @@ pub trait ArtifactClient: Send + Sync + Clone + 'static {
     }
 
     /// Add task reference for an artifact
-    async fn add_artifact_ref(&self, _artifact_id: &str, _task_id: &str) -> Result<()> {
+    async fn add_ref(&self, _artifact: &impl ArtifactId, _task_id: &str) -> Result<()> {
         // Default implementation does nothing (for non-Redis clients)
         Ok(())
     }
 
     /// Remove task reference and delete artifact if no references remain
-    async fn remove_artifact_ref(
+    async fn remove_ref(
         &self,
         _artifact: &impl ArtifactId,
         _artifact_type: ArtifactType,
