@@ -23,8 +23,8 @@ p3-field = "=0.2.3-succinct"
 p3-matrix = "=0.2.3-succinct"
 
 # Moongate
-moongate-core = { git = "https://github.com/succinctlabs/moongate", branch = "cluster" }
-moongate-prover = { git = "https://github.com/succinctlabs/moongate", branch = "cluster" }
+moongate-core = { git = "https://github.com/succinctlabs/moongate", branch = "chris/build-lockfile" }
+moongate-prover = { git = "https://github.com/succinctlabs/moongate", branch = "chris/build-lockfile" }
 
 # SP1
 sp1-core-executor = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }

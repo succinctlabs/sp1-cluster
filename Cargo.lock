@@ -52,7 +52,7 @@ dependencies = [
 [[package]]
 name = "air"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/moongate?branch=cluster#f1130edad6f062441f1222bb78a622a4de77e3cf"
+source = "git+https://github.com/succinctlabs/moongate?branch=chris%2Fbuild-lockfile#3ec048cceeeb0e1c82e6826a35625b183e02a8b9"
 dependencies = [
  "lazy_static",
  "p3-air",
@@ -4413,7 +4413,7 @@ dependencies = [
 [[package]]
 name = "moongate-core"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/moongate?branch=cluster#f1130edad6f062441f1222bb78a622a4de77e3cf"
+source = "git+https://github.com/succinctlabs/moongate?branch=chris%2Fbuild-lockfile#3ec048cceeeb0e1c82e6826a35625b183e02a8b9"
 dependencies = [
  "air",
  "bincode",
@@ -4458,7 +4458,7 @@ dependencies = [
 [[package]]
 name = "moongate-prover"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/moongate?branch=cluster#f1130edad6f062441f1222bb78a622a4de77e3cf"
+source = "git+https://github.com/succinctlabs/moongate?branch=chris%2Fbuild-lockfile#3ec048cceeeb0e1c82e6826a35625b183e02a8b9"
 dependencies = [
  "bincode",
  "clap",
