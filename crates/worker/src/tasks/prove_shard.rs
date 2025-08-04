@@ -361,12 +361,12 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
 
         // Remove task reference for precompile artifacts only at successful completion
         if let Some(artifacts) = precompile_artifacts {
-            for (artifact, _, _) in artifacts {
+            for (artifact, start, end) in artifacts {
                 let _ = client
                     .remove_ref(
                         &artifact,
                         ArtifactType::UnspecifiedArtifactType,
-                        &task.task_id,
+                        &format!("{}_{}", start, end),
                     )
                     .await;
             }

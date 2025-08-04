@@ -291,21 +291,21 @@ impl ArtifactClient for RedisArtifactClient {
     }
 
     /// Add task reference for an artifact
-    async fn add_ref(&self, artifact: &impl ArtifactId, task_id: &str) -> Result<()> {
+    async fn add_ref(&self, artifact: &impl ArtifactId, key: &str) -> Result<()> {
         let id = artifact.id();
-        let key = format!("refs:{}", id);
+        let redis_key = format!("refs:{}", id);
 
         backoff_retry(self.backoff.clone(), || async {
             let mut conn = self.get_redis_connection(id).await?;
 
             // Add task_id to the set of references
             let _: () = conn
-                .sadd(&key, task_id)
+                .sadd(&redis_key, key)
                 .await
                 .map_err(|e| backoff::Error::transient(e.into()))?;
 
             // Set expiration to prevent memory leaks
-            conn.expire::<_, ()>(&key, ARTIFACT_TIMEOUT_SECONDS as i64)
+            conn.expire::<_, ()>(&redis_key, ARTIFACT_TIMEOUT_SECONDS as i64)
                 .await
                 .map_err(|e| backoff::Error::transient(e.into()))?;
 
@@ -320,30 +320,30 @@ impl ArtifactClient for RedisArtifactClient {
         &self,
         artifact: &impl ArtifactId,
         artifact_type: ArtifactType,
-        task_id: &str,
+        key: &str,
     ) -> Result<bool> {
         let artifact_id = artifact.id();
 
         let should_delete = backoff_retry(self.backoff.clone(), || async {
             let mut conn = self.get_redis_connection(artifact_id).await?;
 
-            let key = format!("refs:{}", artifact_id);
+            let redis_key = format!("refs:{}", artifact_id);
 
             // Remove task_id from the set
             let _: () = conn
-                .srem(&key, task_id)
+                .srem(&redis_key, key)
                 .await
                 .map_err(|e| backoff::Error::transient(e.into()))?;
 
             // Check if set is empty
             let count: i64 = conn
-                .scard(&key)
+                .scard(&redis_key)
                 .await
                 .map_err(|e| backoff::Error::transient(e.into()))?;
 
             if count <= 0 {
                 // Clean up the set key
-                conn.del::<_, ()>(&key)
+                conn.del::<_, ()>(&redis_key)
                     .await
                     .map_err(|e| backoff::Error::transient(e.into()))?;
 

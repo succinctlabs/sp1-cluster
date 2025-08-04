@@ -16,7 +16,7 @@ use tracing::{info_span, instrument};
 
 use crate::{error::TaskError, SP1Worker, WorkerService};
 
-/// String used as task_id for add_ref to ensure precompile artifacts are not cleaned up before they
+/// String used as key for add_ref to ensure precompile artifacts are not cleaned up before they
 /// are fully split into multiple shards.
 const CONTROLLER_PRECOMPILE_ARTIFACT_REF: &str = "_controller";
 

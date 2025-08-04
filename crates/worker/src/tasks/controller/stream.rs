@@ -684,7 +684,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         sender: Sender<(ShardEventData, bool)>,
         final_record_receiver: tokio::sync::oneshot::Receiver<ExecutionRecord>,
         opts: SplitOpts,
-        task_id: String,
     ) -> Result<(), TaskError> {
         let mut record = DeferredEvents::empty();
         let mut final_receiver = Some(final_record_receiver);
@@ -696,13 +695,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
 
                     let new_shards = record.split(false, opts, &self.artifact_client).instrument(info_span!("split")).await;
                     for shard in new_shards {
-                        // Collect artifacts from PrecompileRemote shards
-                        if let ShardEventData::PrecompileRemote(artifacts, _, _) = &shard {
-                            for (artifact, _, _) in artifacts {
-                                // Add task reference for precompile artifact that will be used in prove_shard tasks
-                                let _ = self.artifact_client.add_ref(artifact, &task_id).await;
-                            }
-                        }
                         sender.send((shard, false)).await.unwrap();
                     }
                 }
@@ -776,9 +768,12 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         for shard in final_shards {
             // Collect artifacts from PrecompileRemote shards
             if let ShardEventData::PrecompileRemote(artifacts, _, _) = &shard {
-                for (artifact, _, _) in artifacts {
+                for (artifact, start, end) in artifacts {
                     // Add task reference for precompile artifact that will be used in prove_shard tasks
-                    let _ = self.artifact_client.add_ref(artifact, &task_id).await;
+                    let _ = self
+                        .artifact_client
+                        .add_ref(artifact, &format!("{}_{}", start, end))
+                        .await;
                 }
             }
             sender.send((shard, false)).await.unwrap();

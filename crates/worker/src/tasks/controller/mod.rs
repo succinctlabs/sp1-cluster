@@ -263,7 +263,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                         prove_inputs_tx,
                         final_record_rx,
                         self.prover_opts.core_opts.split_opts,
-                        task.task_id.clone(),
                     )
                     .instrument(info_span!("pack_precompiles")),
             );
