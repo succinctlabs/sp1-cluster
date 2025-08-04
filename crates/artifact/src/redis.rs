@@ -289,4 +289,68 @@ impl ArtifactClient for RedisArtifactClient {
 
         Ok(())
     }
+
+    /// Increment reference count for an artifact
+    async fn increment_artifact_ref(&self, artifact_id: &str) -> Result<()> {
+        backoff_retry(self.backoff.clone(), || async {
+            let mut conn = self.get_redis_connection(artifact_id).await?;
+
+            let key = format!("refs:{}", artifact_id);
+
+            // Increment reference count
+            let _count: i64 = conn
+                .incr(&key, 1)
+                .await
+                .map_err(|e| backoff::Error::transient(e.into()))?;
+
+            // Set expiration to prevent memory leaks
+            conn.expire::<_, ()>(&key, ARTIFACT_TIMEOUT_SECONDS as i64)
+                .await
+                .map_err(|e| backoff::Error::transient(e.into()))?;
+
+            Ok(())
+        })
+        .await
+        .map_err(|e: backoff::Error<anyhow::Error>| anyhow!(e))
+    }
+
+    /// Decrement reference count and delete if zero
+    async fn decrement_artifact_ref(
+        &self,
+        artifact: &impl ArtifactId,
+        artifact_type: ArtifactType,
+    ) -> Result<bool> {
+        let artifact_id = artifact.id();
+
+        let should_delete = backoff_retry(self.backoff.clone(), || async {
+            let mut conn = self.get_redis_connection(artifact_id).await?;
+
+            let key = format!("refs:{}", artifact_id);
+
+            // Decrement reference count
+            let count: i64 = conn
+                .decr(&key, 1)
+                .await
+                .map_err(|e| backoff::Error::transient(e.into()))?;
+
+            if count <= 0 {
+                // Clean up the counter key
+                conn.del::<_, ()>(&key)
+                    .await
+                    .map_err(|e| backoff::Error::transient(e.into()))?;
+
+                Ok(true) // Should delete
+            } else {
+                Ok(false) // Still has references
+            }
+        })
+        .await
+        .map_err(|e: backoff::Error<anyhow::Error>| anyhow!(e))?;
+
+        if should_delete {
+            // Delete the artifact since no references remain
+            self.try_delete(artifact, artifact_type).await;
+        }
+        Ok(should_delete)
+    }
 }

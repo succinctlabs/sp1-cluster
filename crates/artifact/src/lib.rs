@@ -213,6 +213,21 @@ pub trait ArtifactClient: Send + Sync + Clone + 'static {
     async fn download_stdin_bytes(&self, artifact: &impl ArtifactId) -> Result<Vec<u8>> {
         self.download_with_type(artifact, ArtifactType::Stdin).await
     }
+
+    /// Increment reference count for an artifact
+    async fn increment_artifact_ref(&self, _artifact_id: &str) -> Result<()> {
+        // Default implementation does nothing (for non-Redis clients)
+        Ok(())
+    }
+
+    /// Decrement reference count and delete if zero
+    async fn decrement_artifact_ref(
+        &self,
+        _artifact: &impl ArtifactId,
+        _artifact_type: ArtifactType,
+    ) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 #[derive(Clone)]

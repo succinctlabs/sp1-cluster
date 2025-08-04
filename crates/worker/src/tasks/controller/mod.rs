@@ -83,9 +83,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             None
         };
 
-        let (all_precompile_artifacts_tx, mut all_precompile_artifacts_rx) =
-            tokio::sync::oneshot::channel::<Vec<Artifact>>();
-
         let (common_tx, common_rx) = tokio::sync::watch::channel::<
             Option<(StarkVerifyingKey<CoreSC>, CommonProveShardInput, Artifact)>,
         >(None);
@@ -266,7 +263,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                         prove_inputs_tx,
                         final_record_rx,
                         self.prover_opts.core_opts.split_opts,
-                        all_precompile_artifacts_tx,
                     )
                     .instrument(info_span!("pack_precompiles")),
             );
@@ -509,15 +505,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             self.artifact_client
                 .upload_proof(&data.outputs[0], result)
                 .await?;
-        }
-
-        // Clean up precompile artifacts
-        if let Ok(precompile_artifacts) = all_precompile_artifacts_rx.try_recv() {
-            if !precompile_artifacts.is_empty() {
-                self.artifact_client
-                    .try_delete_batch(&precompile_artifacts, ArtifactType::UnspecifiedArtifactType)
-                    .await;
-            }
         }
 
         // Clean up stdin since it's no longer needed
