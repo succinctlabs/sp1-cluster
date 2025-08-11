@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::shards::{DeferredEvents, GlobalMemoryEvents, ShardEventData, ShardType};
-use super::CommonProveShardInput;
+use super::CommonTaskInput;
 use crate::error::TaskError;
 use crate::utils::{conditional_future, get_tree_layer_size, with_parent};
 use crate::SP1Worker;
@@ -258,7 +258,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         self: Arc<Self>,
         mut receiver: Receiver<(ShardEventData, bool)>,
         mut common_rx: tokio::sync::watch::Receiver<
-            Option<(StarkVerifyingKey<CoreSC>, CommonProveShardInput, Artifact)>,
+            Option<(StarkVerifyingKey<CoreSC>, CommonTaskInput, Artifact)>,
         >,
         next_sender: UnboundedSender<(usize, (String, Artifact, Option<(Artifact, String)>))>,
         precompile_sender: UnboundedSender<(usize, (String, Artifact, Option<(Artifact, String)>))>,
@@ -776,7 +776,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
     pub(crate) async fn deferred_leaves_thread(
         self: Arc<Self>,
         mut common_rx: tokio::sync::watch::Receiver<
-            Option<(StarkVerifyingKey<CoreSC>, CommonProveShardInput, Artifact)>,
+            Option<(StarkVerifyingKey<CoreSC>, CommonTaskInput, Artifact)>,
         >,
         deferred_proofs: Vec<(SP1ReduceProof<InnerSC>, StarkVerifyingKey<CoreSC>)>,
         proof_id: String,

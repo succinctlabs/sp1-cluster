@@ -40,9 +40,9 @@ use tracing::{info_span, Instrument};
 /// If each checkpoint is ~50MB, this should be ~7.5 GB.
 pub(crate) const PROVE_INPUTS_CHANNEL_CAPACITY: usize = 150;
 
-/// Common data used in all ProveShard tasks for a proof.
+/// Common data used in all ProveShard tasks and ShrinkWrap task for a proof.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct CommonProveShardInput {
+pub struct CommonTaskInput {
     pub challenger: Challenger<CoreSC>,
     pub mode: ProofMode,
     pub vk: StarkVerifyingKey<CoreSC>,
@@ -84,7 +84,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         };
 
         let (common_tx, common_rx) = tokio::sync::watch::channel::<
-            Option<(StarkVerifyingKey<CoreSC>, CommonProveShardInput, Artifact)>,
+            Option<(StarkVerifyingKey<CoreSC>, CommonTaskInput, Artifact)>,
         >(None);
 
         let (proof, pv, vk) = {
@@ -192,7 +192,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                             );
 
                         (
-                            CommonProveShardInput {
+                            CommonTaskInput {
                                 challenger,
                                 mode,
                                 deferred_digest,
@@ -412,7 +412,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
 
                 let final_result = final_result.unwrap();
                 let pv = pv.unwrap();
-                let vk = common_rx.borrow().as_ref().unwrap().0.clone();
+                let (vk, _, common_artifact) = common_rx.borrow().as_ref().unwrap().clone();
 
                 if mode == ProofMode::Compressed {
                     // If user just requested a compressed proof, stop here.
@@ -426,7 +426,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                         .worker_client
                         .create_task(
                             TaskType::ShrinkWrap,
-                            &[&final_result],
+                            &[&final_result, &common_artifact],
                             &[&shrink_artifact],
                             data.proof_id.clone(),
                             Some(task.task_id.clone()),

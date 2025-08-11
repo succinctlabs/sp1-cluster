@@ -8,7 +8,7 @@ mod types;
 
 pub use controller::{
     shards::{ShardEventData, ShardEventsMode},
-    CommonProveShardInput,
+    CommonTaskInput,
 };
 use serde::{Deserialize, Serialize};
 pub use types::*;

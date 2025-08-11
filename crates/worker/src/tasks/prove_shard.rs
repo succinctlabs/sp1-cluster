@@ -30,7 +30,7 @@ use crate::tasks::controller::shards::DeferredEvents;
 use crate::{acquire_gpu, ShardEventData};
 use crate::{error::TaskError, SP1Worker};
 
-use super::controller::CommonProveShardInput;
+use super::controller::CommonTaskInput;
 use super::TaskMetadata;
 
 impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
@@ -43,7 +43,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         let client = &self.artifact_client;
         let (elf, common_input, input) = tokio::try_join!(
             client.download_program(&data.inputs[0]),
-            client.download::<CommonProveShardInput>(&data.inputs[1]),
+            client.download::<CommonTaskInput>(&data.inputs[1]),
             client.download::<ShardEventData>(&data.inputs[2]),
         )?;
         let marker_task = data.inputs.get(3).cloned();
@@ -167,7 +167,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         let permit = acquire_gpu!(self, gpu_time);
 
         // Generate commit and proof.
-        let CommonProveShardInput {
+        let CommonTaskInput {
             vk,
             mode,
             challenger,
