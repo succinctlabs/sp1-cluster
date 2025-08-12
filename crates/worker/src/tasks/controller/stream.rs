@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::shards::{DeferredEvents, GlobalMemoryEvents, ShardEventData, ShardType};
-use super::CommonProveShardInput;
+use super::CommonTaskInput;
 use crate::error::TaskError;
 use crate::utils::{conditional_future, get_tree_layer_size, with_parent};
 use crate::SP1Worker;
@@ -258,7 +258,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         self: Arc<Self>,
         mut receiver: Receiver<(ShardEventData, bool)>,
         mut common_rx: tokio::sync::watch::Receiver<
-            Option<(StarkVerifyingKey<CoreSC>, CommonProveShardInput, Artifact)>,
+            Option<(StarkVerifyingKey<CoreSC>, CommonTaskInput, Artifact)>,
         >,
         next_sender: UnboundedSender<(usize, (String, Artifact, Option<(Artifact, String)>))>,
         precompile_sender: UnboundedSender<(usize, (String, Artifact, Option<(Artifact, String)>))>,
@@ -684,26 +684,17 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         sender: Sender<(ShardEventData, bool)>,
         final_record_receiver: tokio::sync::oneshot::Receiver<ExecutionRecord>,
         opts: SplitOpts,
-        all_precompile_artifacts_tx: tokio::sync::oneshot::Sender<Vec<Artifact>>,
     ) -> Result<(), TaskError> {
         let mut record = DeferredEvents::empty();
         let mut final_receiver = Some(final_record_receiver);
 
-        let mut all_precompile_artifacts = vec![];
-
         loop {
             tokio::select! {
                 Some((_, deferred)) = receiver.recv() => {
-                    record.append(deferred);
+                    record.append(deferred, &self.artifact_client).await;
 
-                    let new_shards = info_span!("split").in_scope(|| record.split(false, opts));
+                    let new_shards = record.split(false, opts, &self.artifact_client).instrument(info_span!("split")).await;
                     for shard in new_shards {
-                        // Collect artifacts from PrecompileRemote shards
-                        if let ShardEventData::PrecompileRemote(artifacts, _, _) = &shard {
-                            for (artifact, _, _) in artifacts {
-                                all_precompile_artifacts.push(artifact.clone());
-                            }
-                        }
                         sender.send((shard, false)).await.unwrap();
                     }
                 }
@@ -770,19 +761,13 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         }
 
         // Send out remaining records.
-        let final_shards = info_span!("split last").in_scope(|| record.split(true, opts));
+        let final_shards = record
+            .split(true, opts, &self.artifact_client)
+            .instrument(info_span!("split last"))
+            .await;
         for shard in final_shards {
-            // Collect artifacts from PrecompileRemote shards
-            if let ShardEventData::PrecompileRemote(artifacts, _, _) = &shard {
-                for (artifact, _, _) in artifacts {
-                    all_precompile_artifacts.push(artifact.clone());
-                }
-            }
             sender.send((shard, false)).await.unwrap();
         }
-
-        // Send collected artifacts for cleanup
-        let _ = all_precompile_artifacts_tx.send(all_precompile_artifacts);
 
         Ok(())
     }
@@ -791,7 +776,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
     pub(crate) async fn deferred_leaves_thread(
         self: Arc<Self>,
         mut common_rx: tokio::sync::watch::Receiver<
-            Option<(StarkVerifyingKey<CoreSC>, CommonProveShardInput, Artifact)>,
+            Option<(StarkVerifyingKey<CoreSC>, CommonTaskInput, Artifact)>,
         >,
         deferred_proofs: Vec<(SP1ReduceProof<InnerSC>, StarkVerifyingKey<CoreSC>)>,
         proof_id: String,

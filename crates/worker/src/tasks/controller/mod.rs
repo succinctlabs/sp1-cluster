@@ -40,9 +40,9 @@ use tracing::{info_span, Instrument};
 /// If each checkpoint is ~50MB, this should be ~7.5 GB.
 pub(crate) const PROVE_INPUTS_CHANNEL_CAPACITY: usize = 150;
 
-/// Common data used in all ProveShard tasks for a proof.
+/// Common data used in all ProveShard tasks and ShrinkWrap task for a proof.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct CommonProveShardInput {
+pub struct CommonTaskInput {
     pub challenger: Challenger<CoreSC>,
     pub mode: ProofMode,
     pub vk: StarkVerifyingKey<CoreSC>,
@@ -83,11 +83,8 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             None
         };
 
-        let (all_precompile_artifacts_tx, mut all_precompile_artifacts_rx) =
-            tokio::sync::oneshot::channel::<Vec<Artifact>>();
-
         let (common_tx, common_rx) = tokio::sync::watch::channel::<
-            Option<(StarkVerifyingKey<CoreSC>, CommonProveShardInput, Artifact)>,
+            Option<(StarkVerifyingKey<CoreSC>, CommonTaskInput, Artifact)>,
         >(None);
 
         let (proof, pv, vk) = {
@@ -195,7 +192,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                             );
 
                         (
-                            CommonProveShardInput {
+                            CommonTaskInput {
                                 challenger,
                                 mode,
                                 deferred_digest,
@@ -266,7 +263,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                         prove_inputs_tx,
                         final_record_rx,
                         self.prover_opts.core_opts.split_opts,
-                        all_precompile_artifacts_tx,
                     )
                     .instrument(info_span!("pack_precompiles")),
             );
@@ -416,7 +412,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
 
                 let final_result = final_result.unwrap();
                 let pv = pv.unwrap();
-                let vk = common_rx.borrow().as_ref().unwrap().0.clone();
+                let (vk, _, common_artifact) = common_rx.borrow().as_ref().unwrap().clone();
 
                 if mode == ProofMode::Compressed {
                     // If user just requested a compressed proof, stop here.
@@ -430,7 +426,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                         .worker_client
                         .create_task(
                             TaskType::ShrinkWrap,
-                            &[&final_result],
+                            &[&final_result, &common_artifact],
                             &[&shrink_artifact],
                             data.proof_id.clone(),
                             Some(task.task_id.clone()),
@@ -476,18 +472,24 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         };
 
         // Verify compressed proof in another thread.
-        if let SP1Proof::Compressed(proof) = &proof {
+        let maybe_verify_future = if let SP1Proof::Compressed(proof) = &proof {
             let proof_clone = proof.clone();
             let prover_clone = self.prover.clone();
             let span = info_span!("verify compressed proof");
-            tokio::task::spawn_blocking(move || {
+            Some(tokio::task::spawn_blocking(move || {
                 let _guard = span.enter();
                 if let Err(e) =
                     prover_clone.verify_compressed(&proof_clone, &SP1VerifyingKey { vk })
                 {
-                    tracing::error!("verify_compressed failed: {:?}", e);
+                    return Err(TaskError::Fatal(anyhow!(
+                        "verify_compressed failed: {:?}",
+                        e
+                    )));
                 }
-            });
+                Ok(())
+            }))
+        } else {
+            None
         };
 
         // Upload final result.
@@ -505,15 +507,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 .await?;
         }
 
-        // Clean up precompile artifacts
-        if let Ok(precompile_artifacts) = all_precompile_artifacts_rx.try_recv() {
-            if !precompile_artifacts.is_empty() {
-                self.artifact_client
-                    .try_delete_batch(&precompile_artifacts, ArtifactType::UnspecifiedArtifactType)
-                    .await;
-            }
-        }
-
         // Clean up stdin since it's no longer needed
         let mut artifacts_to_cleanup = vec![data.inputs[1].clone()];
 
@@ -525,6 +518,11 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         self.artifact_client
             .try_delete_batch(&artifacts_to_cleanup, ArtifactType::UnspecifiedArtifactType)
             .await;
+
+        // Ensure final proof verifies.
+        if let Some(verify_future) = maybe_verify_future {
+            verify_future.await.unwrap()?;
+        }
 
         // Mark proof as completed.
         self.worker_client

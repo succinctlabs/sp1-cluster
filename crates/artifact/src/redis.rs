@@ -289,4 +289,76 @@ impl ArtifactClient for RedisArtifactClient {
 
         Ok(())
     }
+
+    /// Add task reference for an artifact
+    async fn add_ref(&self, artifact: &impl ArtifactId, key: &str) -> Result<()> {
+        let id = artifact.id();
+        let redis_key = format!("refs:{}", id);
+
+        backoff_retry(self.backoff.clone(), || async {
+            let mut conn = self.get_redis_connection(id).await?;
+
+            // Add task_id to the set of references
+            let _: () = conn
+                .sadd(&redis_key, key)
+                .await
+                .map_err(|e| backoff::Error::transient(e.into()))?;
+
+            // Set expiration to prevent memory leaks
+            conn.expire::<_, ()>(&redis_key, ARTIFACT_TIMEOUT_SECONDS as i64)
+                .await
+                .map_err(|e| backoff::Error::transient(e.into()))?;
+
+            Ok(())
+        })
+        .await
+        .map_err(|e: backoff::Error<anyhow::Error>| anyhow!(e))
+    }
+
+    /// Remove task reference and delete artifact if no references remain
+    async fn remove_ref(
+        &self,
+        artifact: &impl ArtifactId,
+        artifact_type: ArtifactType,
+        key: &str,
+    ) -> Result<bool> {
+        let artifact_id = artifact.id();
+
+        let should_delete = backoff_retry(self.backoff.clone(), || async {
+            let mut conn = self.get_redis_connection(artifact_id).await?;
+
+            let redis_key = format!("refs:{}", artifact_id);
+
+            // Remove task_id from the set
+            let _: () = conn
+                .srem(&redis_key, key)
+                .await
+                .map_err(|e| backoff::Error::transient(e.into()))?;
+
+            // Check if set is empty
+            let count: i64 = conn
+                .scard(&redis_key)
+                .await
+                .map_err(|e| backoff::Error::transient(e.into()))?;
+
+            if count <= 0 {
+                // Clean up the set key
+                conn.del::<_, ()>(&redis_key)
+                    .await
+                    .map_err(|e| backoff::Error::transient(e.into()))?;
+
+                Ok(true) // Should delete
+            } else {
+                Ok(false) // Still has references
+            }
+        })
+        .await
+        .map_err(|e: backoff::Error<anyhow::Error>| anyhow!(e))?;
+
+        if should_delete {
+            // Delete the artifact since no references remain
+            self.try_delete(artifact, artifact_type).await;
+        }
+        Ok(should_delete)
+    }
 }

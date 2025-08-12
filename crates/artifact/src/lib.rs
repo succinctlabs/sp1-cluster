@@ -213,6 +213,22 @@ pub trait ArtifactClient: Send + Sync + Clone + 'static {
     async fn download_stdin_bytes(&self, artifact: &impl ArtifactId) -> Result<Vec<u8>> {
         self.download_with_type(artifact, ArtifactType::Stdin).await
     }
+
+    /// Add task reference for an artifact
+    async fn add_ref(&self, _artifact: &impl ArtifactId, _task_id: &str) -> Result<()> {
+        // Default implementation does nothing (for non-Redis clients)
+        Ok(())
+    }
+
+    /// Remove task reference and delete artifact if no references remain
+    async fn remove_ref(
+        &self,
+        _artifact: &impl ArtifactId,
+        _artifact_type: ArtifactType,
+        _task_id: &str,
+    ) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 #[derive(Clone)]

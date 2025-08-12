@@ -30,6 +30,7 @@ use sp1_recursion_core::ExecutionRecord;
 use sp1_recursion_core::RecursionProgram;
 use sp1_recursion_core::DIGEST_SIZE;
 use sp1_recursion_core::{air::RecursionPublicValues, runtime::Runtime as RecursionRuntime};
+use sp1_sdk::HashableKey;
 use sp1_stark::baby_bear_poseidon2::BabyBearPoseidon2;
 use sp1_stark::septic_digest::SepticDigest;
 use sp1_stark::MachineProof;
@@ -570,6 +571,14 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 )))
             } else {
                 println!("reduce batch result verified");
+                let vkey_hash = reduce_proof_clone.vk.hash_babybear();
+                if !prover_clone.recursion_vk_map.contains_key(&vkey_hash) {
+                    tracing::error!("vkey {:?} not found in map", vkey_hash);
+                    return Err(TaskError::Retryable(anyhow!(
+                        "vkey {:?} not found in map",
+                        vkey_hash
+                    )));
+                }
                 Ok(())
             }
         })

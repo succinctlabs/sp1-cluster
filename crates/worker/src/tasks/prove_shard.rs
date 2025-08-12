@@ -6,18 +6,23 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use futures::TryFutureExt;
+use p3_baby_bear::BabyBear;
 use p3_challenger::CanObserve;
-use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_artifact::{ArtifactClient, ArtifactType};
 use sp1_cluster_common::proto::WorkerTask;
 use sp1_core_executor::{RiscvAirId, SP1ReduceProof};
 use sp1_prover::{shapes::SP1CompressProgramShape, CoreSC, SP1CircuitWitness};
 use sp1_recursion_circuit::machine::{SP1RecursionShape, SP1RecursionWitnessValues};
+use sp1_recursion_core::air::RecursionPublicValues;
 use sp1_recursion_core::RecursionProgram;
 use sp1_sdk::network::proto::types::ProofMode;
+use sp1_sdk::HashableKey;
 use sp1_stark::air::MachineAir;
 use sp1_stark::shape::OrderedShape;
-use sp1_stark::{MachineProof, MachineRecord};
+use sp1_stark::{MachineProof, MachineRecord, MachineVerificationError};
 use sp1_stark::{MachineProver, StarkGenericConfig, Verifier};
+use std::borrow::Borrow;
+use std::iter::once;
 use tokio::try_join;
 
 use crate::client::WorkerService;
@@ -25,7 +30,7 @@ use crate::tasks::controller::shards::DeferredEvents;
 use crate::{acquire_gpu, ShardEventData};
 use crate::{error::TaskError, SP1Worker};
 
-use super::controller::CommonProveShardInput;
+use super::controller::CommonTaskInput;
 use super::TaskMetadata;
 
 impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
@@ -38,7 +43,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         let client = &self.artifact_client;
         let (elf, common_input, input) = tokio::try_join!(
             client.download_program(&data.inputs[0]),
-            client.download::<CommonProveShardInput>(&data.inputs[1]),
+            client.download::<CommonTaskInput>(&data.inputs[1]),
             client.download::<ShardEventData>(&data.inputs[2]),
         )?;
         let marker_task = data.inputs.get(3).cloned();
@@ -51,6 +56,14 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             ShardEventData::GlobalMemory(_, _, _) => true,
             ShardEventData::PrecompileRemote(_, _, _) => true,
         };
+
+        // Extract precompile artifacts before moving input
+        let precompile_artifacts =
+            if let ShardEventData::PrecompileRemote(ref artifacts, _, _) = input {
+                Some(artifacts.clone())
+            } else {
+                None
+            };
 
         let (shard, deferred) = input.into_record(program_clone, self.clone()).await?;
 
@@ -154,7 +167,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         let permit = acquire_gpu!(self, gpu_time);
 
         // Generate commit and proof.
-        let CommonProveShardInput {
+        let CommonTaskInput {
             vk,
             mode,
             challenger,
@@ -218,7 +231,17 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                     log::error!("Core shard proof verification failed: {:?}", e);
                 }
             }
-            result
+            let mut expected_global_cumulative_sum = shard_proof_clone.global_cumulative_sum();
+            if shard_number == 1 {
+                expected_global_cumulative_sum = once(expected_global_cumulative_sum)
+                    .chain(once(vk_clone.initial_global_cumulative_sum))
+                    .sum();
+            }
+            log::info!(
+                "Expected cumulative sum from core: {:?}",
+                expected_global_cumulative_sum
+            );
+            result.map(|_| expected_global_cumulative_sum)
         });
 
         let maybe_reduce_proof = if mode != ProofMode::Core {
@@ -269,16 +292,24 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 let machine_proof = MachineProof {
                     shard_proofs: vec![shard_proof.clone()],
                 };
+                let pv: &RecursionPublicValues<BabyBear> =
+                    shard_proof.public_values.as_slice().borrow();
+                log::info!("Reduce proof shard pv: {:?}", pv);
                 let result = machine.verify(&vk, &machine_proof, &mut challenger);
                 match &result {
                     Ok(_) => {
                         log::debug!("Reduce leaf proof verification succeeded");
+                        let vkey_hash = vk.hash_babybear();
+                        if !prover_clone.recursion_vk_map.contains_key(&vkey_hash) {
+                            tracing::error!("vkey {:?} not found in map", vkey_hash);
+                            return Err(MachineVerificationError::InvalidVerificationKey);
+                        }
                     }
                     Err(e) => {
                         log::error!("Reduce leaf proof verification failed: {:?}", e);
                     }
                 }
-                result
+                result.map(|_| pv.global_cumulative_sum)
             }))
         } else {
             None
@@ -302,15 +333,22 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             result_upload.await?;
         }
 
-        verify_future
+        let expected_global_cumulative_sum = verify_future
             .await
             .unwrap()
             .map_err(|e| TaskError::Retryable(anyhow!("failed to verify shard proof: {}", e)))?;
 
         if let Some(verify_future) = reduce_verify_future {
-            verify_future.await.unwrap().map_err(|e| {
+            let final_sum = verify_future.await.unwrap().map_err(|e| {
                 TaskError::Retryable(anyhow!("failed to verify reduce proof: {}", e))
             })?;
+            if expected_global_cumulative_sum != final_sum {
+                return Err(TaskError::Retryable(anyhow!(
+                    "expected global cumulative sum {:?} != final sum {:?}",
+                    expected_global_cumulative_sum,
+                    final_sum
+                )));
+            }
         }
 
         // Clean up input shard since it's no longer needed
@@ -320,6 +358,19 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 sp1_cluster_artifact::ArtifactType::UnspecifiedArtifactType,
             )
             .await;
+
+        // Remove task reference for precompile artifacts only at successful completion
+        if let Some(artifacts) = precompile_artifacts {
+            for (artifact, start, end) in artifacts {
+                let _ = client
+                    .remove_ref(
+                        &artifact,
+                        ArtifactType::UnspecifiedArtifactType,
+                        &format!("{}_{}", start, end),
+                    )
+                    .await;
+            }
+        }
 
         Ok(TaskMetadata::new(
             gpu_time.load(std::sync::atomic::Ordering::Relaxed),

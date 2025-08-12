@@ -32,7 +32,7 @@ pub static ALLOCATOR: Jemalloc = Jemalloc;
 #[derive(Default)]
 struct WorkerService {
     /// A map of each subscriber ID to its unacknowledged messages and handler task handle.
-    subscribers: DashMap<String, SubscriberHandler>,
+    subscribers: Arc<DashMap<String, SubscriberHandler>>,
 
     /// The coordinator.
     coordinator: Arc<Coordinator<BalancedPolicy>>,
@@ -316,6 +316,7 @@ impl sp1_cluster_common::proto::worker_service_server::WorkerService for WorkerS
                     outer_rx,
                     tx,
                     sub.unacked.clone(),
+                    self.subscribers.clone(),
                 );
             } else {
                 let map = Arc::new(DashMap::new());
@@ -333,6 +334,7 @@ impl sp1_cluster_common::proto::worker_service_server::WorkerService for WorkerS
                     outer_rx,
                     tx,
                     map.clone(),
+                    self.subscribers.clone(),
                 );
 
                 self.subscribers
@@ -426,9 +428,11 @@ fn spawn_subscriber_channel_task(
     mut outer_rx: mpsc::UnboundedReceiver<ServerSubMessage>,
     tx: mpsc::UnboundedSender<Result<ServerSubMessage, Status>>,
     map: Arc<DashMap<String, (SystemTime, ServerSubMessage, u32)>>,
+    subscribers: Arc<DashMap<String, SubscriberHandler>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
+            let current_task_id = tokio::task::try_id();
             let mut interval = tokio::time::interval(Duration::from_secs(2));
             loop {
                 tokio::select! {
@@ -464,8 +468,15 @@ fn spawn_subscriber_channel_task(
                                 }
                                 true
                             });
-                            // If map is empty and outer_rx is closed, then we're done.
+                            // If map is empty and outer_rx is closed, then we're done. Remove the
+                            // subscriber.
                             if map.is_empty() && outer_rx.is_closed() && outer_rx.is_empty() {
+                                // Only remove if this task is still the active one for this subscriber
+                                if let Some(task_id) = current_task_id {
+                                    subscribers.remove_if(&sub_id, |_, subscriber| {
+                                        subscriber.sender_handle.id() == task_id
+                                    });
+                                }
                                 break;
                             }
                         });
