@@ -11,7 +11,7 @@ use tonic::Status;
 
 use crate::{estimate_duration, track_latency, Coordinator, CoordinatorState, Proof, Task, Worker};
 
-use super::AssignmentPolicy;
+use super::{AssignmentPolicy, TaskMetadata};
 
 /// Balanced policy with per-proof GPU task queues
 #[derive(Clone, Default)]
@@ -192,10 +192,8 @@ impl BalancedPolicy {
 impl AssignmentPolicy for BalancedPolicy {
     type ProofState = ();
     type TaskState = ();
-    type TaskInputMetadata = ();
-    type TaskResultMetadata = ();
-    type ProofResultMetadata = ();
     type WorkerState = ();
+    type ProofResultMetadata = ();
 
     fn create_proof_state(
         _state: &CoordinatorState<Self>,
@@ -224,7 +222,7 @@ impl AssignmentPolicy for BalancedPolicy {
     fn post_task_success_update_proof(
         _proof: &mut Proof<Self>,
         _task_extra: &Self::TaskState,
-        _metadata: Self::TaskResultMetadata,
+        _metadata: TaskMetadata,
     ) {
     }
 
@@ -261,12 +259,6 @@ impl AssignmentPolicy for BalancedPolicy {
         worker.next_free_time = 0;
         worker.weight = 0;
         worker
-    }
-
-    fn get_task_input_metadata(
-        _state: &CoordinatorState<Self>,
-        _task: &Task<Self>,
-    ) -> Self::TaskInputMetadata {
     }
 
     async fn assign_tasks(

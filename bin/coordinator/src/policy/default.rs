@@ -11,7 +11,7 @@ use tonic::Status;
 
 use crate::{estimate_duration, track_latency, Coordinator, CoordinatorState, Proof, Task, Worker};
 
-use super::AssignmentPolicy;
+use super::{AssignmentPolicy, TaskMetadata};
 
 #[derive(Clone, Default)]
 pub struct DefaultPolicy {
@@ -136,16 +136,9 @@ impl DefaultPolicy {
 #[async_trait::async_trait]
 impl AssignmentPolicy for DefaultPolicy {
     type ProofState = ();
-
     type TaskState = ();
-
-    type TaskInputMetadata = ();
-
-    type TaskResultMetadata = ();
-
-    type ProofResultMetadata = ();
-
     type WorkerState = ();
+    type ProofResultMetadata = ();
 
     fn create_proof_state(
         _state: &CoordinatorState<Self>,
@@ -166,7 +159,7 @@ impl AssignmentPolicy for DefaultPolicy {
     fn post_task_success_update_proof(
         _proof: &mut Proof<Self>,
         _task_extra: &Self::TaskState,
-        _metadata: Self::TaskResultMetadata,
+        _metadata: TaskMetadata,
     ) {
     }
 
@@ -193,12 +186,6 @@ impl AssignmentPolicy for DefaultPolicy {
         worker.next_free_time = 0;
         worker.weight = 0;
         worker
-    }
-
-    fn get_task_input_metadata(
-        _state: &CoordinatorState<Self>,
-        _task: &Task<Self>,
-    ) -> Self::TaskInputMetadata {
     }
 
     async fn assign_tasks(

@@ -3,12 +3,14 @@ pub mod config;
 pub mod latency;
 pub mod metrics;
 pub mod policy;
+pub mod server;
 pub mod util;
 
 use dashmap::DashMap;
 use eyre::Result;
 use mti::prelude::{MagicTypeIdExt, V7};
-use policy::AssignmentPolicy;
+pub use policy::AssignmentPolicy;
+
 use sp1_cluster_common::consts::CONTROLLER_WEIGHT;
 use sp1_cluster_common::proto::{self};
 use sp1_cluster_common::proto::{
@@ -32,7 +34,7 @@ pub const COORDINATOR_PERIODIC_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Estimate the duration of a task based on its type. Used as a heuristic when assigning tasks to
 /// workers.
-fn estimate_duration(task_type: TaskType) -> u128 {
+pub fn estimate_duration(task_type: TaskType) -> u128 {
     match task_type {
         TaskType::Controller => 200,
         TaskType::PlonkWrap => 8000,
@@ -63,6 +65,15 @@ const WORKER_HEARTBEAT_TIMEOUT: u64 = 30;
 
 /// The default weight of a GPU instance
 pub const DEFAULT_GPU_INSTANCE_WEIGHT: u32 = 24;
+
+/// Parse a requester string by stripping "0x" prefix if present and converting to lowercase
+pub fn parse_requester(requester: String) -> String {
+    let requester = requester.to_lowercase();
+    requester
+        .strip_prefix("0x")
+        .unwrap_or(&requester)
+        .to_string()
+}
 
 /// A subscriber that is waiting for tasks to complete.
 pub struct Subscriber {
@@ -363,7 +374,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
     }
 
     /// Place a task in the queue.
-    async fn enqueue_task(self: &Arc<Self>, state: &mut CoordinatorState<P>, task: Task<P>) {
+    pub async fn enqueue_task(self: &Arc<Self>, state: &mut CoordinatorState<P>, task: Task<P>) {
         P::enqueue_task(state, task)
     }
 
@@ -430,7 +441,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         worker_id: String,
         proof_id: String,
         task_id: String,
-        metadata: P::TaskResultMetadata,
+        metadata: policy::TaskMetadata,
     ) -> Result<(), Status> {
         let mut state = self
             .state
@@ -937,7 +948,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
     }
 
     /// Internal function to get a task.
-    fn get_task_internal(
+    pub fn get_task_internal(
         &self,
         state: &CoordinatorState<P>,
         proof_id: &str,
@@ -1178,7 +1189,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
     }
 
     /// Send a task to a worker.
-    fn send_task(self: &Arc<Self>, task: &Task<P>, worker: &Worker<P>, metadata: &str) {
+    pub fn send_task(self: &Arc<Self>, task: &Task<P>, worker: &Worker<P>, metadata: &str) {
         let msg = ServerMessage {
             message: Some(server_message::Message::NewTask(WorkerTask {
                 task_id: task.id.clone(),

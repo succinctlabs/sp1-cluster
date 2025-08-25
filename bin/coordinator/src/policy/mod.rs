@@ -3,12 +3,25 @@ pub mod default;
 
 use std::{fmt::Debug, sync::Arc};
 
-use serde::{de::DeserializeOwned, Serialize};
 use sp1_cluster_common::proto::{self, TaskType};
 use tokio::sync::OwnedRwLockWriteGuard;
 use tonic::Status;
 
 use crate::{Coordinator, CoordinatorState, Proof, Task, Worker};
+
+// Concrete metadata types that all policies use
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskMetadata {
+    pub gpu_ms: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProofMetadata {
+    pub reserved_gpu_ms: u64,
+    pub on_demand_gpu_ms: u64,
+}
 
 #[async_trait::async_trait]
 pub trait AssignmentPolicy: Sized + Clone + Default + Send + Sync + 'static {
@@ -20,12 +33,6 @@ pub trait AssignmentPolicy: Sized + Clone + Default + Send + Sync + 'static {
 
     /// Extra state tracked for a worker.
     type WorkerState: Clone + Default + Send + Sync + Debug + 'static;
-
-    /// Metadata to be sent to the worker for a task.
-    type TaskInputMetadata: Clone + Default + Serialize + DeserializeOwned + Send + Sync + 'static;
-
-    /// Metadata to be returned by the worker when a task completes.
-    type TaskResultMetadata: Clone + Default + Serialize + DeserializeOwned + Send + Sync + 'static;
 
     /// Metadata to be sent to the API when a proof completes.
     type ProofResultMetadata: Clone + Default + Serialize + DeserializeOwned + Send + Sync + 'static;
@@ -43,7 +50,7 @@ pub trait AssignmentPolicy: Sized + Clone + Default + Send + Sync + 'static {
     fn post_task_success_update_proof(
         proof: &mut Proof<Self>,
         task_extra: &Self::TaskState,
-        metadata: Self::TaskResultMetadata,
+        metadata: TaskMetadata,
     );
 
     /// Update global state after a task has completed successfully.
@@ -65,11 +72,10 @@ pub trait AssignmentPolicy: Sized + Clone + Default + Send + Sync + 'static {
     /// Update worker state after it has no more tasks.
     fn post_worker_empty(state: &mut CoordinatorState<Self>, worker: Worker<Self>) -> Worker<Self>;
 
-    /// Get metadata for a task to be sent to the worker.
-    fn get_task_input_metadata(
-        state: &CoordinatorState<Self>,
-        task: &Task<Self>,
-    ) -> Self::TaskInputMetadata;
+    /// Get metadata for a task to be sent to the worker (optional - returns empty string by default).
+    fn get_task_input_metadata(_state: &CoordinatorState<Self>, _task: &Task<Self>) -> String {
+        String::new()
+    }
 
     /// Assign tasks to workers.
     async fn assign_tasks(

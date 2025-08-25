@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use spn_metrics::{
-    metrics::{self, Counter, Gauge},
+    metrics::{self},
     server::{MetricServer, MetricServerConfig},
     version::VersionInfo,
     Metrics,
@@ -15,43 +15,7 @@ use crate::BUILD_VERSION;
 /// Coordinator metrics
 #[derive(Clone, Metrics)]
 #[metrics(scope = "cluster_coordinator")]
-pub struct CoordinatorMetrics {
-    /// Active pending or running GPU task count.
-    pub active_gpu_task_count: Gauge,
-
-    /// Active pending or running GPU task weight.
-    pub active_gpu_task_weight: Gauge,
-
-    /// Desired GPU count.
-    pub desired_gpus: Gauge,
-
-    /// New desired GPU count.
-    pub new_desired_gpus: Gauge,
-
-    /// Actual GPU count.
-    pub actual_gpus: Gauge,
-
-    /// Pending GPU task duration.
-    pub pending_gpu_duration: Gauge,
-
-    /// Active pending or running CPU task count.
-    pub active_cpu_task_count: Gauge,
-
-    /// Active pending or running CPU task weight.
-    pub active_cpu_task_weight: Gauge,
-
-    /// Desired CPU count.
-    pub desired_cpus: Gauge,
-
-    /// New desired CPU count.
-    pub new_desired_cpus: Gauge,
-
-    /// Actual CPU count.
-    pub actual_cpus: Gauge,
-
-    /// Preemptions count.
-    pub preempted_tasks: Counter,
-}
+pub struct CoordinatorMetrics {}
 
 impl CoordinatorMetrics {
     /// Create a new instance of CoordinatorMetrics
