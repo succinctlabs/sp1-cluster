@@ -77,6 +77,7 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                                 .unwrap()
                                 .as_secs(),
                         ),
+                        limit: Some(1000),
                         ..Default::default()
                     })
                     .await
