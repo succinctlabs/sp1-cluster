@@ -16,6 +16,7 @@ This page walks through how to set up and run the SP1 Cluster locally. While Doc
 To get started with local development, ensure you have the following installed:
 
 - [Rust](https://www.rust-lang.org/tools/install)
+- [protobuf compiler](https://protobuf.dev/installation/)
 - [CUDA](https://developer.nvidia.com/cuda-downloads) ≥ 12.5.1
 
 If using Docker Compose:
