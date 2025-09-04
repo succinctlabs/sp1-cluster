@@ -54,7 +54,7 @@ services:
       - api
 
   # CPU Node
-  cpu:
+  cpu-node:
     image: ghcr.io/succinctlabs/cluster:base-v1.0.1
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
@@ -121,7 +121,7 @@ services:
     depends_on:
       - coordinator
       - redis
-      - cpu
+      - cpu-node
     # GPU support - uncomment if you have NVIDIA GPU support configured with docker
     runtime: nvidia
 

@@ -4,10 +4,6 @@ on:
     paths-ignore:
       - "docs/**"
       - "migrations/**"
-  pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "migrations/**"
 
 env:
   ECR_REPOSITORY: 421253708207.dkr.ecr.us-east-1.amazonaws.com/sp1-cluster
