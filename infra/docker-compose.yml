@@ -4,6 +4,7 @@ services:
     image: bitnami/redis:latest
     environment:
       - REDIS_PASSWORD=redispassword
+      - REDIS_AOF_ENABLED=no
     volumes:
       - redis_data:/bitnami/redis/data
     # ports:
