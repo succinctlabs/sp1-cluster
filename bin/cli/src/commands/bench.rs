@@ -13,29 +13,29 @@ use sp1_sdk::{network::proto::types::ProofMode, SP1Stdin};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Args)]
-pub(crate) struct CommonArgs {
+pub struct CommonArgs {
     /// The cluster API gRPC endpoint.
     #[arg(long, env = "CLI_CLUSTER_RPC")]
-    pub(crate) cluster_rpc: String,
+    pub cluster_rpc: String,
 
     /// Whether to execute the proof request before submitting it to the cluster.
     #[arg(long, default_value_t = false)]
-    pub(crate) execute: bool,
+    pub execute: bool,
 
     /// The S3 bucket the cluster artifact store is using.
     #[arg(long, env = "CLI_S3_BUCKET")]
-    pub(crate) s3_bucket: Option<String>,
+    pub s3_bucket: Option<String>,
 
     /// The S3 region the cluster artifact store is using.
     #[arg(long, env = "CLI_S3_REGION")]
-    pub(crate) s3_region: Option<String>,
+    pub s3_region: Option<String>,
 
     /// The Redis nodes the cluster artifact store is using. If not specified, the artifact store will be S3.
     #[arg(long, env = "CLI_REDIS_NODES")]
-    pub(crate) redis_nodes: Option<String>,
+    pub redis_nodes: Option<String>,
 
     #[arg(short, long, default_value="compressed", value_parser = parse_proof_mode)]
-    pub(crate) mode: ProofMode,
+    pub mode: ProofMode,
 }
 
 fn parse_proof_mode(s: &str) -> Result<ProofMode> {
@@ -44,7 +44,7 @@ fn parse_proof_mode(s: &str) -> Result<ProofMode> {
 }
 
 #[derive(Subcommand, Debug)]
-pub(crate) enum BenchCommand {
+pub enum BenchCommand {
     Fibonacci {
         /// Number of cycles in millions to run the benchmark for.
         #[clap(default_value_t = 5)]
