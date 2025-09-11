@@ -529,10 +529,10 @@ impl WorkerService for WorkerServiceClient {
                         }
                         Ok(_) = closed_rx.changed() => {
                             if tasks_set.lock().await.is_empty() {
-                                tracing::info!("Sub {} closed, shutting down subscription reader", sub_id);
+                                tracing::debug!("Sub {} closed, shutting down subscription reader", sub_id);
                                 break;
                             }
-                            tracing::info!("Sub {} closed but tasks remain, continuing...", sub_id);
+                            tracing::debug!("Sub {} closed but tasks remain, continuing...", sub_id);
                         }
                         _ = interval.tick() => {
                             if last_heartbeat.elapsed().unwrap_or_default() > Duration::from_secs(10) {

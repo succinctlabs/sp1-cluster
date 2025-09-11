@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Instant};
+use std::{collections::HashSet, path::PathBuf, time::Instant};
 
 use clap::{Args, Subcommand};
 use eyre::Result;
@@ -36,6 +36,9 @@ pub struct CommonArgs {
 
     #[arg(short, long, default_value="compressed", value_parser = parse_proof_mode)]
     pub mode: ProofMode,
+
+    #[arg(short, long, default_value_t = 1)]
+    pub count: u32,
 }
 
 fn parse_proof_mode(s: &str) -> Result<ProofMode> {
@@ -66,7 +69,8 @@ impl BenchCommand {
         match self {
             BenchCommand::Fibonacci { mcycles, common } => {
                 tracing::info!(
-                    "Running Fibonacci {:?} for {} million cycles...",
+                    "Running {}x Fibonacci {:?} for {} million cycles...",
+                    common.count,
                     common.mode,
                     mcycles
                 );
@@ -109,7 +113,7 @@ impl BenchCommand {
     ) -> Result<()> {
         let client = ClusterServiceClient::new(common.cluster_rpc.clone()).await?;
 
-        let (elf_id, stdin_id, proof_output_id) = if let Some(redis_nodes) = &common.redis_nodes {
+        let (elf_id, stdin_id, proof_output_ids) = if let Some(redis_nodes) = &common.redis_nodes {
             tracing::info!("using redis artifact store");
             let artifact_client = RedisArtifactClient::new(
                 redis_nodes
@@ -119,7 +123,7 @@ impl BenchCommand {
                     .collect(),
                 16,
             );
-            Self::upload(artifact_client, elf, stdin).await?
+            Self::setup_artifacts(artifact_client, elf, stdin, common.count).await?
         } else {
             if common.s3_bucket.is_none() || common.s3_region.is_none() {
                 return Err(eyre::eyre!(
@@ -133,34 +137,37 @@ impl BenchCommand {
                 32,
             )
             .await;
-            Self::upload(artifact_client, elf, stdin).await?
+            Self::setup_artifacts(artifact_client, elf, stdin, common.count).await?
         };
 
-        let proof_id = format!(
+        let base_id = format!(
             "cli_{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis()
         );
-        tracing::info!("proof_id: {}", proof_id);
+        tracing::info!("base_id: {}", base_id);
         // Worst case timeout is 4 hours.
         let deadline = SystemTime::now() + Duration::from_secs(4 * 60 * 60);
-        client
-            .create_proof_request(sp1_cluster_common::proto::ProofRequestCreateRequest {
-                proof_id: proof_id.clone(),
-                program_artifact_id: elf_id,
-                stdin_artifact_id: stdin_id,
-                options_artifact_id: Some((common.mode as i32).to_string()),
-                proof_artifact_id: Some(proof_output_id),
-                requester: vec![],
-                deadline: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs(),
-                cycle_limit: 0,
-                gas_limit: 0,
-            })
-            .await?;
+        for i in 0..common.count {
+            client
+                .create_proof_request(sp1_cluster_common::proto::ProofRequestCreateRequest {
+                    proof_id: format!("{}_{}", base_id, i),
+                    program_artifact_id: elf_id.clone(),
+                    stdin_artifact_id: stdin_id.clone(),
+                    options_artifact_id: Some((common.mode as i32).to_string()),
+                    proof_artifact_id: Some(proof_output_ids[i as usize].clone()),
+                    requester: vec![],
+                    deadline: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs(),
+                    cycle_limit: 0,
+                    gas_limit: 0,
+                })
+                .await?;
+        }
         let start_time = Instant::now();
         // Poll until the proof request is completed.
+        let mut completed = HashSet::new();
         loop {
             if deadline < SystemTime::now() {
                 return Err(eyre::eyre!(
@@ -169,49 +176,61 @@ impl BenchCommand {
                 ));
             }
 
-            let resp = client
-                .get_proof_request(proto::ProofRequestGetRequest {
-                    proof_id: proof_id.clone(),
-                })
-                .await?;
-            let Some(proof_request) = resp else {
-                return Err(eyre::eyre!(
-                    "Proof request not found after {:?}",
-                    start_time.elapsed()
-                ));
-            };
-            match proof_request.proof_status() {
-                ProofRequestStatus::Completed => {
-                    tracing::info!("Proof request completed after {:?}", start_time.elapsed());
-                    if let Some(cycles_estimate) = cycles_estimate {
-                        tracing::info!(
-                            "Aggregate MHz: {:.2}",
-                            cycles_estimate as f64
-                                / start_time.elapsed().as_secs_f64()
-                                / 1_000_000.0
-                        );
-                    }
-                    break;
+            for i in 0..common.count {
+                if completed.contains(&i) {
+                    continue;
                 }
-                ProofRequestStatus::Failed | ProofRequestStatus::Cancelled => {
+                let resp = client
+                    .get_proof_request(proto::ProofRequestGetRequest {
+                        proof_id: format!("{}_{}", base_id, i),
+                    })
+                    .await?;
+                let Some(proof_request) = resp else {
                     return Err(eyre::eyre!(
-                        "Proof request {:?} after {:?}",
-                        proof_request.proof_status(),
+                        "Proof request {} not found after {:?}",
+                        i,
                         start_time.elapsed()
                     ));
+                };
+                match proof_request.proof_status() {
+                    ProofRequestStatus::Completed => {
+                        completed.insert(i);
+                    }
+                    ProofRequestStatus::Failed | ProofRequestStatus::Cancelled => {
+                        return Err(eyre::eyre!(
+                            "Proof request {:?} after {:?}",
+                            proof_request.proof_status(),
+                            start_time.elapsed()
+                        ));
+                    }
+                    _ => {}
                 }
-                _ => {}
+            }
+            if completed.len() == common.count as usize {
+                break;
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        tracing::info!("Completed after {:?}", start_time.elapsed());
+        if let Some(cycles_estimate) = cycles_estimate {
+            tracing::info!(
+                "Total Cycles: {:.2} | Aggregate MHz: {:.2}",
+                cycles_estimate * common.count as u64,
+                cycles_estimate as f64 * common.count as f64
+                    / start_time.elapsed().as_secs_f64()
+                    / 1_000_000.0
+            );
         }
         Ok(())
     }
 
-    async fn upload<A: ArtifactClient>(
+    async fn setup_artifacts<A: ArtifactClient>(
         artifact_client: A,
         elf: Vec<u8>,
         stdin: Vec<u8>,
-    ) -> Result<(String, String, String)> {
+        count: u32,
+    ) -> Result<(String, String, Vec<String>)> {
         let elf_id = artifact_client.create_artifact().unwrap();
         artifact_client
             .upload_with_type(&elf_id, ArtifactType::Program, elf)
@@ -222,10 +241,9 @@ impl BenchCommand {
             .upload_raw(&stdin_id, ArtifactType::Stdin, stdin)
             .await
             .map_err(|e| eyre::eyre!(e))?;
-        Ok((
-            elf_id.to_id(),
-            stdin_id.to_id(),
-            artifact_client.create_artifact().unwrap().to_id(),
-        ))
+        let proof_output_ids = (0..count)
+            .map(|_| artifact_client.create_artifact().unwrap().to_id())
+            .collect();
+        Ok((elf_id.to_id(), stdin_id.to_id(), proof_output_ids))
     }
 }

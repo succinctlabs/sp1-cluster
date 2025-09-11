@@ -24,7 +24,7 @@
     "editable": true,
     "fiscalYearStartMonth": 0,
     "graphTooltip": 1,
-    "id": 43,
+    "id": 0,
     "links": [],
     "panels": [
         {
@@ -78,7 +78,7 @@
                 "textMode": "auto",
                 "wideLayout": true
             },
-            "pluginVersion": "12.1.0-89438",
+            "pluginVersion": "12.2.0-17245430286.patch2",
             "targets": [
                 {
                     "datasource": {
@@ -148,7 +148,7 @@
                 "textMode": "auto",
                 "wideLayout": true
             },
-            "pluginVersion": "12.1.0-89438",
+            "pluginVersion": "12.2.0-17245430286.patch2",
             "targets": [
                 {
                     "datasource": {
@@ -218,7 +218,7 @@
                 "textMode": "auto",
                 "wideLayout": true
             },
-            "pluginVersion": "12.1.0-89438",
+            "pluginVersion": "12.2.0-17245430286.patch2",
             "targets": [
                 {
                     "datasource": {
@@ -253,19 +253,32 @@
                         "axisColorMode": "text",
                         "axisLabel": "",
                         "axisPlacement": "auto",
-                        "fillOpacity": 80,
+                        "barAlignment": 0,
+                        "barWidthFactor": 0.8,
+                        "drawStyle": "bars",
+                        "fillOpacity": 100,
                         "gradientMode": "none",
                         "hideFrom": {
                             "legend": false,
                             "tooltip": false,
                             "viz": false
                         },
-                        "lineWidth": 1,
+                        "insertNulls": false,
+                        "lineInterpolation": "linear",
+                        "lineWidth": 0,
+                        "pointSize": 5,
                         "scaleDistribution": {
                             "type": "linear"
                         },
+                        "showPoints": "auto",
+                        "showValues": false,
+                        "spanNulls": false,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
                         "thresholdsStyle": {
-                            "mode": "line"
+                            "mode": "off"
                         }
                     },
                     "mappings": [],
@@ -289,32 +302,19 @@
             },
             "id": 5,
             "options": {
-                "barRadius": 0,
-                "barWidth": 0.97,
-                "fullHighlight": false,
-                "groupWidth": 0.7,
                 "legend": {
                     "calcs": [],
                     "displayMode": "list",
                     "placement": "bottom",
                     "showLegend": true
                 },
-                "orientation": "auto",
-                "showValue": "always",
-                "stacking": "none",
-                "text": {
-                    "valueSize": 8
-                },
                 "tooltip": {
                     "hideZeros": false,
                     "mode": "single",
                     "sort": "none"
-                },
-                "xField": "Time",
-                "xTickLabelRotation": 0,
-                "xTickLabelSpacing": 100
+                }
             },
-            "pluginVersion": "12.1.0-89438",
+            "pluginVersion": "12.2.0-17245430286.patch2",
             "targets": [
                 {
                     "datasource": {
@@ -331,7 +331,7 @@
                 }
             ],
             "title": "Proofs Completed",
-            "type": "barchart"
+            "type": "timeseries"
         },
         {
             "datasource": {
@@ -368,6 +368,7 @@
                             "type": "linear"
                         },
                         "showPoints": "auto",
+                        "showValues": false,
                         "spanNulls": false,
                         "stacking": {
                             "group": "A",
@@ -463,7 +464,7 @@
                     "sort": "none"
                 }
             },
-            "pluginVersion": "12.1.0-89438",
+            "pluginVersion": "12.2.0-17245430286.patch2",
             "targets": [
                 {
                     "datasource": {
@@ -530,6 +531,7 @@
                             "type": "linear"
                         },
                         "showPoints": "auto",
+                        "showValues": false,
                         "spanNulls": false,
                         "stacking": {
                             "group": "A",
@@ -577,7 +579,7 @@
                     "sort": "none"
                 }
             },
-            "pluginVersion": "12.1.0-89438",
+            "pluginVersion": "12.2.0-17245430286.patch2",
             "targets": [
                 {
                     "datasource": {
@@ -661,6 +663,7 @@
                             "type": "linear"
                         },
                         "showPoints": "auto",
+                        "showValues": false,
                         "spanNulls": false,
                         "stacking": {
                             "group": "A",
@@ -707,7 +710,7 @@
                     "sort": "none"
                 }
             },
-            "pluginVersion": "12.1.0-89438",
+            "pluginVersion": "12.2.0-17245430286.patch2",
             "targets": [
                 {
                     "datasource": {
@@ -723,6 +726,105 @@
                 }
             ],
             "title": "Total Running Tasks",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "prometheus",
+                "uid": "grafanacloud-prom"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisBorderShow": false,
+                        "axisCenteredZero": false,
+                        "axisColorMode": "text",
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "barWidthFactor": 0.6,
+                        "drawStyle": "line",
+                        "fillOpacity": 0,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "insertNulls": false,
+                        "lineInterpolation": "linear",
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "auto",
+                        "showValues": false,
+                        "spanNulls": false,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": 0
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 16
+            },
+            "id": 8,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "hideZeros": false,
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "12.2.0-17245430286.patch2",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "prometheus",
+                        "uid": "grafanacloud-prom"
+                    },
+                    "editorMode": "code",
+                    "expr": "avg(spn_cluster_worker_task_processing_duration_ms{environment=~\"${environment:regex}\", cluster_arn=~\".*${cluster:regex}\", task_type!=\"SP1_CONTROLLER\"}) by (task_type)",
+                    "instant": false,
+                    "legendFormat": "__auto",
+                    "range": true,
+                    "refId": "A"
+                }
+            ],
+            "title": "Average Task Duration",
             "type": "timeseries"
         }
     ],
@@ -759,12 +861,8 @@
             },
             {
                 "current": {
-                    "text": [
-                        "my-k8s-cluster"
-                    ],
-                    "value": [
-                        "my-k8s-cluster"
-                    ]
+                    "text": "All",
+                    "value": "$__all"
                 },
                 "datasource": {
                     "type": "prometheus",
@@ -819,5 +917,5 @@
     "timezone": "browser",
     "title": "SP1 Cluster Dashboard",
     "uid": "ch44ftf",
-    "version": 10
+    "version": 14
 }

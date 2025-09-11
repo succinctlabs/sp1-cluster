@@ -1212,7 +1212,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 if sub.last_update.elapsed().unwrap_or_default()
                     > COORDINATOR_PERIODIC_INTERVAL.mul_f32(2.0)
                 {
-                    tracing::warn!("subscriber {} timed out", sub_id);
+                    tracing::debug!("subscriber {} timed out", sub_id);
                     false
                 } else {
                     if sub
@@ -1225,7 +1225,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                         })
                         .is_err()
                     {
-                        tracing::error!("Failed to send heartbeat to subscriber {}", sub_id);
+                        tracing::debug!("Subscriber {} is closed", sub_id);
                     }
                     true
                 }

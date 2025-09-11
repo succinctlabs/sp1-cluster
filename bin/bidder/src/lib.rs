@@ -25,8 +25,7 @@ pub mod metrics;
 /// network.
 const REFRESH_INTERVAL_SEC: u64 = 3;
 
-/// Safety buffer in seconds to account for network delays and processing overhead
-const BUFFER_SEC: u64 = 30;
+// Per-instance configurable safety buffers are provided via Settings
 
 /// The maximum number of requests to handle in a single refresh loop.
 const REQUEST_LIMIT: u32 = 100;
@@ -44,6 +43,16 @@ pub struct Bidder {
     max_concurrent_proofs: u32,
     /// Token bid amount per PGU in wei
     bid_amount: U256,
+    /// Base safety buffer in seconds applied to all proofs
+    buffer_sec: u64,
+    /// Additional buffer for Groth16 proofs in seconds
+    groth16_buffer_sec: u64,
+    /// Additional buffer for Plonk proofs in seconds
+    plonk_buffer_sec: u64,
+    /// Whether to bid on Groth16 proofs
+    groth16_enabled: bool,
+    /// Whether to bid on Plonk proofs
+    plonk_enabled: bool,
 }
 
 impl Bidder {
@@ -57,6 +66,11 @@ impl Bidder {
         throughput_mgas: f64,
         max_concurrent_proofs: u32,
         bid_amount: U256,
+        buffer_sec: u64,
+        groth16_buffer_sec: u64,
+        plonk_buffer_sec: u64,
+        groth16_enabled: bool,
+        plonk_enabled: bool,
     ) -> Self {
         Self {
             network,
@@ -67,6 +81,11 @@ impl Bidder {
             throughput_mgas,
             max_concurrent_proofs,
             bid_amount,
+            buffer_sec,
+            groth16_buffer_sec,
+            plonk_buffer_sec,
+            groth16_enabled,
+            plonk_enabled,
         }
     }
 
@@ -78,21 +97,27 @@ impl Bidder {
         deadline_secs: u64,
         mode: ProofMode,
     ) -> bool {
+        // If the proof mode is disabled, we cannot fulfill it
+        match mode {
+            ProofMode::Groth16 if !self.groth16_enabled => return false,
+            ProofMode::Plonk if !self.plonk_enabled => return false,
+            _ => {}
+        }
         // Calculate effective throughput per proof when at max capacity
         let effective_throughput = self.throughput_mgas / self.max_concurrent_proofs as f64;
 
         // Calculate time needed to complete this proof (in seconds)
         let completion_time_secs = (gas_limit as f64 / 1_000_000.0) / effective_throughput;
 
-        // Add buffer for safety
-        let mut total_time_needed = completion_time_secs + BUFFER_SEC as f64;
+        // Add buffers for safety
+        let mut total_time_needed = completion_time_secs + self.buffer_sec as f64;
 
         match mode {
             ProofMode::Groth16 => {
-                total_time_needed += 30.0;
+                total_time_needed += self.groth16_buffer_sec as f64;
             }
             ProofMode::Plonk => {
-                total_time_needed += 80.0;
+                total_time_needed += self.plonk_buffer_sec as f64;
             }
             _ => {}
         }

@@ -82,7 +82,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
     ) -> Result<ExecutionRecord<Val<InnerSC>>, SP1RecursionProverError> {
         let witness_stream = tracing::info_span!("Get witness stream").in_scope(|| match input {
             SP1CircuitWitness::Core(input) => {
-                println!("core shape: {:?}", input.shape().proof_shapes);
+                tracing::debug!("core shape: {:?}", input.shape().proof_shapes);
                 let mut witness_stream = Vec::new();
                 Witnessable::<InnerConfig>::write(&input, &mut witness_stream);
                 witness_stream
@@ -102,7 +102,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
 
         // Execute the runtime
         let record = tracing::info_span!("execute runtime").in_scope(|| {
-            println!("recursion program shape: {:?}", program.shape);
+            tracing::debug!("recursion program shape: {:?}", program.shape);
             let mut runtime = RecursionRuntime::<Val<InnerSC>, Challenge<InnerSC>, _>::new(
                 program,
                 self.prover.compress_prover.config().perm.clone(),
@@ -429,13 +429,13 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 },
                 &mut challenger,
             ) {
-                println!("failed to verify deferred batch result: {}", err);
+                tracing::error!("failed to verify deferred batch result: {}", err);
                 Err(TaskError::Retryable(anyhow!(
                     "failed to verify deferred batch result: {}",
                     err
                 )))
             } else {
-                println!("deferred batch result verified");
+                tracing::debug!("deferred batch result verified");
                 Ok(())
             }
         })
@@ -564,13 +564,13 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 },
                 &mut challenger,
             ) {
-                println!("failed to verify reduce batch result: {}", err);
+                tracing::error!("failed to verify reduce batch result: {}", err);
                 Err(TaskError::Retryable(anyhow!(
                     "failed to verify reduce batch result: {}",
                     err
                 )))
             } else {
-                println!("reduce batch result verified");
+                tracing::debug!("reduce batch result verified");
                 let vkey_hash = reduce_proof_clone.vk.hash_babybear();
                 if !prover_clone.recursion_vk_map.contains_key(&vkey_hash) {
                     tracing::error!("vkey {:?} not found in map", vkey_hash);

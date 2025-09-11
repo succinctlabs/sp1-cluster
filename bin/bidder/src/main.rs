@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
     let (ready_tx, ready_rx) = oneshot::channel();
 
     let metrics_server_config =
-        MetricServerConfig::new(metrics_addr, version_info, "spn-fulfiller".to_string())
+        MetricServerConfig::new(metrics_addr, version_info, "spn-bidder".to_string())
             .with_ready_signal(ready_tx);
     let metrics_server = MetricServer::new(metrics_server_config);
 
@@ -84,6 +84,11 @@ async fn main() -> Result<()> {
         settings.throughput_mgas,
         settings.max_concurrent_proofs,
         settings.bid_amount,
+        settings.buffer_sec,
+        settings.groth16_buffer_sec,
+        settings.plonk_buffer_sec,
+        settings.groth16_enabled,
+        settings.plonk_enabled,
     );
 
     // Spawn the bidder task.
