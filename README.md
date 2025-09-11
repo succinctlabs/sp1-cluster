@@ -4,7 +4,7 @@
 
 [![Docker CI][docker-badge]][docker-url] [![Lint CI][lint-badge]][lint-url] [![Telegram Chat][tg-badge]][tg-url]
 
-High performance distributed task cluster for generating SP1 proofs.
+The official multi-GPU proving service implementation for SP1, designed for the cloud and bare metal deployment.
 
 [docker-badge]: https://img.shields.io/github/actions/workflow/status/succinctlabs/sp1-cluster/docker.yml?branch=main
 [docker-url]: https://github.com/succinctlabs/sp1-cluster/actions/workflows/docker.yml
