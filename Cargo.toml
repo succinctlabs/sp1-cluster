@@ -107,7 +107,7 @@ vergen-git2 = { version = "1.0.1", default-features = false, features = [
 zstd = "0.13.3"
 
 [workspace.metadata.cargo-shear]
-ignored = ["prost"]
+ignored = ["prost", "serde"]
 
 [profile.release]
 debug = true
