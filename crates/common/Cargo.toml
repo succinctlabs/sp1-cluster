@@ -8,6 +8,7 @@ categories.workspace = true
 
 [dependencies]
 backoff = { workspace = true, features = ["futures", "tokio"] }
+serde.workspace = true
 eyre.workspace = true
 futures.workspace = true
 if-addrs.workspace = true
