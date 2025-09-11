@@ -23,18 +23,18 @@ p3-field = "=0.2.3-succinct"
 p3-matrix = "=0.2.3-succinct"
 
 # Moongate
-moongate-core = { git = "https://github.com/succinctlabs/moongate", branch = "cluster" }
-moongate-prover = { git = "https://github.com/succinctlabs/moongate", branch = "cluster" }
+moongate-core = { git = "https://github.com/succinctlabs/moongate", branch = "dev" }
+moongate-prover = { git = "https://github.com/succinctlabs/moongate", branch = "dev" }
 
 # SP1
-sp1-core-executor = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
-sp1-core-machine = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev", features = ["bigint-rug"] }
-sp1-prover = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
-sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
-sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
-sp1-recursion-core = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
-sp1-sdk = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
-sp1-stark = { git = "https://github.com/succinctlabs/sp1.git", branch = "dev" }
+sp1-core-executor = { version = "5.2.1" }
+sp1-core-machine = { version = "5.2.1", features = ["bigint-rug"] }
+sp1-prover = { version = "5.2.1" }
+sp1-recursion-circuit = { version = "5.2.1" }
+sp1-recursion-compiler = { version = "5.2.1" }
+sp1-recursion-core = { version = "5.2.1" }
+sp1-sdk = { version = "5.2.1" }
+sp1-stark = { version = "5.2.1" }
 spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }

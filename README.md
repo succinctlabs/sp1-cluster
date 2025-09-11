@@ -27,7 +27,7 @@ This project implements a high performance SP1 proving cluster that can scale to
 - **Bidder**: Service that bids on proofs from the SP1 Prover Network
 - **Artifact Store**: Redis or S3 store used for storing ephemeral proving data
 
-For detailed information on the architecture and deployment instructions, see the [docs](https://cluster-docs.succinct.xyz).
+For detailed information on the architecture and deployment instructions, see the [docs](https://docs.succinct.xyz/docs/provers/introduction).
 
 ## Development
 
