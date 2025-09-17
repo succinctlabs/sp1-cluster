@@ -6,7 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .protoc_arg("--experimental_allow_proto3_optional")
         .compile_protos(
             &["../../proto/worker.proto", "../../proto/cluster.proto"],
-            &["../../proto/"],
+            &["../../proto/", "/usr/include"],
         )?;
 
     println!("cargo:rerun-if-env-changed=BUILD_GIT_SHA");
