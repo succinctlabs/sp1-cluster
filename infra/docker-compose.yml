@@ -1,7 +1,7 @@
 services:
   # Redis service
   redis:
-    image: bitnami/redis:latest
+    image: bitnamisecure/redis:latest
     environment:
       - REDIS_PASSWORD=redispassword
       - REDIS_AOF_ENABLED=no
@@ -18,7 +18,7 @@ services:
 
   # PostgreSQL database
   postgresql:
-    image: bitnami/postgresql:latest
+    image: bitnamisecure/postgresql:latest
     environment:
       - POSTGRES_PASSWORD=postgrespassword
       - POSTGRES_USER=postgres

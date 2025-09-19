@@ -104,7 +104,8 @@ FROM --platform=linux/amd64 debian:bookworm-slim@sha256:364d3f277f79b11fafee2f44
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
-    && apt-get clean && \
+    wget && \
+    apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
