@@ -98,4 +98,10 @@ pub trait AssignmentPolicy: Sized + Clone + Default + Send + Sync + 'static {
         // Default implementation does nothing
         let _ = (state, proof_id);
     }
+
+    /// Called periodically to print the current state of the coordinator.
+    fn debug_state(state: &CoordinatorState<Self>) {
+        // Default implementation does nothing extra.
+        let _ = state;
+    }
 }

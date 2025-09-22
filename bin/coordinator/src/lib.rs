@@ -1470,6 +1470,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 task_info
             );
         }
+        P::debug_state(&state);
     }
 
     /// Cancel expired proofs.
