@@ -83,14 +83,20 @@ impl S3ArtifactClient {
             ArtifactType::Program => "programs",
             ArtifactType::Stdin => "stdins",
             ArtifactType::Proof => "proofs",
+            ArtifactType::Groth16Circuit => "",
+            ArtifactType::PlonkCircuit => "",
         }
     }
 
     pub fn get_s3_key_from_id(artifact_type: ArtifactType, id: &str) -> String {
-        format!("{}/{}", Self::get_s3_prefix(artifact_type), id)
+        match artifact_type {
+            ArtifactType::Groth16Circuit => format!("{}-groth16.tar.gz", id),
+            ArtifactType::PlonkCircuit => format!("{}-plonk.tar.gz", id),
+            _ => format!("{}/{}", Self::get_s3_prefix(artifact_type), id),
+        }
     }
 
-    async fn par_download_file(&self, artifact_type: ArtifactType, id: &str) -> Result<Vec<u8>> {
+    pub async fn par_download_file(&self, artifact_type: ArtifactType, id: &str) -> Result<Vec<u8>> {
         let key = Self::get_s3_key_from_id(artifact_type, id);
 
         let size = self

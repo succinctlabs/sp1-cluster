@@ -16,6 +16,8 @@ pub enum ArtifactType {
     Program,
     Stdin,
     Proof,
+    Groth16Circuit,
+    PlonkCircuit,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

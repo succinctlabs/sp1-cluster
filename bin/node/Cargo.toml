@@ -33,3 +33,5 @@ tokio.workspace = true
 tonic.workspace = true
 tracing.workspace = true
 
+flate2 = "1.1.2"
+tar = "0.4.44"
