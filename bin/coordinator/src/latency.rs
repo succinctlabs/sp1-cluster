@@ -22,20 +22,22 @@ impl LatencyTracker {
     }
 
     pub async fn record_latency(&self, kind: &str, duration: Duration) {
-        let mut state = self.state.lock().await;
         let nanos = duration.as_nanos();
         if nanos > 100000000 {
             tracing::error!("latency {} for kind {} is too high", nanos, kind);
         }
-        match state.get_mut(kind) {
-            Some((min, max, sum, count)) => {
-                *min = std::cmp::min(*min, nanos);
-                *max = std::cmp::max(*max, nanos);
-                *sum += nanos;
-                *count += 1;
-            }
-            None => {
-                state.insert(kind.to_owned(), (nanos, nanos, nanos, 1));
+        if *ENABLE_LATENCY_DEBUG {
+            let mut state = self.state.lock().await;
+            match state.get_mut(kind) {
+                Some((min, max, sum, count)) => {
+                    *min = std::cmp::min(*min, nanos);
+                    *max = std::cmp::max(*max, nanos);
+                    *sum += nanos;
+                    *count += 1;
+                }
+                None => {
+                    state.insert(kind.to_owned(), (nanos, nanos, nanos, 1));
+                }
             }
         }
     }
