@@ -41,17 +41,19 @@ impl LatencyTracker {
     }
 
     pub async fn display_latency(&self) {
-        let state = self.state.lock().await;
-        tracing::debug!("[latency] {:?}", state.keys());
-        for (kind, (min, max, sum, count)) in state.iter() {
-            tracing::debug!(
-                "[latency] {}: min = {}, max = {}, avg = {}, count = {}",
-                kind,
-                min,
-                max,
-                sum / (*count as u128),
-                count
-            );
+        if *ENABLE_LATENCY_DEBUG {
+            let state = self.state.lock().await;
+            tracing::info!("[latency] {:?}", state.keys());
+            for (kind, (min, max, sum, count)) in state.iter() {
+                tracing::info!(
+                    "[latency] {}: min = {}, max = {}, avg = {}, count = {}",
+                    kind,
+                    min,
+                    max,
+                    sum / (*count as u128),
+                    count
+                );
+            }
         }
     }
 }
@@ -59,6 +61,8 @@ impl LatencyTracker {
 // Global static latency tracker.
 lazy_static::lazy_static! {
     pub static ref LATENCY_TRACKER: LatencyTracker = LatencyTracker::new();
+
+    pub static ref ENABLE_LATENCY_DEBUG: bool = std::env::var("ENABLE_LATENCY_DEBUG").unwrap_or("false".to_string()).parse::<bool>().unwrap_or(false);
 }
 
 // Simple macro to track latency of a block. use like track_latency!("kind", { ... });
