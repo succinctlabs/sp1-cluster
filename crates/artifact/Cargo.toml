@@ -26,4 +26,8 @@ tokio.workspace = true
 tracing.workspace = true
 zstd.workspace = true
 
+reqwest.workspace = true
+reqwest-retry.workspace = true
+reqwest-middleware.workspace = true
+
 [build-dependencies]
