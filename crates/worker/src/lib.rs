@@ -16,9 +16,9 @@ use sp1_sdk::network::proto::types::ProofMode;
 use sp1_stark::{MachineProver, SP1ProverOpts, StarkVerifyingKey};
 use std::sync::RwLock;
 use std::time::Instant;
-use std::{collections::BTreeMap, env};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
+    env,
     sync::Arc,
 };
 use tasks::TaskMetadata;

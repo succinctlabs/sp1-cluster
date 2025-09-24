@@ -1,13 +1,13 @@
 use cfg_if::cfg_if;
 use dashmap::DashMap;
 use eyre::Result;
+use flate2::read::GzDecoder;
 use jemallocator::Jemalloc;
 use opentelemetry::KeyValue;
 use rand::Rng;
-use flate2::read::GzDecoder;
 use sp1_cluster_artifact::redis::RedisArtifactClient;
-use sp1_cluster_artifact::{ArtifactType, s3::S3ArtifactClient};
 use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_artifact::{s3::S3ArtifactClient, ArtifactType};
 use sp1_cluster_common::proto::{
     self, server_message, CloseRequest, CompleteTaskRequest, FailTaskRequest, HeartbeatRequest,
     TaskData, WorkerType,
@@ -109,10 +109,7 @@ async fn main() -> Result<()> {
 ///
 /// This function downloads circuit artifacts using S3 chunked parallel downloads for better
 /// performance, then extracts them using the same tar approach as the SDK.
-fn install_circuit_artifacts(
-    artifact_type: &str,
-    artifact_client: S3ArtifactClient,
-) -> PathBuf {
+fn install_circuit_artifacts(artifact_type: &str, artifact_client: S3ArtifactClient) -> PathBuf {
     let home_dir = dirs::home_dir().unwrap();
     let final_dir = match artifact_type {
         "groth16" => sp1_sdk::install::groth16_circuit_artifacts_dir(),
@@ -150,7 +147,7 @@ fn install_circuit_artifacts(
         // Download tar.gz bytes using chunked parallel download.
         let download_start = std::time::Instant::now();
         let tar_gz_bytes = artifact_client
-            .par_download_file(artifact_type_enum, SP1_CIRCUIT_VERSION)
+            .par_download_file_with_url(artifact_type_enum, SP1_CIRCUIT_VERSION)
             .await
             .expect("failed to download circuit artifacts");
         let download_duration = download_start.elapsed();
