@@ -147,7 +147,7 @@ fn install_circuit_artifacts(artifact_type: &str, artifact_client: S3ArtifactCli
         // Download tar.gz bytes using chunked parallel download.
         let download_start = std::time::Instant::now();
         let tar_gz_bytes = artifact_client
-            .par_download_file_with_url(artifact_type_enum, SP1_CIRCUIT_VERSION)
+            .par_download_file(artifact_type_enum, SP1_CIRCUIT_VERSION)
             .await
             .expect("failed to download circuit artifacts");
         let download_duration = download_start.elapsed();
