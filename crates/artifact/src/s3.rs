@@ -1,4 +1,4 @@
-use crate::{ArtifactClient, ArtifactId, ArtifactType};
+use crate::{s3_rest::S3RestClient, s3_sdk::S3SDKClient, ArtifactClient, ArtifactId, ArtifactType};
 
 use anyhow::{anyhow, Result};
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, BehaviorVersion, Region};
@@ -15,11 +15,6 @@ use std::{sync::Arc, time::Duration};
 use tokio::{sync::Semaphore, task::JoinSet};
 use tracing::instrument;
 
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{
-    policies::ExponentialBackoff as reqwest_ExponentialBackoff, RetryTransientMiddleware,
-};
-
 lazy_static! {
     static ref BACKOFF: ExponentialBackoff<SystemClock> = ExponentialBackoffBuilder::new()
         .with_initial_interval(Duration::from_millis(100))
@@ -30,10 +25,22 @@ lazy_static! {
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const MAX_RETRY_COUNT: u32 = 7;
 
+pub enum S3DownloadMode {
+    AwsSdk,
+    REST,
+}
+const DEFAULT_S3_DOWNLOAD_MODE: S3DownloadMode = S3DownloadMode::REST;
+
+pub trait S3DownloadClient: Send + Sync {
+    fn get_object_size(&self, bucket: String, key: String) -> Result<i64>;
+    fn read_byte_range(&self, bucket: String, key: String, start: i64, end: i64)
+        -> Result<Vec<u8>>;
+}
+
 #[derive(Clone)]
 pub struct S3ArtifactClient {
     pub sdk_client: Arc<S3Client>,
-    pub reqwest_client: Arc<ClientWithMiddleware>,
+    pub dl_client: Arc<dyn S3DownloadClient>,
     pub bucket: String,
     pub region: String,
     semaphore: Arc<Semaphore>,
@@ -72,19 +79,17 @@ impl S3ArtifactClient {
             let config = base.build();
             S3Client::new(&config)
         };
-        let semaphore = Arc::new(Semaphore::new(concurrency));
 
-        // setup reqwest client and its retry policy
-        let retry_policy =
-            reqwest_ExponentialBackoff::builder().build_with_max_retries(MAX_RETRY_COUNT);
-        let retry_transient_middleware = RetryTransientMiddleware::new_with_policy(retry_policy);
-        let reqwest_client = ClientBuilder::new(reqwest::Client::new())
-            .with(retry_transient_middleware)
-            .build();
+        let s3_dl_client: Arc<dyn S3DownloadClient> = match DEFAULT_S3_DOWNLOAD_MODE {
+            S3DownloadMode::AwsSdk => Arc::new(S3SDKClient::new(s3_client.clone()).await),
+            S3DownloadMode::REST => Arc::new(S3RestClient::new(region.clone()).await),
+        };
+
+        let semaphore = Arc::new(Semaphore::new(concurrency));
 
         Self {
             sdk_client: Arc::new(s3_client),
-            reqwest_client: Arc::new(reqwest_client),
+            dl_client: s3_dl_client,
             bucket,
             region,
             semaphore,
@@ -117,88 +122,6 @@ impl S3ArtifactClient {
         }
     }
 
-    // download s3 objects with https URLs using reqwest with retry
-    pub async fn par_download_file_with_url(
-        &self,
-        artifact_type: ArtifactType,
-        id: &str,
-    ) -> Result<Vec<u8>> {
-        let obj_url = self.get_s3_url_from_id(artifact_type, id);
-
-        // Get obj size
-        let response = self
-            .reqwest_client
-            .get(obj_url.clone())
-            .send()
-            .await
-            .unwrap();
-
-        let obj_size = response.content_length().unwrap();
-
-        // If the file is smaller than the chunk size, just download it.
-        if obj_size <= CHUNK_SIZE as u64 {
-            let bytes = response.bytes().await?;
-            return Ok(bytes.to_vec());
-        }
-
-        let starts = (0..obj_size)
-            .step_by(CHUNK_SIZE)
-            .enumerate()
-            .collect::<Vec<_>>();
-        let threads = std::cmp::min(self.concurrency, starts.len());
-        let thread_size = std::cmp::max(starts.len().div_ceil(threads), 1);
-        // Split into up to S3_CONCURRENCY threads. For each thread, acquire a permit and download chunks.
-        let mut set = JoinSet::new();
-        let (tx, mut rx) = tokio::sync::mpsc::channel(threads);
-        starts.chunks(thread_size).for_each(|thread_starts| {
-            let tx = tx.clone();
-            let semaphore = self.semaphore.clone();
-            let thread_starts = thread_starts.to_vec();
-            let obj_url = obj_url.clone();
-            let reqwest_client = self.reqwest_client.clone();
-            set.spawn(async move {
-                let _permit = semaphore.acquire().await;
-                for (index, start) in thread_starts {
-                    let end = std::cmp::min(start + CHUNK_SIZE as u64, obj_size) - 1;
-                    let range_header = format!("bytes={}-{}", start, end);
-
-                    let body = reqwest_client
-                        .get(obj_url.clone())
-                        .header("Range", range_header)
-                        .send()
-                        .await?;
-
-                    let bytes = body.bytes().await?;
-                    tx.send((index, bytes)).await?;
-                }
-                Ok::<(), anyhow::Error>(())
-            });
-        });
-        drop(tx);
-        let mut result = vec![0_u8; obj_size as usize];
-        while let Some((index, chunk)) = rx.recv().await {
-            let end = std::cmp::min(index * CHUNK_SIZE + chunk.len(), obj_size as usize);
-            result[index * CHUNK_SIZE..end].copy_from_slice(&chunk);
-        }
-        // Make sure all threads did not panic
-        while !set.is_empty() {
-            let res = set.join_next().await.unwrap();
-            match res {
-                Ok(inner) => match inner {
-                    Ok(_) => {}
-                    Err(e) => {
-                        panic!("artifact download thread panicked: {:?}", e);
-                    }
-                },
-                Err(e) => {
-                    panic!("artifact download thread panicked: {:?}", e);
-                }
-            }
-        }
-
-        Ok(result)
-    }
-
     pub fn get_s3_key_from_id(artifact_type: ArtifactType, id: &str) -> String {
         match artifact_type {
             ArtifactType::Groth16Circuit => format!("{}-groth16.tar.gz", id),
@@ -207,7 +130,7 @@ impl S3ArtifactClient {
         }
     }
 
-    pub async fn par_download_file_with_sdk(
+    pub async fn par_download_file(
         &self,
         artifact_type: ArtifactType,
         id: &str,
@@ -215,36 +138,18 @@ impl S3ArtifactClient {
         let key = Self::get_s3_key_from_id(artifact_type, id);
 
         let size = self
-            .sdk_client
-            .head_object()
-            .bucket(&self.bucket)
-            .key(key.clone())
-            .send()
-            .await?
-            .content_length
-            .unwrap();
+            .dl_client
+            .get_object_size(self.bucket.clone(), key.clone())?;
 
         // If the file is smaller than the chunk size, just download it.
         if size <= CHUNK_SIZE as i64 {
             let bytes = backoff::future::retry(BACKOFF.clone(), || {
-                let client = self.sdk_client.clone();
+                let client = self.dl_client.clone();
                 let bucket = self.bucket.clone();
                 let key = key.clone();
                 async move {
-                    let res = client
-                        .get_object()
-                        .bucket(&bucket)
-                        .key(key)
-                        .send()
-                        .await
-                        .map_err(|e| backoff::Error::permanent(anyhow!(e)))?;
-                    let body = res
-                        .body
-                        .collect()
-                        .await
-                        .map_err(|e| backoff::Error::transient(anyhow!(e)))?;
-                    let bytes = body.into_bytes();
-                    Ok::<_, backoff::Error<anyhow::Error>>(bytes)
+                    let ret = client.read_byte_range(bucket, key, 0, size - 1);
+                    ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
                 }
             })
             .await?;
@@ -261,7 +166,7 @@ impl S3ArtifactClient {
         let mut set = JoinSet::new();
         let (tx, mut rx) = tokio::sync::mpsc::channel(threads);
         starts.chunks(thread_size).for_each(|thread_starts| {
-            let client = self.sdk_client.clone();
+            let s3_dl_client = self.dl_client.clone();
             let key = key.clone();
             let tx = tx.clone();
             let semaphore = self.semaphore.clone();
@@ -272,21 +177,13 @@ impl S3ArtifactClient {
                 for (index, start) in thread_starts {
                     let end = std::cmp::min(start + CHUNK_SIZE as i64, size) - 1;
                     let body = backoff::future::retry(BACKOFF.clone(), || async {
-                        let res = client
-                            .get_object()
-                            .bucket(&bucket)
-                            .key(key.clone())
-                            .range(format!("bytes={}-{}", start, end))
-                            .send()
-                            .await
-                            .map_err(|e| backoff::Error::permanent(anyhow!(e)))?;
-                        res.body
-                            .collect()
-                            .await
-                            .map_err(|e| backoff::Error::transient(anyhow!(e)))
+                        let key = key.clone();
+                        let bucket = bucket.clone();
+                        let ret = s3_dl_client.read_byte_range(bucket, key, start, end);
+                        ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
                     })
                     .await?;
-                    tx.send((index, body.into_bytes())).await?;
+                    tx.send((index, body)).await?;
                 }
                 Ok::<(), anyhow::Error>(())
             });
@@ -443,8 +340,7 @@ impl ArtifactClient for S3ArtifactClient {
         artifact: &impl ArtifactId,
         artifact_type: ArtifactType,
     ) -> Result<Vec<u8>> {
-        self.par_download_file_with_url(artifact_type, artifact.id())
-            .await
+        self.par_download_file(artifact_type, artifact.id()).await
     }
 
     async fn exists(
