@@ -1,4 +1,4 @@
-use crate::{s3_rest::S3RestClient, s3_sdk::S3SDKClient, ArtifactClient, ArtifactId, ArtifactType};
+use crate::{s3_rest::S3RestClient, ArtifactClient, ArtifactId, ArtifactType};
 
 use anyhow::{anyhow, Result};
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, BehaviorVersion, Region};
@@ -25,15 +25,10 @@ lazy_static! {
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const MAX_RETRY_COUNT: u32 = 7;
 
-pub enum S3DownloadClientMode {
-    AwsSdk(S3SDKClient),
-    REST(S3RestClient),
-}
-
 #[derive(Clone)]
 pub struct S3ArtifactClient {
     pub sdk_client: Arc<S3Client>,
-    pub dl_client: Arc<S3DownloadClientMode>,
+    pub dl_client: Arc<S3RestClient>, // we simply use rest client for downloading
     pub bucket: String,
     pub region: String,
     semaphore: Arc<Semaphore>,
@@ -73,14 +68,7 @@ impl S3ArtifactClient {
             S3Client::new(&config)
         };
 
-        let s3_dl_client: S3DownloadClientMode = if std::env::var("HTTPS_S3_DOWNLOAD_ENABLED")
-            .map(|s| s.to_lowercase() == "true")
-            .unwrap_or(false)
-        {
-            S3DownloadClientMode::REST(S3RestClient::new(region.clone()))
-        } else {
-            S3DownloadClientMode::AwsSdk(S3SDKClient::new(s3_client.clone()))
-        };
+        let s3_dl_client = S3RestClient::new(region.clone());
 
         let semaphore = Arc::new(Semaphore::new(concurrency));
 
@@ -134,14 +122,7 @@ impl S3ArtifactClient {
     ) -> Result<Vec<u8>> {
         let key = Self::get_s3_key_from_id(artifact_type, id);
 
-        let size = match self.dl_client.as_ref() {
-            S3DownloadClientMode::AwsSdk(s3_sdk_client) => {
-                s3_sdk_client.get_object_size(&self.bucket, &key).await?
-            }
-            S3DownloadClientMode::REST(s3_rest_client) => {
-                s3_rest_client.get_object_size(&self.bucket, &key).await?
-            }
-        };
+        let size = self.dl_client.get_object_size(&self.bucket, &key).await?;
 
         // If the file is smaller than the chunk size, just download it.
         if size <= CHUNK_SIZE as i64 {
@@ -149,14 +130,7 @@ impl S3ArtifactClient {
                 let bucket = self.bucket.clone();
                 let key = key.clone();
                 async move {
-                    let ret = match self.dl_client.as_ref() {
-                        S3DownloadClientMode::AwsSdk(s3_sdk_client) => {
-                            s3_sdk_client.read_bytes(&bucket, &key, None).await
-                        }
-                        S3DownloadClientMode::REST(s3_rest_client) => {
-                            s3_rest_client.read_bytes(&bucket, &key, None).await
-                        }
-                    };
+                    let ret = self.dl_client.read_bytes(&bucket, &key, None).await;
                     ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
                 }
             })
@@ -187,18 +161,9 @@ impl S3ArtifactClient {
                     let body = backoff::future::retry(BACKOFF.clone(), || async {
                         let key = key.clone();
                         let bucket = bucket.clone();
-                        let ret = match s3_dl_client.as_ref() {
-                            S3DownloadClientMode::AwsSdk(s3_sdk_client) => {
-                                s3_sdk_client
-                                    .read_bytes(&bucket, &key, Some((start, end)))
-                                    .await
-                            }
-                            S3DownloadClientMode::REST(s3_rest_client) => {
-                                s3_rest_client
-                                    .read_bytes(&bucket, &key, Some((start, end)))
-                                    .await
-                            }
-                        };
+                        let ret = s3_dl_client
+                            .read_bytes(&bucket, &key, Some((start, end)))
+                            .await;
 
                         ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
                     })
