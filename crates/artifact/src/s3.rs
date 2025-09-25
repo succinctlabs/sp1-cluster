@@ -151,14 +151,10 @@ impl S3ArtifactClient {
                 async move {
                     let ret = match self.dl_client.as_ref() {
                         S3DownloadClientMode::AwsSdk(s3_sdk_client) => {
-                            s3_sdk_client
-                                .read_byte_range(&bucket, &key, (0, size - 1))
-                                .await
+                            s3_sdk_client.read_bytes(&bucket, &key, None).await
                         }
                         S3DownloadClientMode::REST(s3_rest_client) => {
-                            s3_rest_client
-                                .read_byte_range(&bucket, &key, (0, size - 1))
-                                .await
+                            s3_rest_client.read_bytes(&bucket, &key, None).await
                         }
                     };
                     ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
@@ -194,12 +190,12 @@ impl S3ArtifactClient {
                         let ret = match s3_dl_client.as_ref() {
                             S3DownloadClientMode::AwsSdk(s3_sdk_client) => {
                                 s3_sdk_client
-                                    .read_byte_range(&bucket, &key, (start, end))
+                                    .read_bytes(&bucket, &key, Some((start, end)))
                                     .await
                             }
                             S3DownloadClientMode::REST(s3_rest_client) => {
                                 s3_rest_client
-                                    .read_byte_range(&bucket, &key, (start, end))
+                                    .read_bytes(&bucket, &key, Some((start, end)))
                                     .await
                             }
                         };

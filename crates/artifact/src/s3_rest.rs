@@ -26,22 +26,21 @@ impl S3RestClient {
             .map_err(anyhow::Error::new)
     }
 
-    pub async fn read_byte_range(
+    pub async fn read_bytes(
         &self,
         bucket: &str,
         key: &str,
-        range: (i64, i64),
+        range: Option<(i64, i64)>,
     ) -> Result<Vec<u8>> {
         let obj_url = get_s3_url_from_id(bucket, &self.region, key);
-        let range_header = format!("bytes={}-{}", range.0, range.1);
 
-        let result = self
-            .client
-            .get(obj_url)
-            .header("Range", range_header)
-            .send()
-            .await;
+        let mut builder = self.client.get(obj_url);
+        if range.is_some() {
+            let range_header = format!("bytes={}-{}", range.unwrap().0, range.unwrap().1);
+            builder = builder.header("Range", range_header);
+        }
 
+        let result = builder.send().await;
         if let Err(err) = result {
             return Err(anyhow::Error::new(err));
         }
