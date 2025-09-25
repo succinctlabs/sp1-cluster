@@ -25,22 +25,15 @@ lazy_static! {
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const MAX_RETRY_COUNT: u32 = 7;
 
-pub enum S3DownloadMode {
-    AwsSdk,
-    REST,
-}
-const DEFAULT_S3_DOWNLOAD_MODE: S3DownloadMode = S3DownloadMode::REST;
-
-pub trait S3DownloadClient: Send + Sync {
-    fn get_object_size(&self, bucket: String, key: String) -> Result<i64>;
-    fn read_byte_range(&self, bucket: String, key: String, start: i64, end: i64)
-        -> Result<Vec<u8>>;
+pub enum S3DownloadClientMode {
+    AwsSdk(S3SDKClient),
+    REST(S3RestClient),
 }
 
 #[derive(Clone)]
 pub struct S3ArtifactClient {
     pub sdk_client: Arc<S3Client>,
-    pub dl_client: Arc<dyn S3DownloadClient>,
+    pub dl_client: Arc<S3DownloadClientMode>,
     pub bucket: String,
     pub region: String,
     semaphore: Arc<Semaphore>,
@@ -80,16 +73,20 @@ impl S3ArtifactClient {
             S3Client::new(&config)
         };
 
-        let s3_dl_client: Arc<dyn S3DownloadClient> = match DEFAULT_S3_DOWNLOAD_MODE {
-            S3DownloadMode::AwsSdk => Arc::new(S3SDKClient::new(s3_client.clone()).await),
-            S3DownloadMode::REST => Arc::new(S3RestClient::new(region.clone()).await),
+        let s3_dl_client: S3DownloadClientMode = if std::env::var("HTTPS_S3_DOWNLOAD_ENABLED")
+            .map(|s| s.to_lowercase() == "true")
+            .unwrap_or(false)
+        {
+            S3DownloadClientMode::REST(S3RestClient::new(region.clone()))
+        } else {
+            S3DownloadClientMode::AwsSdk(S3SDKClient::new(s3_client.clone()))
         };
 
         let semaphore = Arc::new(Semaphore::new(concurrency));
 
         Self {
             sdk_client: Arc::new(s3_client),
-            dl_client: s3_dl_client,
+            dl_client: Arc::new(s3_dl_client),
             bucket,
             region,
             semaphore,
@@ -137,18 +134,33 @@ impl S3ArtifactClient {
     ) -> Result<Vec<u8>> {
         let key = Self::get_s3_key_from_id(artifact_type, id);
 
-        let size = self
-            .dl_client
-            .get_object_size(self.bucket.clone(), key.clone())?;
+        let size = match self.dl_client.as_ref() {
+            S3DownloadClientMode::AwsSdk(s3_sdk_client) => {
+                s3_sdk_client.get_object_size(&self.bucket, &key).await?
+            }
+            S3DownloadClientMode::REST(s3_rest_client) => {
+                s3_rest_client.get_object_size(&self.bucket, &key).await?
+            }
+        };
 
         // If the file is smaller than the chunk size, just download it.
         if size <= CHUNK_SIZE as i64 {
             let bytes = backoff::future::retry(BACKOFF.clone(), || {
-                let client = self.dl_client.clone();
                 let bucket = self.bucket.clone();
                 let key = key.clone();
                 async move {
-                    let ret = client.read_byte_range(bucket, key, 0, size - 1);
+                    let ret = match self.dl_client.as_ref() {
+                        S3DownloadClientMode::AwsSdk(s3_sdk_client) => {
+                            s3_sdk_client
+                                .read_byte_range(&bucket, &key, (0, size - 1))
+                                .await
+                        }
+                        S3DownloadClientMode::REST(s3_rest_client) => {
+                            s3_rest_client
+                                .read_byte_range(&bucket, &key, (0, size - 1))
+                                .await
+                        }
+                    };
                     ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
                 }
             })
@@ -179,7 +191,19 @@ impl S3ArtifactClient {
                     let body = backoff::future::retry(BACKOFF.clone(), || async {
                         let key = key.clone();
                         let bucket = bucket.clone();
-                        let ret = s3_dl_client.read_byte_range(bucket, key, start, end);
+                        let ret = match s3_dl_client.as_ref() {
+                            S3DownloadClientMode::AwsSdk(s3_sdk_client) => {
+                                s3_sdk_client
+                                    .read_byte_range(&bucket, &key, (start, end))
+                                    .await
+                            }
+                            S3DownloadClientMode::REST(s3_rest_client) => {
+                                s3_rest_client
+                                    .read_byte_range(&bucket, &key, (start, end))
+                                    .await
+                            }
+                        };
+
                         ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
                     })
                     .await?;
