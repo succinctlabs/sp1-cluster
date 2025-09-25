@@ -23,20 +23,18 @@ impl S3SDKClient {
             .map_err(anyhow::Error::new)
     }
 
-    pub async fn read_byte_range(
+    pub async fn read_bytes(
         &self,
         bucket: &str,
         key: &str,
-        range: (i64, i64),
+        range: Option<(i64, i64)>,
     ) -> Result<Vec<u8>> {
-        let result = self
-            .s3_client
-            .get_object()
-            .bucket(bucket)
-            .key(key)
-            .range(format!("bytes={}-{}", range.0, range.1))
-            .send()
-            .await;
+        let mut builder = self.s3_client.get_object().bucket(bucket).key(key);
+        if range.is_some() {
+            builder = builder.range(format!("bytes={}-{}", range.unwrap().0, range.unwrap().1));
+        }
+
+        let result = builder.send().await;
         if let Err(err) = result {
             return Err(anyhow::Error::new(err));
         }
