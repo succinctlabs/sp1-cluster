@@ -263,9 +263,11 @@ async fn run_worker<A: ArtifactClient>(
                 region,
                 bucket
             );
-            let artifact_client = S3ArtifactClient::new(region, bucket, concurrency).await;
+            let mut artifact_client = S3ArtifactClient::new(region, bucket, concurrency).await;
 
             // Download groth16 and plonk artifacts concurrently using shared client.
+            // these artifacts will be downloaded with public s3 obj urls.
+            artifact_client.set_s3_download_mode(sp1_cluster_artifact::s3::S3DownloadMode::REST);
             let (_, _) = tokio::try_join!(
                 tokio::task::spawn_blocking({
                     let artifact_client = artifact_client.clone();
@@ -282,6 +284,8 @@ async fn run_worker<A: ArtifactClient>(
                     }
                 })
             )?;
+            // for all proof request artifact ops we still use s3 sdk clients.
+            artifact_client.set_s3_download_mode(sp1_cluster_artifact::s3::S3DownloadMode::AwsSDK);
 
             let elapsed = start_time.elapsed();
             tracing::info!(
