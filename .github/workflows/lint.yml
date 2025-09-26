@@ -104,7 +104,8 @@ jobs:
       - name: Install cargo shear and cargo sort
         run: |
           # Ignore error if it's installed already
-          cargo shear --help || cargo install cargo-shear --locked
+          # NOTE: cargo-shear@v1.5.2 requires rustc 1.88
+          cargo shear --help || cargo install cargo-shear@1.5.1 --locked
           cargo sort --help || cargo install cargo-sort --locked
 
       - name: Run cargo shear
