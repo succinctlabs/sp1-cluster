@@ -1,4 +1,4 @@
-use crate::{s3_rest::S3RestClient, ArtifactClient, ArtifactId, ArtifactType};
+use crate::{s3_rest::S3RestClient, s3_sdk::S3SDKClient, ArtifactClient, ArtifactId, ArtifactType};
 
 use anyhow::{anyhow, Result};
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, BehaviorVersion, Region};
@@ -26,13 +26,22 @@ const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const MAX_RETRY_COUNT: u32 = 7;
 
 #[derive(Clone)]
+pub enum S3DownloadMode {
+    REST,
+    AwsSDK,
+}
+
+#[derive(Clone)]
 pub struct S3ArtifactClient {
     pub sdk_client: Arc<S3Client>,
-    pub dl_client: Arc<S3RestClient>, // we simply use rest client for downloading
     pub bucket: String,
     pub region: String,
     semaphore: Arc<Semaphore>,
     concurrency: usize,
+
+    s3_dl_mode: S3DownloadMode,
+    pub dl_client_rest: Arc<S3RestClient>, // only for public groth16/plonk artifacts
+    pub dl_client_sdk: Arc<S3SDKClient>,   // default mode
 }
 
 impl S3ArtifactClient {
@@ -68,18 +77,22 @@ impl S3ArtifactClient {
             S3Client::new(&config)
         };
 
-        let s3_dl_client = S3RestClient::new(region.clone());
-
         let semaphore = Arc::new(Semaphore::new(concurrency));
 
         Self {
-            sdk_client: Arc::new(s3_client),
-            dl_client: Arc::new(s3_dl_client),
+            sdk_client: Arc::new(s3_client.clone()),
+            dl_client_rest: Arc::new(S3RestClient::new(region.clone())),
+            dl_client_sdk: Arc::new(S3SDKClient::new(s3_client)),
+            s3_dl_mode: S3DownloadMode::AwsSDK,
             bucket,
             region,
             semaphore,
             concurrency,
         }
+    }
+
+    pub fn set_s3_download_mode(&mut self, s3_dl_mode: S3DownloadMode) {
+        self.s3_dl_mode = s3_dl_mode;
     }
 
     /// Different artifact types have different S3 prefixes.
@@ -122,7 +135,18 @@ impl S3ArtifactClient {
     ) -> Result<Vec<u8>> {
         let key = Self::get_s3_key_from_id(artifact_type, id);
 
-        let size = self.dl_client.get_object_size(&self.bucket, &key).await?;
+        let size = match self.s3_dl_mode {
+            S3DownloadMode::REST => {
+                self.dl_client_rest
+                    .get_object_size(&self.bucket, &key)
+                    .await?
+            }
+            S3DownloadMode::AwsSDK => {
+                self.dl_client_sdk
+                    .get_object_size(&self.bucket, &key)
+                    .await?
+            }
+        };
 
         // If the file is smaller than the chunk size, just download it.
         if size <= CHUNK_SIZE as i64 {
@@ -130,7 +154,14 @@ impl S3ArtifactClient {
                 let bucket = self.bucket.clone();
                 let key = key.clone();
                 async move {
-                    let ret = self.dl_client.read_bytes(&bucket, &key, None).await;
+                    let ret = match self.s3_dl_mode {
+                        S3DownloadMode::REST => {
+                            self.dl_client_rest.read_bytes(&bucket, &key, None).await
+                        }
+                        S3DownloadMode::AwsSDK => {
+                            self.dl_client_sdk.read_bytes(&bucket, &key, None).await
+                        }
+                    };
                     ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
                 }
             })
@@ -148,7 +179,9 @@ impl S3ArtifactClient {
         let mut set = JoinSet::new();
         let (tx, mut rx) = tokio::sync::mpsc::channel(threads);
         starts.chunks(thread_size).for_each(|thread_starts| {
-            let s3_dl_client = self.dl_client.clone();
+            let s3_dl_client_rest = self.dl_client_rest.clone();
+            let s3_dl_client_sdk = self.dl_client_sdk.clone();
+            let s3_dl_mode = self.s3_dl_mode.clone();
             let key = key.clone();
             let tx = tx.clone();
             let semaphore = self.semaphore.clone();
@@ -161,9 +194,18 @@ impl S3ArtifactClient {
                     let body = backoff::future::retry(BACKOFF.clone(), || async {
                         let key = key.clone();
                         let bucket = bucket.clone();
-                        let ret = s3_dl_client
-                            .read_bytes(&bucket, &key, Some((start, end)))
-                            .await;
+                        let ret = match s3_dl_mode {
+                            S3DownloadMode::REST => {
+                                s3_dl_client_rest
+                                    .read_bytes(&bucket, &key, Some((start, end)))
+                                    .await
+                            }
+                            S3DownloadMode::AwsSDK => {
+                                s3_dl_client_sdk
+                                    .read_bytes(&bucket, &key, Some((start, end)))
+                                    .await
+                            }
+                        };
 
                         ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
                     })
