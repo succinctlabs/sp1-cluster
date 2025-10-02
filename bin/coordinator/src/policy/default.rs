@@ -168,6 +168,7 @@ impl AssignmentPolicy for DefaultPolicy {
     fn post_task_update_state(
         _state: &mut CoordinatorState<Self>,
         _proof_extra: Self::ProofState,
+        _task_id: &str,
         _task_extra: Self::TaskState,
         _task_weight: u32,
         _proof_id: &str,

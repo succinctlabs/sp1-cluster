@@ -60,6 +60,7 @@ pub trait AssignmentPolicy: Sized + Clone + Default + Send + Sync + 'static {
     fn post_task_update_state(
         state: &mut CoordinatorState<Self>,
         proof_extra: Self::ProofState,
+        task_id: &str,
         task_extra: Self::TaskState,
         task_weight: u32,
         proof_id: &str,
