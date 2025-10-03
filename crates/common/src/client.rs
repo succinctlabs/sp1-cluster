@@ -20,11 +20,26 @@ pub async fn reconnect_with_backoff(addr: &str) -> Result<Channel> {
 
     let op = || async {
         tracing::info!("connecting to {}", addr);
-        let channel = Endpoint::from_shared(addr.to_string())
+        let mut builder = Endpoint::from_shared(addr.to_string())
             .map_err(|e| backoff::Error::Permanent(eyre::eyre!(e)))?
             .keep_alive_while_idle(true)
             .http2_keep_alive_interval(Duration::from_secs(15))
-            .keep_alive_timeout(Duration::from_secs(60))
+            .keep_alive_timeout(Duration::from_secs(60));
+
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        use tonic::transport::ClientTlsConfig;
+        if addr.starts_with("https://") {
+            builder = builder
+                .tls_config(
+                    ClientTlsConfig::new()
+                        .with_enabled_roots()
+                        .with_native_roots(),
+                )
+                .unwrap();
+        }
+
+        let channel = builder
             .tcp_keepalive(Some(Duration::from_secs(15)))
             .timeout(Duration::from_secs(60))
             .connect()

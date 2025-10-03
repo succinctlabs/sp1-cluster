@@ -502,6 +502,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             P::post_task_update_state(
                 &mut state,
                 proof_extra,
+                &task_id,
                 task_extra,
                 task_weight,
                 &proof_id,
@@ -773,6 +774,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 P::post_task_update_state(
                     state,
                     proof_extra,
+                    &task.id,
                     task.extra.clone(),
                     task.data.weight,
                     proof_id,
@@ -907,6 +909,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         P::post_task_update_state(
             &mut state,
             proof_extra,
+            &task_id,
             task_extra,
             task_weight,
             &proof_id,
@@ -1140,6 +1143,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                             P::post_task_update_state(
                                 state,
                                 proof.extra.clone(),
+                                &task.id,
                                 task.extra.clone(),
                                 task.data.weight,
                                 &proof_id,
@@ -1470,6 +1474,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 task_info
             );
         }
+        P::debug_state(&state);
     }
 
     /// Cancel expired proofs.

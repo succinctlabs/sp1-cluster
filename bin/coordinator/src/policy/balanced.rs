@@ -231,6 +231,7 @@ impl AssignmentPolicy for BalancedPolicy {
     fn post_task_update_state(
         state: &mut CoordinatorState<Self>,
         _proof_extra: Self::ProofState,
+        _task_id: &str,
         _task_extra: Self::TaskState,
         task_weight: u32,
         proof_id: &str,

@@ -60,6 +60,7 @@ pub trait AssignmentPolicy: Sized + Clone + Default + Send + Sync + 'static {
     fn post_task_update_state(
         state: &mut CoordinatorState<Self>,
         proof_extra: Self::ProofState,
+        task_id: &str,
         task_extra: Self::TaskState,
         task_weight: u32,
         proof_id: &str,
@@ -97,5 +98,11 @@ pub trait AssignmentPolicy: Sized + Clone + Default + Send + Sync + 'static {
     fn on_proof_deleted(state: &mut CoordinatorState<Self>, proof_id: &str) {
         // Default implementation does nothing
         let _ = (state, proof_id);
+    }
+
+    /// Called periodically to print the current state of the coordinator.
+    fn debug_state(state: &CoordinatorState<Self>) {
+        // Default implementation does nothing extra.
+        let _ = state;
     }
 }

@@ -22,36 +22,40 @@ impl LatencyTracker {
     }
 
     pub async fn record_latency(&self, kind: &str, duration: Duration) {
-        let mut state = self.state.lock().await;
         let nanos = duration.as_nanos();
         if nanos > 100000000 {
             tracing::error!("latency {} for kind {} is too high", nanos, kind);
         }
-        match state.get_mut(kind) {
-            Some((min, max, sum, count)) => {
-                *min = std::cmp::min(*min, nanos);
-                *max = std::cmp::max(*max, nanos);
-                *sum += nanos;
-                *count += 1;
-            }
-            None => {
-                state.insert(kind.to_owned(), (nanos, nanos, nanos, 1));
+        if *ENABLE_LATENCY_DEBUG {
+            let mut state = self.state.lock().await;
+            match state.get_mut(kind) {
+                Some((min, max, sum, count)) => {
+                    *min = std::cmp::min(*min, nanos);
+                    *max = std::cmp::max(*max, nanos);
+                    *sum += nanos;
+                    *count += 1;
+                }
+                None => {
+                    state.insert(kind.to_owned(), (nanos, nanos, nanos, 1));
+                }
             }
         }
     }
 
     pub async fn display_latency(&self) {
-        let state = self.state.lock().await;
-        tracing::debug!("[latency] {:?}", state.keys());
-        for (kind, (min, max, sum, count)) in state.iter() {
-            tracing::debug!(
-                "[latency] {}: min = {}, max = {}, avg = {}, count = {}",
-                kind,
-                min,
-                max,
-                sum / (*count as u128),
-                count
-            );
+        if *ENABLE_LATENCY_DEBUG {
+            let state = self.state.lock().await;
+            tracing::info!("[latency] {:?}", state.keys());
+            for (kind, (min, max, sum, count)) in state.iter() {
+                tracing::info!(
+                    "[latency] {}: min = {}, max = {}, avg = {}, count = {}",
+                    kind,
+                    min,
+                    max,
+                    sum / (*count as u128),
+                    count
+                );
+            }
         }
     }
 }
@@ -59,6 +63,8 @@ impl LatencyTracker {
 // Global static latency tracker.
 lazy_static::lazy_static! {
     pub static ref LATENCY_TRACKER: LatencyTracker = LatencyTracker::new();
+
+    pub static ref ENABLE_LATENCY_DEBUG: bool = std::env::var("ENABLE_LATENCY_DEBUG").unwrap_or("false".to_string()).parse::<bool>().unwrap_or(false);
 }
 
 // Simple macro to track latency of a block. use like track_latency!("kind", { ... });

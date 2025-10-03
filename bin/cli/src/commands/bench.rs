@@ -41,7 +41,7 @@ pub struct CommonArgs {
     pub count: u32,
 }
 
-fn parse_proof_mode(s: &str) -> Result<ProofMode> {
+pub fn parse_proof_mode(s: &str) -> Result<ProofMode> {
     ProofMode::from_str_name(&s.to_ascii_uppercase())
         .ok_or_else(|| eyre::eyre!("Invalid proof mode"))
 }
