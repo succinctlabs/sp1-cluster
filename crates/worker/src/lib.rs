@@ -16,10 +16,10 @@ use sp1_sdk::network::proto::types::ProofMode;
 use sp1_stark::{MachineProver, SP1ProverOpts, StarkVerifyingKey};
 use std::sync::RwLock;
 use std::time::Instant;
-use std::{collections::BTreeMap, env};
 use std::{
-    collections::HashMap,
-    sync::{atomic::AtomicBool, Arc},
+    collections::{BTreeMap, HashMap},
+    env,
+    sync::Arc,
 };
 use tasks::TaskMetadata;
 use tokio::sync::{Mutex, Semaphore};
@@ -79,7 +79,6 @@ pub type CachedKeys = Arc<(
 
 pub struct SP1Worker<W: WorkerService, A: ArtifactClient> {
     pub prover: Arc<SP1Prover<ClusterProverComponents>>,
-    pub circuits_available: Arc<AtomicBool>,
     pub prover_opts: SP1ProverOpts,
     pub gpu_semaphore: Arc<Semaphore>,
     pub compress_keys: RwLock<BTreeMap<SP1CompressWithVkeyShape, CachedKeys>>,
@@ -99,7 +98,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         prover: Arc<SP1Prover<ClusterProverComponents>>,
-        circuits_available: Arc<AtomicBool>,
         gpu_semaphore: Arc<Semaphore>,
         metrics: Option<Arc<WorkerMetrics>>,
         worker_client: W,
@@ -130,7 +128,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
 
         Self {
             prover,
-            circuits_available,
             prover_opts,
             gpu_semaphore,
             compress_keys: RwLock::new(compress_keys),

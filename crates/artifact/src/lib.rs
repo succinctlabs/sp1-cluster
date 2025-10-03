@@ -8,6 +8,8 @@ use tracing::Instrument;
 
 pub mod redis;
 pub mod s3;
+pub mod s3_rest;
+pub mod s3_sdk;
 pub mod util;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -16,6 +18,8 @@ pub enum ArtifactType {
     Program,
     Stdin,
     Proof,
+    Groth16Circuit,
+    PlonkCircuit,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
