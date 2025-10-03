@@ -7336,7 +7336,6 @@ name = "sp1-cluster-common"
 version = "1.0.0"
 dependencies = [
  "backoff",
- "cfg-if",
  "chrono",
  "eyre",
  "futures",

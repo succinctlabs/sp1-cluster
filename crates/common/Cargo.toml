@@ -7,7 +7,6 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-cfg-if.workspace = true
 backoff = { workspace = true, features = ["futures", "tokio"] }
 eyre.workspace = true
 futures.workspace = true
