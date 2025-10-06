@@ -3,7 +3,9 @@ use std::{collections::HashSet, path::PathBuf, time::Instant};
 use clap::{Args, Subcommand};
 use eyre::Result;
 use sp1_cluster_artifact::{
-    redis::RedisArtifactClient, s3::S3ArtifactClient, ArtifactClient, ArtifactType,
+    redis::RedisArtifactClient,
+    s3::{S3ArtifactClient, S3DownloadMode},
+    ArtifactClient, ArtifactType,
 };
 use sp1_cluster_common::{
     client::ClusterServiceClient,
@@ -135,6 +137,12 @@ impl BenchCommand {
                 common.s3_region.clone().unwrap(),
                 common.s3_bucket.clone().unwrap(),
                 32,
+                S3DownloadMode::AwsSDK(
+                    S3ArtifactClient::create_s3_sdk_download_client(
+                        common.s3_region.clone().unwrap(),
+                    )
+                    .await,
+                ),
             )
             .await;
             Self::setup_artifacts(artifact_client, elf, stdin, common.count).await?

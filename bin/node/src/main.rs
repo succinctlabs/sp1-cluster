@@ -6,6 +6,8 @@ use jemallocator::Jemalloc;
 use opentelemetry::KeyValue;
 use rand::Rng;
 use sp1_cluster_artifact::redis::RedisArtifactClient;
+use sp1_cluster_artifact::s3::S3DownloadMode;
+use sp1_cluster_artifact::s3_rest::S3RestClient;
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_artifact::{s3::S3ArtifactClient, ArtifactType};
 use sp1_cluster_common::proto::{
@@ -77,12 +79,14 @@ async fn main() -> Result<()> {
 
     if std::env::var("NODE_ARTIFACT_STORE").unwrap_or("s3".to_string()) == "s3" {
         eprintln!("using s3 artifact store");
+        let region = std::env::var("NODE_S3_REGION").expect("NODE_S3_REGION is not set");
         let artifact_client = S3ArtifactClient::new(
-            std::env::var("NODE_S3_REGION").expect("NODE_S3_REGION is not set"),
+            region.clone(),
             std::env::var("NODE_S3_BUCKET").expect("NODE_S3_BUCKET is not set"),
             std::env::var("NODE_S3_CONCURRENCY")
                 .map(|s| s.parse().unwrap_or(32))
                 .unwrap_or(32),
+            S3DownloadMode::AwsSDK(S3ArtifactClient::create_s3_sdk_download_client(region).await),
         )
         .await;
         run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client).await?;
@@ -260,32 +264,36 @@ async fn run_worker<A: ArtifactClient>(
             tracing::info!(
                 "Creating S3ArtifactClient - concurrency: {}, region: {}, bucket: {}",
                 concurrency,
-                region,
+                region.clone(),
                 bucket
             );
-            let mut artifact_client = S3ArtifactClient::new(region, bucket, concurrency).await;
 
+            // For all other proof request artifact ops, we still use the SDK S3 client.
+            let artifact_client_rest = S3ArtifactClient::new(
+                region.clone(),
+                bucket,
+                concurrency,
+                S3DownloadMode::REST(Arc::new(S3RestClient::new(region.clone()))),
+            )
+            .await;
             // Download groth16 and plonk artifacts concurrently using shared client.
             // these artifacts will be downloaded with public s3 obj urls.
-            artifact_client.set_s3_download_mode(sp1_cluster_artifact::s3::S3DownloadMode::REST);
             let (_, _) = tokio::try_join!(
                 tokio::task::spawn_blocking({
-                    let artifact_client = artifact_client.clone();
+                    let artifact_client = artifact_client_rest.clone();
                     move || {
                         tracing::info!("Downloading groth16 artifacts");
                         install_circuit_artifacts("groth16", artifact_client)
                     }
                 }),
                 tokio::task::spawn_blocking({
-                    let artifact_client = artifact_client.clone();
+                    let artifact_client = artifact_client_rest.clone();
                     move || {
                         tracing::info!("Downloading plonk artifacts");
                         install_circuit_artifacts("plonk", artifact_client)
                     }
                 })
             )?;
-            // for all proof request artifact ops we still use s3 sdk clients.
-            artifact_client.set_s3_download_mode(sp1_cluster_artifact::s3::S3DownloadMode::AwsSDK);
 
             let elapsed = start_time.elapsed();
             tracing::info!(

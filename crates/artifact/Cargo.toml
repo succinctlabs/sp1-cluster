@@ -21,11 +21,10 @@ bytes.workspace = true
 deadpool-redis.workspace = true
 lazy_static.workspace = true
 mti.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 zstd.workspace = true
-
-reqwest.workspace = true
 
 [build-dependencies]
