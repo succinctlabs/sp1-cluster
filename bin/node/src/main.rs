@@ -268,7 +268,6 @@ async fn run_worker<A: ArtifactClient>(
                 bucket
             );
 
-            // For all other proof request artifact ops, we still use the SDK S3 client.
             let artifact_client_rest = S3ArtifactClient::new(
                 region.clone(),
                 bucket,

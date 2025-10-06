@@ -49,7 +49,7 @@ impl S3ArtifactClient {
         s3_dl_mode: S3DownloadMode,
     ) -> Self {
         Self {
-            sdk_client: Arc::new(Self::create_s3_sdk_client(region.clone()).await),
+            sdk_client: Arc::new(Self::create_sdk_client(region.clone()).await),
             s3_dl_mode,
             bucket,
             region,
@@ -58,7 +58,7 @@ impl S3ArtifactClient {
         }
     }
 
-    async fn create_s3_sdk_client(region: String) -> S3Client {
+    async fn create_sdk_client(region: String) -> S3Client {
         let mut base = aws_config::load_defaults(BehaviorVersion::latest())
             .await
             .to_builder();
@@ -90,7 +90,7 @@ impl S3ArtifactClient {
     }
 
     pub async fn create_s3_sdk_download_client(region: String) -> Arc<S3SDKClient> {
-        Arc::new(S3SDKClient::new(Self::create_s3_sdk_client(region).await))
+        Arc::new(S3SDKClient::new(Self::create_sdk_client(region).await))
     }
 
     /// Different artifact types have different S3 prefixes.
@@ -108,7 +108,7 @@ impl S3ArtifactClient {
         }
     }
 
-    /// downloadable https s3 url of objs
+    /// Gets the REST API URL for an artifact.
     pub fn get_s3_url_from_id(&self, artifact_type: ArtifactType, id: &str) -> String {
         let url_base = format!("https://{}.s3.{}.amazonaws.com", self.bucket, self.region);
         match artifact_type {
