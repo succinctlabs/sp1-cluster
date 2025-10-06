@@ -1,4 +1,4 @@
-use crate::{ArtifactClient, ArtifactId, ArtifactType};
+use crate::{s3_rest::S3RestClient, s3_sdk::S3SDKClient, ArtifactClient, ArtifactId, ArtifactType};
 
 use anyhow::{anyhow, Result};
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, BehaviorVersion, Region};
@@ -23,54 +23,74 @@ lazy_static! {
 }
 
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
+const MAX_RETRY_COUNT: u32 = 7;
+
+#[derive(Clone)]
+pub enum S3DownloadMode {
+    REST(Arc<S3RestClient>),
+    AwsSDK(Arc<S3SDKClient>),
+}
 
 #[derive(Clone)]
 pub struct S3ArtifactClient {
-    pub inner: Arc<S3Client>,
+    pub sdk_client: Arc<S3Client>,
     pub bucket: String,
+    pub region: String,
     semaphore: Arc<Semaphore>,
     concurrency: usize,
+    s3_dl_mode: S3DownloadMode,
 }
 
 impl S3ArtifactClient {
-    pub async fn new(region: String, bucket: String, concurrency: usize) -> Self {
-        let s3_client = {
-            let mut base = aws_config::load_defaults(BehaviorVersion::latest())
-                .await
-                .to_builder();
-            let timeout_config = TimeoutConfig::builder()
-                .operation_attempt_timeout(Duration::from_secs(120))
-                .build();
-            base.set_retry_config(Some(
-                RetryConfig::standard()
-                    .with_max_attempts(7)
-                    .with_max_backoff(Duration::from_secs(30)),
-            ))
-            .set_timeout_config(Some(timeout_config))
-            .set_sleep_impl(default_async_sleep())
-            .set_region(Some(Region::new(region)));
-            base.set_stalled_stream_protection(Some(
-                StalledStreamProtectionConfig::enabled()
-                    .grace_period(Duration::from_secs(20))
-                    .build(),
-            ));
-            // Refresh identity slightly more frequently than the default to avoid ExpiredToken errors
-            base.set_identity_cache(Some(
-                IdentityCache::lazy()
-                    .load_timeout(Duration::from_secs(10))
-                    .buffer_time(Duration::from_secs(300))
-                    .build(),
-            ));
-            let config = base.build();
-            S3Client::new(&config)
-        };
-        let semaphore = Arc::new(Semaphore::new(concurrency));
+    pub async fn new(
+        region: String,
+        bucket: String,
+        concurrency: usize,
+        s3_dl_mode: S3DownloadMode,
+    ) -> Self {
         Self {
-            inner: Arc::new(s3_client),
+            sdk_client: Arc::new(Self::create_sdk_client(region.clone()).await),
+            s3_dl_mode,
             bucket,
-            semaphore,
+            region,
+            semaphore: Arc::new(Semaphore::new(concurrency)),
             concurrency,
         }
+    }
+
+    async fn create_sdk_client(region: String) -> S3Client {
+        let mut base = aws_config::load_defaults(BehaviorVersion::latest())
+            .await
+            .to_builder();
+        let timeout_config = TimeoutConfig::builder()
+            .operation_attempt_timeout(Duration::from_secs(120))
+            .build();
+        base.set_retry_config(Some(
+            RetryConfig::standard()
+                .with_max_attempts(MAX_RETRY_COUNT)
+                .with_max_backoff(Duration::from_secs(30)),
+        ))
+        .set_timeout_config(Some(timeout_config))
+        .set_sleep_impl(default_async_sleep())
+        .set_region(Some(Region::new(region.clone())));
+        base.set_stalled_stream_protection(Some(
+            StalledStreamProtectionConfig::enabled()
+                .grace_period(Duration::from_secs(20))
+                .build(),
+        ));
+        // Refresh identity slightly more frequently than the default to avoid ExpiredToken errors
+        base.set_identity_cache(Some(
+            IdentityCache::lazy()
+                .load_timeout(Duration::from_secs(10))
+                .buffer_time(Duration::from_secs(300))
+                .build(),
+        ));
+        let config = base.build();
+        S3Client::new(&config)
+    }
+
+    pub async fn create_s3_sdk_download_client(region: String) -> Arc<S3SDKClient> {
+        Arc::new(S3SDKClient::new(Self::create_sdk_client(region).await))
     }
 
     /// Different artifact types have different S3 prefixes.
@@ -83,47 +103,60 @@ impl S3ArtifactClient {
             ArtifactType::Program => "programs",
             ArtifactType::Stdin => "stdins",
             ArtifactType::Proof => "proofs",
+            ArtifactType::Groth16Circuit => "",
+            ArtifactType::PlonkCircuit => "",
+        }
+    }
+
+    /// Gets the REST API URL for an artifact.
+    pub fn get_s3_url_from_id(&self, artifact_type: ArtifactType, id: &str) -> String {
+        let url_base = format!("https://{}.s3.{}.amazonaws.com", self.bucket, self.region);
+        match artifact_type {
+            ArtifactType::Groth16Circuit => format!("{}/{}-groth16.tar.gz", url_base, id),
+            ArtifactType::PlonkCircuit => format!("{}/{}-plonk.tar.gz", url_base, id),
+            _ => format!("{}/{}/{}", url_base, Self::get_s3_prefix(artifact_type), id),
         }
     }
 
     pub fn get_s3_key_from_id(artifact_type: ArtifactType, id: &str) -> String {
-        format!("{}/{}", Self::get_s3_prefix(artifact_type), id)
+        match artifact_type {
+            ArtifactType::Groth16Circuit => format!("{}-groth16.tar.gz", id),
+            ArtifactType::PlonkCircuit => format!("{}-plonk.tar.gz", id),
+            _ => format!("{}/{}", Self::get_s3_prefix(artifact_type), id),
+        }
     }
 
-    async fn par_download_file(&self, artifact_type: ArtifactType, id: &str) -> Result<Vec<u8>> {
+    pub async fn par_download_file(
+        &self,
+        artifact_type: ArtifactType,
+        id: &str,
+    ) -> Result<Vec<u8>> {
         let key = Self::get_s3_key_from_id(artifact_type, id);
 
-        let size = self
-            .inner
-            .head_object()
-            .bucket(&self.bucket)
-            .key(key.clone())
-            .send()
-            .await?
-            .content_length
-            .unwrap();
+        let size = match self.s3_dl_mode.clone() {
+            S3DownloadMode::REST(dl_client_rest) => {
+                dl_client_rest.get_object_size(&self.bucket, &key).await?
+            }
+            S3DownloadMode::AwsSDK(dl_client_sdk) => {
+                dl_client_sdk.get_object_size(&self.bucket, &key).await?
+            }
+        };
 
         // If the file is smaller than the chunk size, just download it.
         if size <= CHUNK_SIZE as i64 {
             let bytes = backoff::future::retry(BACKOFF.clone(), || {
-                let client = self.inner.clone();
                 let bucket = self.bucket.clone();
                 let key = key.clone();
                 async move {
-                    let res = client
-                        .get_object()
-                        .bucket(&bucket)
-                        .key(key)
-                        .send()
-                        .await
-                        .map_err(|e| backoff::Error::permanent(anyhow!(e)))?;
-                    let body = res
-                        .body
-                        .collect()
-                        .await
-                        .map_err(|e| backoff::Error::transient(anyhow!(e)))?;
-                    let bytes = body.into_bytes();
-                    Ok::<_, backoff::Error<anyhow::Error>>(bytes)
+                    let ret = match self.s3_dl_mode.clone() {
+                        S3DownloadMode::REST(dl_client_rest) => {
+                            dl_client_rest.read_bytes(&bucket, &key, None).await
+                        }
+                        S3DownloadMode::AwsSDK(dl_client_sdk) => {
+                            dl_client_sdk.read_bytes(&bucket, &key, None).await
+                        }
+                    };
+                    ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
                 }
             })
             .await?;
@@ -140,7 +173,7 @@ impl S3ArtifactClient {
         let mut set = JoinSet::new();
         let (tx, mut rx) = tokio::sync::mpsc::channel(threads);
         starts.chunks(thread_size).for_each(|thread_starts| {
-            let client = self.inner.clone();
+            let s3_dl_mode = self.s3_dl_mode.clone();
             let key = key.clone();
             let tx = tx.clone();
             let semaphore = self.semaphore.clone();
@@ -151,21 +184,25 @@ impl S3ArtifactClient {
                 for (index, start) in thread_starts {
                     let end = std::cmp::min(start + CHUNK_SIZE as i64, size) - 1;
                     let body = backoff::future::retry(BACKOFF.clone(), || async {
-                        let res = client
-                            .get_object()
-                            .bucket(&bucket)
-                            .key(key.clone())
-                            .range(format!("bytes={}-{}", start, end))
-                            .send()
-                            .await
-                            .map_err(|e| backoff::Error::permanent(anyhow!(e)))?;
-                        res.body
-                            .collect()
-                            .await
-                            .map_err(|e| backoff::Error::transient(anyhow!(e)))
+                        let key = key.clone();
+                        let bucket = bucket.clone();
+                        let ret = match s3_dl_mode.clone() {
+                            S3DownloadMode::REST(s3_dl_client_rest) => {
+                                s3_dl_client_rest
+                                    .read_bytes(&bucket, &key, Some((start, end)))
+                                    .await
+                            }
+                            S3DownloadMode::AwsSDK(s3_dl_client_sdk) => {
+                                s3_dl_client_sdk
+                                    .read_bytes(&bucket, &key, Some((start, end)))
+                                    .await
+                            }
+                        };
+
+                        ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
                     })
                     .await?;
-                    tx.send((index, body.into_bytes())).await?;
+                    tx.send((index, body)).await?;
                 }
                 Ok::<(), anyhow::Error>(())
             });
@@ -202,11 +239,10 @@ impl S3ArtifactClient {
         data: Vec<u8>,
     ) -> Result<()> {
         let key = Self::get_s3_key_from_id(artifact_type, id);
-        tracing::debug!("size: {}", data.len());
 
         // If the file is smaller than the chunk size, just upload it.
         if data.len() <= CHUNK_SIZE {
-            self.inner
+            self.sdk_client
                 .put_object()
                 .bucket(&self.bucket)
                 .key(key)
@@ -218,7 +254,7 @@ impl S3ArtifactClient {
         let data = Arc::new(data);
 
         let create_multipart_upload = self
-            .inner
+            .sdk_client
             .create_multipart_upload()
             .bucket(&self.bucket)
             .key(key.clone())
@@ -238,7 +274,7 @@ impl S3ArtifactClient {
         let mut set = JoinSet::new();
         let (tx, mut rx) = tokio::sync::mpsc::channel(num_chunks);
         chunk_starts.chunks(threads).for_each(|chunk_inputs| {
-            let client = self.inner.clone();
+            let client = self.sdk_client.clone();
             let key = key.clone();
             let tx = tx.clone();
             let upload_id = upload_id.clone();
@@ -287,7 +323,7 @@ impl S3ArtifactClient {
             .map(|part_option| part_option.unwrap())
             .collect::<Vec<_>>();
 
-        self.inner
+        self.sdk_client
             .complete_multipart_upload()
             .bucket(&self.bucket)
             .key(key.clone())
@@ -333,7 +369,7 @@ impl ArtifactClient for S3ArtifactClient {
     ) -> Result<bool> {
         let key = Self::get_s3_key_from_id(artifact_type, artifact.id());
         match self
-            .inner
+            .sdk_client
             .head_object()
             .bucket(&self.bucket)
             .key(key.clone())

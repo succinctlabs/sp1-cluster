@@ -3,7 +3,11 @@ use std::{net::SocketAddr, str::FromStr};
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::Result;
 use dotenv::dotenv;
-use sp1_cluster_artifact::{redis::RedisArtifactClient, s3::S3ArtifactClient, ArtifactClient};
+use sp1_cluster_artifact::{
+    redis::RedisArtifactClient,
+    s3::{S3ArtifactClient, S3DownloadMode},
+    ArtifactClient,
+};
 use sp1_cluster_common::client::ClusterServiceClient;
 use sp1_cluster_fulfiller::{config::Settings, grpc, metrics::FulfillerMetrics, Fulfiller};
 use spn_metrics::{
@@ -29,14 +33,18 @@ async fn main() -> Result<()> {
     {
         "s3" => {
             eprintln!("using s3 artifact store");
+            let region = std::env::var("FULFILLER_CLUSTER_S3_REGION")
+                .expect("FULFILLER_CLUSTER_S3_REGION is not set");
             run(S3ArtifactClient::new(
-                std::env::var("FULFILLER_CLUSTER_S3_REGION")
-                    .expect("FULFILLER_CLUSTER_S3_REGION is not set"),
+                region.clone(),
                 std::env::var("FULFILLER_CLUSTER_S3_BUCKET")
                     .expect("FULFILLER_CLUSTER_S3_BUCKET is not set"),
                 std::env::var("FULFILLER_S3_CONCURRENCY")
                     .map(|s| s.parse().unwrap_or(32))
                     .unwrap_or(32),
+                S3DownloadMode::AwsSDK(
+                    S3ArtifactClient::create_s3_sdk_download_client(region).await,
+                ),
             )
             .await)
             .await
