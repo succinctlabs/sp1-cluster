@@ -18,7 +18,7 @@ opentelemetry-appender-tracing.workspace = true
 opentelemetry-otlp = { workspace = true, features = ["tokio", "logs"] }
 opentelemetry_sdk = { workspace = true, features = ["logs", "logs_level_enabled", "rt-tokio"] }
 prost.workspace = true
-rustls.workspace = true
+rustls = { workspace = true, features = ["ring"] }
 serde.workspace = true
 tonic.workspace = true
 tracing.workspace = true
