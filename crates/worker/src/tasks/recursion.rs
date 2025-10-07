@@ -280,9 +280,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             })
             .collect();
 
-        let mut initial_challenger = self.prover.core_prover.config().challenger();
-        vk.observe_into(&mut initial_challenger);
-
         let (deferred_inputs, deferred_digest) =
             self.prover
                 .get_recursion_deferred_inputs(vk, &sp1_reduce_proofs, 1);
@@ -342,9 +339,6 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         requester: String,
     ) -> Result<(Vec<String>, ArtifactBatch), TaskError> {
         let sp1_reduce_proofs: Vec<SP1ReduceProof<BabyBearPoseidon2>> = vec![deferred_proof];
-
-        let mut initial_challenger = self.prover.core_prover.config().challenger();
-        agg_vk.observe_into(&mut initial_challenger);
 
         let (deferred_inputs, _deferred_digest) = self
             .prover
