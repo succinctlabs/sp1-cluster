@@ -23,6 +23,7 @@ use sp1_stark::{MachineProof, MachineRecord, MachineVerificationError};
 use sp1_stark::{MachineProver, StarkGenericConfig, Verifier};
 use std::borrow::Borrow;
 use std::iter::once;
+use std::slice::from_mut;
 use tokio::try_join;
 
 use crate::client::WorkerService;
@@ -65,21 +66,19 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 None
             };
 
-        let (shard, deferred) = input.into_record(program_clone, self.clone()).await?;
+        let (mut shard, deferred) = input.into_record(program_clone, self.clone()).await?;
 
         let prover = self.prover.clone();
         let dep_span = tracing::info_span!("generate_dependencies");
         let trace_span = tracing::info_span!("generate_traces");
         let (traces, shard) = tokio::task::spawn_blocking(move || {
-            let mut vec = vec![shard];
             dep_span.in_scope(|| {
                 prover.core_prover.machine().generate_dependencies(
-                    &mut vec,
+                    from_mut(&mut shard),
                     &opts_clone.core_opts,
                     None,
                 )
             });
-            let mut shard = vec.pop().unwrap();
             if let Some(shape_config) = &prover.core_shape_config {
                 shape_config.fix_shape(&mut shard).unwrap();
             }
