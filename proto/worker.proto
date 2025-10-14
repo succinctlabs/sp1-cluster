@@ -78,6 +78,7 @@ enum TaskType {
     MARKER_DEFERRED_RECORD = 7;
     PLONK_WRAP = 8;
     GROTH16_WRAP = 9;
+    CUSTOM_CPU_TASK = 10;
 }
 
 enum TaskStatus {
