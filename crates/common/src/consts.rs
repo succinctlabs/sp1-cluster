@@ -16,7 +16,7 @@ pub fn task_weight(task_type: TaskType) -> usize {
         TaskType::MarkerDeferredRecord => 0,
         TaskType::PlonkWrap => *PLONK_WRAP_WEIGHT,
         TaskType::Groth16Wrap => *GROTH16_WRAP_WEIGHT,
-        TaskType::CustomCpuTask => 0, // TODO
+        TaskType::UtilExecuteOnly => 0,
     }
 }
 
@@ -35,4 +35,9 @@ lazy_static! {
     pub static ref PLONK_WRAP_WEIGHT: usize = std::env::var("WORKER_PLONK_WRAP_WEIGHT")
         .map(|s| s.parse().unwrap())
         .unwrap_or(32);
+
+    /// Task weight for executor-only task.
+    pub static ref EXECUTOR_WEIGHT: usize = std::env::var("WORKER_EXECUTOR_WEIGHT")
+        .map(|s| s.parse().unwrap())
+        .unwrap_or(4);
 }

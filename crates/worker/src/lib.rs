@@ -9,7 +9,10 @@ use lru::LruCache;
 use opentelemetry::Context;
 use opentelemetry::{global, trace::TraceContextExt};
 use sp1_cluster_artifact::ArtifactClient;
-use sp1_cluster_common::proto::{ProofRequestStatus, TaskStatus, TaskType, WorkerTask, WorkerType};
+use sp1_cluster_common::{
+    client::ClusterServiceClient,
+    proto::{ProofRequestStatus, TaskStatus, TaskType, WorkerTask, WorkerType},
+};
 use sp1_prover::{CoreSC, DeviceProvingKey, InnerSC, SP1Prover};
 use sp1_recursion_circuit::machine::SP1CompressWithVkeyShape;
 use sp1_sdk::network::proto::types::ProofMode;
@@ -85,6 +88,7 @@ pub struct SP1Worker<W: WorkerService, A: ArtifactClient> {
     pub metrics: Option<Arc<WorkerMetrics>>,
     pub worker_client: W,
     pub artifact_client: A,
+    pub cluster_client: Arc<ClusterServiceClient>,
     pub vkey_cache: Arc<Mutex<LruCache<String, StarkVerifyingKey<CoreSC>>>>,
 }
 
@@ -102,6 +106,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         metrics: Option<Arc<WorkerMetrics>>,
         worker_client: W,
         artifact_client: A,
+        cluster_client: Arc<ClusterServiceClient>,
     ) -> Self {
         let gpu_mem_gb = std::env::var("WORKER_GPU_MEM_GB")
             .unwrap_or("24".to_string())
@@ -135,6 +140,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             worker_client,
             artifact_client,
             vkey_cache: Arc::new(Mutex::new(LruCache::new(20.try_into().unwrap()))),
+            cluster_client,
         }
     }
 
@@ -226,11 +232,11 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                     log::error!("MarkerDeferredRecord is only a marker task");
                     Ok(TaskMetadata::default())
                 }
+                TaskType::UtilExecuteOnly => self.process_sp1_util_execute_only(task).await,
                 TaskType::UnspecifiedTaskType => {
                     log::error!("Unspecified task type");
                     Ok(TaskMetadata::default())
                 },
-                TaskType::CustomCpuTask => { todo!(); }
             }
         }
         .instrument(inner_span)

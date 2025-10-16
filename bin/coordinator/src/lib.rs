@@ -46,7 +46,7 @@ pub fn estimate_duration(task_type: TaskType) -> u128 {
         TaskType::SetupVkey => 4000,
         TaskType::MarkerDeferredRecord => 0,
         TaskType::UnspecifiedTaskType => 0,
-        TaskType::CustomCpuTask => 0, // TODO
+        TaskType::UtilExecuteOnly => 0, // TODO
     }
 }
 
