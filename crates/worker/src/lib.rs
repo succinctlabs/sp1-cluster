@@ -236,7 +236,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 TaskType::UnspecifiedTaskType => {
                     log::error!("Unspecified task type");
                     Ok(TaskMetadata::default())
-                },
+                }
             }
         }
         .instrument(inner_span)

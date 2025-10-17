@@ -16,7 +16,7 @@ pub fn task_weight(task_type: TaskType) -> usize {
         TaskType::MarkerDeferredRecord => 0,
         TaskType::PlonkWrap => *PLONK_WRAP_WEIGHT,
         TaskType::Groth16Wrap => *GROTH16_WRAP_WEIGHT,
-        TaskType::UtilExecuteOnly => 0,
+        TaskType::UtilExecuteOnly => *CONTROLLER_WEIGHT, // TODO
     }
 }
 
