@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{client::WorkerService, error::TaskError, tasks::TaskMetadata, SP1Worker};
 use sp1_cluster_artifact::ArtifactClient;
-use sp1_cluster_common::proto::{ExecutionResult, ProofRequestUpdateRequest, WorkerTask};
+use sp1_cluster_common::proto::{ProofRequestStatus, ProofRequestUpdateRequest, WorkerTask};
 use sp1_core_executor::ExecutionError;
 use sp1_sdk::network::proto::types::ExecuteFailureCause;
 use sp1_sdk::{SP1Context, SP1Stdin};
@@ -25,7 +25,8 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             self.artifact_client.download_stdin(&data.inputs[1]),
         )?;
         let cycle_limit = if data.inputs.len() > 2 {
-            data.inputs[2].parse::<u64>().ok()
+            // [2] is options_artifact_id, [3] is cycle_limit
+            data.inputs[3].parse::<u64>().ok() 
         } else {
             None
         };
@@ -39,30 +40,21 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         // Stop execution if the cycle limit is reached, + 1 to account for >= executor max_cycles check:
         // https://github.com/succinctlabs/sp1-wip/blob/7a3e3b25298f665a31a7aea0901e1739b4574324/crates/core/executor/src/executor.rs#L1786-L1791
         if let Some(cycle_limit) = cycle_limit {
-            context.max_cycles = Some(cycle_limit + 1);
+            if cycle_limit != 0 {
+                context.max_cycles = Some(cycle_limit + 1);
+            }
         }
 
         let execution_result = prover.execute(&elf, &stdin_clone, context);
 
         match execution_result {
-            Ok((_, public_values_hash, execution_report)) => {
-                let cycles = execution_report.total_instruction_count();
-                let gas_used = execution_report.gas;
-
+            Ok((_, _, _)) => {
                 self.cluster_client
                     .update_proof_request(ProofRequestUpdateRequest {
                         proof_id,
-                        proof_status: Some(0), // TODO
-                        execution_result: Some(ExecutionResult {
-                            status: 0,        // TODO
-                            failure_cause: 0, // TODO
-                            cycles,
-                            gas: gas_used.unwrap_or(0),
-                            public_values_hash: Vec::from(public_values_hash),
-                        }),
-                        deadline: None,
+                        proof_status: Some(ProofRequestStatus::Completed as i32),
                         handled: Some(true),
-                        metadata: None,
+                        ..Default::default()
                     })
                     .await?;
             }

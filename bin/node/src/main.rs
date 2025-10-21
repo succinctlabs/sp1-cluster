@@ -341,8 +341,8 @@ async fn run_worker<A: ArtifactClient>(
         }
         let prover = Arc::new(inner_prover);
 
-        // TODO: NODE_COORDINATOR_RPC?
-        let cluster_client = ClusterServiceClient::new(addr.clone()).await?;
+        let cluster_rpc_addr = env::var("CLUSTER_RPC").expect("CLUSTER_RPC needs to be set");
+        let cluster_client = ClusterServiceClient::new(cluster_rpc_addr.clone()).await?;
 
         // Create worker.
         let worker = Arc::new(SP1Worker::new(

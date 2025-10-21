@@ -6,7 +6,10 @@ tonic::include_proto!("cluster");
 impl WorkerType {
     pub fn from_task_type(task_type: TaskType) -> Self {
         match task_type {
-            TaskType::Controller | TaskType::PlonkWrap | TaskType::Groth16Wrap | TaskType::UtilExecuteOnly => WorkerType::Cpu,
+            TaskType::Controller
+            | TaskType::PlonkWrap
+            | TaskType::Groth16Wrap
+            | TaskType::UtilExecuteOnly => WorkerType::Cpu,
             TaskType::ProveShard
             | TaskType::RecursionReduce
             | TaskType::RecursionDeferred
