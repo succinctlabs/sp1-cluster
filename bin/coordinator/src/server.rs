@@ -534,6 +534,19 @@ pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Syn
 
     service.coordinator.set_proofs_tx(completed_tx).await;
 
+    let is_executor_cluster_mode = std::env::var("COORDINATOR_IS_EXECUTOR_CLUSTER_MODE")
+        .unwrap_or("false".to_string())
+        .to_lowercase()
+        == "true";
+    service
+        .coordinator
+        .set_executor_cluster_mode(is_executor_cluster_mode)
+        .await;
+    tracing::info!(
+        "COORDINATOR_IS_EXECUTOR_CLUSTER_MODE={}",
+        is_executor_cluster_mode,
+    );
+
     if !config.disable_proof_status_update {
         spawn_proof_status_task(api_client.clone(), task_map.clone(), completed_rx);
     } else {

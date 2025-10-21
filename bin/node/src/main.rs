@@ -10,6 +10,7 @@ use sp1_cluster_artifact::s3::S3DownloadMode;
 use sp1_cluster_artifact::s3_rest::S3RestClient;
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_artifact::{s3::S3ArtifactClient, ArtifactType};
+use sp1_cluster_common::client::ClusterServiceClient;
 use sp1_cluster_common::proto::{
     self, server_message, CloseRequest, CompleteTaskRequest, FailTaskRequest, HeartbeatRequest,
     TaskData, WorkerType,
@@ -340,6 +341,9 @@ async fn run_worker<A: ArtifactClient>(
         }
         let prover = Arc::new(inner_prover);
 
+        let cluster_rpc_addr = env::var("CLUSTER_RPC").expect("CLUSTER_RPC needs to be set");
+        let cluster_client = ClusterServiceClient::new(cluster_rpc_addr.clone()).await?;
+
         // Create worker.
         let worker = Arc::new(SP1Worker::new(
             prover.clone(),
@@ -347,6 +351,7 @@ async fn run_worker<A: ArtifactClient>(
             metrics, // Pass metrics to worker
             client.clone(),
             artifact_client,
+            cluster_client.into(),
         ));
 
         let mut channel = client.open().await?;

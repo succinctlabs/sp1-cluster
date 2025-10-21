@@ -5,6 +5,7 @@ mod recursion;
 mod setup;
 mod shrink_wrap;
 mod types;
+mod utils;
 
 pub use controller::{
     shards::{ShardEventData, ShardEventsMode},

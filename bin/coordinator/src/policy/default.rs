@@ -298,8 +298,8 @@ impl Ord for QueuedTask {
             // 1. Order by proof_created_at
             // 2. Order by task created_at
             (
-                TaskType::Controller | TaskType::PlonkWrap | TaskType::Groth16Wrap,
-                TaskType::Controller | TaskType::PlonkWrap | TaskType::Groth16Wrap,
+                TaskType::Controller | TaskType::PlonkWrap | TaskType::Groth16Wrap | TaskType::UtilExecuteOnly,
+                TaskType::Controller | TaskType::PlonkWrap | TaskType::Groth16Wrap | TaskType::UtilExecuteOnly,
             ) => self
                 .proof_created_at
                 .cmp(&other.proof_created_at)
