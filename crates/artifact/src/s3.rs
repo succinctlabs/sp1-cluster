@@ -1,4 +1,5 @@
-use crate::{s3_rest::S3RestClient, s3_sdk::S3SDKClient, ArtifactClient, ArtifactId, ArtifactType};
+use crate::{s3_rest::S3RestClient, s3_sdk::S3SDKClient};
+use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType};
 
 use anyhow::{anyhow, Result};
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, BehaviorVersion, Region};
@@ -340,7 +341,6 @@ impl S3ArtifactClient {
     }
 }
 
-#[async_trait::async_trait]
 impl ArtifactClient for S3ArtifactClient {
     #[instrument(name = "upload", level = "info", fields(id = artifact.id()), skip(self, artifact, data))]
     async fn upload_raw(

@@ -262,7 +262,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
         // Clean up the proof artifact since it's no longer needed
         self.cluster_artifact_client
             .try_delete(&id, sp1_cluster_artifact::ArtifactType::Proof)
-            .await;
+            .await?;
 
         Ok(())
     }

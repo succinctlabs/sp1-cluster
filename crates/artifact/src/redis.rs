@@ -5,10 +5,9 @@ use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
 use deadpool_redis::redis::{AsyncCommands, HashFieldExpirationOptions, SetExpiry, SetOptions};
 use deadpool_redis::{Config, Connection as RedisConnection, Pool, PoolConfig, Runtime};
 use sp1_cluster_common::util::backoff_retry;
+use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType};
 use tokio::task::JoinSet;
 use tracing::instrument;
-
-use crate::{ArtifactClient, ArtifactId, ArtifactType};
 
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
@@ -201,7 +200,6 @@ impl RedisArtifactClient {
     }
 }
 
-#[async_trait::async_trait]
 impl ArtifactClient for RedisArtifactClient {
     #[instrument(name = "upload", level = "info", fields(id = artifact.id()), skip(self, artifact, data))]
     async fn upload_raw(
@@ -357,7 +355,7 @@ impl ArtifactClient for RedisArtifactClient {
 
         if should_delete {
             // Delete the artifact since no references remain
-            self.try_delete(artifact, artifact_type).await;
+            self.try_delete(artifact, artifact_type).await?;
         }
         Ok(should_delete)
     }

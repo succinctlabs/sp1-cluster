@@ -8,6 +8,7 @@ categories.workspace = true
 
 [dependencies]
 backoff = { workspace = true, features = ["futures", "tokio"] }
+sp1-prover-types = { workspace = true }
 eyre.workspace = true
 futures.workspace = true
 if-addrs.workspace = true
@@ -16,7 +17,11 @@ log.workspace = true
 opentelemetry.workspace = true
 opentelemetry-appender-tracing.workspace = true
 opentelemetry-otlp = { workspace = true, features = ["tokio", "logs"] }
-opentelemetry_sdk = { workspace = true, features = ["logs", "logs_level_enabled", "rt-tokio"] }
+opentelemetry_sdk = { workspace = true, features = [
+    "logs",
+    "logs_level_enabled",
+    "rt-tokio",
+] }
 prost.workspace = true
 rustls.workspace = true
 serde.workspace = true
