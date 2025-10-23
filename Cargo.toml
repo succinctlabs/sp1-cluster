@@ -1,15 +1,18 @@
 
 [workspace]
+resolver = "2"
 members = [
     "bin/api",
     "bin/bidder",
     "bin/fulfiller",
     "bin/coordinator",
+    "bin/node",
+    "bin/cli",
+    # "bin/sp1-redis-test",
     "crates/artifact",
     "crates/common",
+    "crates/worker",
 ]
-exclude = ["crates/worker", "bin/node"]
-resolver = "2"
 [workspace.package]
 version = "1.0.0"
 edition = "2021"
@@ -22,7 +25,7 @@ categories = []
 # Workspace
 sp1-cluster-artifact = { path = "crates/artifact" }
 sp1-cluster-common = { path = "crates/common" }
-# sp1-cluster-worker = { path = "crates/worker" }
+sp1-cluster-worker = { path = "crates/worker" }
 
 # P3
 p3-baby-bear = "=0.2.3-succinct"
@@ -30,31 +33,44 @@ p3-challenger = "=0.2.3-succinct"
 p3-field = "=0.2.3-succinct"
 p3-matrix = "=0.2.3-succinct"
 
-# Moongate
-moongate-core = { git = "https://github.com/succinctlabs/moongate", branch = "dev" }
-moongate-prover = { git = "https://github.com/succinctlabs/moongate", branch = "dev" }
-
-# Hypercube
-sp1-prover-types = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
-
-# Local deps for testing
-# sp1-prover-types = { path = "../sp1-wip/crates/prover-types" }
-
-# SP1
-sp1-core-executor = { version = "5.2.1" }
-sp1-core-machine = { version = "5.2.1", features = ["bigint-rug"] }
-sp1-prover = { version = "5.2.1" }
-sp1-recursion-circuit = { version = "5.2.1" }
-sp1-recursion-compiler = { version = "5.2.1" }
-sp1-recursion-core = { version = "5.2.1" }
-sp1-sdk = { version = "5.2.1" }
-sp1-stark = { version = "5.2.1" }
+# SPN
 spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = [
     "network",
 ] }
 spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
+
+# SP1
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6", features = [
+    "bigint-rug",
+] }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
+
+# cuslop
+csl-prover = { git = "https://github.com/succinctlabs/cuslop" }
+csl-cuda = { git = "https://github.com/succinctlabs/cuslop" }
+
+# # SP1 local
+# sp1-core-executor = { path = "../sp1-wip/crates/core/executor" }
+# sp1-core-machine = { path = "../sp1-wip/crates/core/machine", features = [
+#     "bigint-rug",
+# ] }
+# sp1-prover = { path = "../sp1-wip/crates/prover" }
+# sp1-prover-types = { path = "../sp1-wip/crates/prover-types" }
+# sp1-hypercube = { path = "../sp1-wip/crates/hypercube" }
+# sp1-sdk = { path = "../sp1-wip/crates/sdk" }
+
+# # cuslop
+# csl-prover = { path = "../cuslop/crates/prover" }
+# csl-cuda = { path = "../cuslop/crates/cuda" }
 
 # Misc
 alloy = { version = "0.14.0", default-features = false, features = ["serde"] }
@@ -141,9 +157,6 @@ debug = true
 [profile.release.build-override]
 opt-level = 3
 
-[profile.release.package.moongate-core]
-debug = false
-
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
 opt-level = 1
@@ -152,8 +165,6 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
-[profile.dev.package.moongate-core]
-debug = false
 
 [profile.dev.build-override]
 opt-level = 3

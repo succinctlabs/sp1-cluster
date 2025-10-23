@@ -32,9 +32,7 @@ pub async fn reconnect_with_backoff(addr: &str) -> Result<Channel> {
         if addr.starts_with("https://") {
             builder = builder
                 .tls_config(
-                    ClientTlsConfig::new()
-                        .with_enabled_roots()
-                        .with_native_roots(),
+                    ClientTlsConfig::new().with_enabled_roots(), // .with_native_roots(),
                 )
                 .unwrap();
         }

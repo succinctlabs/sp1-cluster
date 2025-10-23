@@ -1,15 +1,13 @@
 use cfg_if::cfg_if;
 use dashmap::DashMap;
 use eyre::Result;
-use flate2::read::GzDecoder;
 use jemallocator::Jemalloc;
 use opentelemetry::KeyValue;
 use rand::Rng;
 use sp1_cluster_artifact::redis::RedisArtifactClient;
+use sp1_cluster_artifact::s3::S3ArtifactClient;
 use sp1_cluster_artifact::s3::S3DownloadMode;
-use sp1_cluster_artifact::s3_rest::S3RestClient;
 use sp1_cluster_artifact::ArtifactClient;
-use sp1_cluster_artifact::{s3::S3ArtifactClient, ArtifactType};
 use sp1_cluster_common::proto::{
     self, server_message, CloseRequest, CompleteTaskRequest, FailTaskRequest, HeartbeatRequest,
     TaskData, WorkerType,
@@ -18,19 +16,73 @@ use sp1_cluster_common::util::get_private_ip;
 use sp1_cluster_worker::client::WorkerServiceClient;
 use sp1_cluster_worker::metrics::{initialize_metrics, WorkerMetrics};
 use sp1_cluster_worker::utils::get_ecs_task_info;
-use sp1_cluster_worker::SP1Worker;
-use sp1_sdk::SP1_CIRCUIT_VERSION;
+use sp1_cluster_worker::ClusterProverComponents;
+use sp1_cluster_worker::SP1ClusterWorker;
+use sp1_hypercube::prover::ProverSemaphore;
+use sp1_prover::worker::SP1WorkerBuilder;
+use sp1_prover::worker::{SP1Worker, WorkerClient};
+use sp1_prover::{components::CoreProver, SP1ProverComponents};
 use std::collections::HashSet;
 use std::env;
-use std::io::Cursor;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
-use tar::Archive;
-use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
+
+// TODO: reimplement circuit artifact installation
+// use sp1_cluster_artifact::s3_rest::S3RestClient;
+// use flate2::read::GzDecoder;
+// use sp1_cluster_artifact::ArtifactType;
+// use sp1_sdk::SP1_CIRCUIT_VERSION;
+// use std::io::Cursor;
+// use std::path::PathBuf;
+// use tar::Archive;
+
+#[cfg(feature = "gpu")]
+use csl_cuda::TaskScope;
+
+#[cfg(feature = "gpu")]
+use csl_prover::new_cuda_prover_sumcheck_eval;
+
+#[cfg(not(feature = "gpu"))]
+use sp1_hypercube::prover::CpuShardProver;
+
+#[cfg(feature = "gpu")]
+fn build_worker<A: ArtifactClient, W: WorkerClient>(
+    artifact_client: A,
+    worker_client: W,
+    backend: TaskScope,
+) -> Result<SP1Worker<A, W, ClusterProverComponents>> {
+    let mut builder = SP1WorkerBuilder::new(artifact_client, worker_client);
+
+    let core_verifier = ClusterProverComponents::core_verifier();
+    let core_air_prover: CoreProver<ClusterProverComponents> =
+        new_cuda_prover_sumcheck_eval(core_verifier.shard_verifier().clone(), backend.clone());
+    let core_air_prover = Arc::new(core_air_prover);
+    let permits = ProverSemaphore::new(1);
+    builder = builder.with_core_air_prover(core_air_prover, permits);
+    builder
+        .build()
+        .map_err(|e| eyre::eyre!("failed to build gpu worker: {}", e))
+}
+
+#[cfg(not(feature = "gpu"))]
+fn build_worker<A: ArtifactClient, W: WorkerClient>(
+    artifact_client: A,
+    worker_client: W,
+) -> Result<SP1Worker<A, W, ClusterProverComponents>> {
+    let mut builder = SP1WorkerBuilder::new(artifact_client, worker_client);
+    let core_verifier = ClusterProverComponents::core_verifier();
+    let cpu_shard_prover = CpuShardProver::new(core_verifier.shard_verifier().clone());
+    let core_air_prover = Arc::new(cpu_shard_prover);
+
+    let permit = ProverSemaphore::new(1);
+    builder = builder.with_core_air_prover(core_air_prover, permit);
+    builder
+        .build()
+        .map_err(|e| eyre::eyre!("failed to build worker: {}", e))
+}
 
 #[global_allocator]
 pub static ALLOCATOR: Jemalloc = Jemalloc;
@@ -51,7 +103,7 @@ async fn main() -> Result<()> {
     match dotenv::dotenv() {
         std::result::Result::Ok(_) => {}
         Err(e) => {
-            println!("failed to load .env file: {e:?}");
+            println!("failed to load .env file: {:?}", e);
         }
     }
 
@@ -89,7 +141,15 @@ async fn main() -> Result<()> {
             S3DownloadMode::AwsSDK(S3ArtifactClient::create_s3_sdk_download_client(region).await),
         )
         .await;
-        run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client).await?;
+        cfg_if! {
+            if #[cfg(feature = "gpu")] {
+                csl_cuda::spawn(move |t| async move { run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client, t.clone()).await.unwrap(); })
+                    .await
+                    .unwrap();
+            } else {
+                run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client).await?;
+            }
+        }
     } else {
         eprintln!("using redis artifact store");
         let artifact_client = RedisArtifactClient::new(
@@ -103,91 +163,100 @@ async fn main() -> Result<()> {
                 .parse()
                 .unwrap(),
         );
-        run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client).await?;
+        eprintln!("redis is set up");
+        cfg_if! {
+            if #[cfg(feature = "gpu")] {
+                csl_cuda::spawn(move |t| async move { run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client, t.clone()).await.unwrap(); })
+                    .await
+                    .unwrap();
+            } else {
+                run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client).await?;
+            }
+        }
     };
 
     Ok(())
 }
 
-/// Install circuit artifacts using chunked parallel downloads.
-///
-/// This function downloads circuit artifacts using S3 chunked parallel downloads for better
-/// performance, then extracts them using the same tar approach as the SDK.
-fn install_circuit_artifacts(artifact_type: &str, artifact_client: S3ArtifactClient) -> PathBuf {
-    let home_dir = dirs::home_dir().unwrap();
-    let final_dir = match artifact_type {
-        "groth16" => sp1_sdk::install::groth16_circuit_artifacts_dir(),
-        "plonk" => sp1_sdk::install::plonk_circuit_artifacts_dir(),
-        _ => panic!("invalid artifact type: {artifact_type}"),
-    };
-    if final_dir.exists() {
-        // Clear the directory every time, since contents may not be valid.
-        if std::fs::read_dir(&final_dir).unwrap().next().is_some() {
-            return final_dir;
-        }
-    } else if let Err(e) = std::fs::create_dir_all(&final_dir) {
-        tracing::info!("Not creating circuits dir: {:?}", e);
-    }
-    let temp_dir = home_dir
-        .join(".sp1/circuits/temp")
-        .join(artifact_type)
-        .join(SP1_CIRCUIT_VERSION);
-    if temp_dir.exists() {
-        std::fs::remove_dir_all(&temp_dir).unwrap();
-    }
-    if let Err(e) = std::fs::create_dir_all(&temp_dir) {
-        tracing::info!("Not creating temp dir: {:?}", e);
-    }
+// /// TODO: reinstate. Install circuit artifacts using chunked parallel downloads.
+// ///
+// /// This function downloads circuit artifacts using S3 chunked parallel downloads for better
+// /// performance, then extracts them using the same tar approach as the SDK.
+// fn install_circuit_artifacts(artifact_type: &str, artifact_client: S3ArtifactClient) -> PathBuf {
+//     let home_dir = dirs::home_dir().unwrap();
+//     let final_dir = match artifact_type {
+//         "groth16" => sp1_sdk::install::groth16_circuit_artifacts_dir(),
+//         "plonk" => sp1_sdk::install::plonk_circuit_artifacts_dir(),
+//         _ => panic!("invalid artifact type: {}", artifact_type),
+//     };
+//     if final_dir.exists() {
+//         // Clear the directory every time, since contents may not be valid.
+//         if std::fs::read_dir(&final_dir).unwrap().next().is_some() {
+//             return final_dir;
+//         }
+//     } else if let Err(e) = std::fs::create_dir_all(&final_dir) {
+//         tracing::info!("Not creating circuits dir: {:?}", e);
+//     }
+//     let temp_dir = home_dir
+//         .join(".sp1/circuits/temp")
+//         .join(artifact_type)
+//         .join(SP1_CIRCUIT_VERSION);
+//     if temp_dir.exists() {
+//         std::fs::remove_dir_all(&temp_dir).unwrap();
+//     }
+//     if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+//         tracing::info!("Not creating temp dir: {:?}", e);
+//     }
 
-    // Use chunked parallel download with provided client.
-    let rt_handle = tokio::runtime::Handle::current();
-    rt_handle.block_on(async {
-        let artifact_type_enum = match artifact_type {
-            "groth16" => ArtifactType::Groth16Circuit,
-            "plonk" => ArtifactType::PlonkCircuit,
-            _ => panic!("invalid artifact type: {artifact_type}"),
-        };
+//     // Use chunked parallel download with provided client.
+//     let rt_handle = tokio::runtime::Handle::current();
+//     rt_handle.block_on(async {
+//         let artifact_type_enum = match artifact_type {
+//             "groth16" => ArtifactType::Groth16Circuit,
+//             "plonk" => ArtifactType::PlonkCircuit,
+//             _ => panic!("invalid artifact type: {}", artifact_type),
+//         };
 
-        // Download tar.gz bytes using chunked parallel download.
-        let download_start = std::time::Instant::now();
-        let tar_gz_bytes = artifact_client
-            .par_download_file(artifact_type_enum, SP1_CIRCUIT_VERSION)
-            .await
-            .expect("failed to download circuit artifacts");
-        let download_duration = download_start.elapsed();
-        tracing::info!(
-            "{} download completed in {:.2} seconds ({} bytes)",
-            artifact_type,
-            download_duration.as_secs_f64(),
-            tar_gz_bytes.len()
-        );
-        // Extract artifacts.
-        let extract_start = std::time::Instant::now();
-        let gz = GzDecoder::new(Cursor::new(tar_gz_bytes));
-        let mut archive = Archive::new(gz);
-        archive
-            .unpack(&temp_dir)
-            .expect("failed to extract archive");
-        let extract_duration = extract_start.elapsed();
-        tracing::info!(
-            "{} extraction completed in {:.2} seconds",
-            artifact_type,
-            extract_duration.as_secs_f64()
-        );
+//         // Download tar.gz bytes using chunked parallel download.
+//         let download_start = std::time::Instant::now();
+//         let tar_gz_bytes = artifact_client
+//             .par_download_file(artifact_type_enum, SP1_CIRCUIT_VERSION)
+//             .await
+//             .expect("failed to download circuit artifacts");
+//         let download_duration = download_start.elapsed();
+//         tracing::info!(
+//             "{} download completed in {:.2} seconds ({} bytes)",
+//             artifact_type,
+//             download_duration.as_secs_f64(),
+//             tar_gz_bytes.len()
+//         );
+//         // Extract artifacts.
+//         let extract_start = std::time::Instant::now();
+//         let gz = GzDecoder::new(Cursor::new(tar_gz_bytes));
+//         let mut archive = Archive::new(gz);
+//         archive
+//             .unpack(&temp_dir)
+//             .expect("failed to extract archive");
+//         let extract_duration = extract_start.elapsed();
+//         tracing::info!(
+//             "{} extraction completed in {:.2} seconds",
+//             artifact_type,
+//             extract_duration.as_secs_f64()
+//         );
 
-        let total_duration = download_start.elapsed();
-        tracing::info!(
-            "{} total download + extract completed in {:.2} seconds",
-            artifact_type,
-            total_duration.as_secs_f64()
-        );
-    });
+//         let total_duration = download_start.elapsed();
+//         tracing::info!(
+//             "{} total download + extract completed in {:.2} seconds",
+//             artifact_type,
+//             total_duration.as_secs_f64()
+//         );
+//     });
 
-    // Move to final location.
-    std::fs::rename(&temp_dir, &final_dir).unwrap();
+//     // Move to final location.
+//     std::fs::rename(&temp_dir, &final_dir).unwrap();
 
-    final_dir
-}
+//     final_dir
+// }
 
 /// Run the worker.
 async fn run_worker<A: ArtifactClient>(
@@ -195,6 +264,7 @@ async fn run_worker<A: ArtifactClient>(
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     metrics: Option<Arc<WorkerMetrics>>,
     artifact_client: A,
+    #[cfg(feature = "gpu")] task_scope: TaskScope,
 ) -> Result<()> {
     {
         // Get info about the worker.
@@ -250,63 +320,61 @@ async fn run_worker<A: ArtifactClient>(
         let worker_type = WorkerType::from_str_name(&worker_type_str).expect("invalid worker type");
         tracing::info!("worker type: {:?}", worker_type);
 
-        // For CPU workers, download circuit artifacts before connecting.
-        if worker_type != WorkerType::Gpu {
-            let start_time = std::time::Instant::now();
-            tracing::info!("Downloading circuit artifacts before connecting to server");
+        // // For CPU workers, download circuit artifacts before connecting.
+        // if worker_type != WorkerType::Gpu {
+        //     let start_time = std::time::Instant::now();
+        //     tracing::info!("Downloading circuit artifacts before connecting to server");
 
-            // Create a single S3ArtifactClient for both downloads.
-            let concurrency = std::env::var("S3_CONCURRENCY")
-                .map(|s| s.parse().unwrap_or(32))
-                .unwrap_or(32);
-            let region = "us-east-2".to_string();
-            let bucket = "sp1-circuits".to_string();
-            tracing::info!(
-                "Creating S3ArtifactClient - concurrency: {}, region: {}, bucket: {}",
-                concurrency,
-                region.clone(),
-                bucket
-            );
+        //     // Create a single S3ArtifactClient for both downloads.
+        //     let concurrency = std::env::var("S3_CONCURRENCY")
+        //         .map(|s| s.parse().unwrap_or(32))
+        //         .unwrap_or(32);
+        //     let region = "us-east-2".to_string();
+        //     let bucket = "sp1-circuits".to_string();
+        //     tracing::info!(
+        //         "Creating S3ArtifactClient - concurrency: {}, region: {}, bucket: {}",
+        //         concurrency,
+        //         region.clone(),
+        //         bucket
+        //     );
 
-            let artifact_client_rest = S3ArtifactClient::new(
-                region.clone(),
-                bucket,
-                concurrency,
-                S3DownloadMode::REST(Arc::new(S3RestClient::new(region.clone()))),
-            )
-            .await;
-            // Download groth16 and plonk artifacts concurrently using shared client.
-            // these artifacts will be downloaded with public s3 obj urls.
-            let (_, _) = tokio::try_join!(
-                tokio::task::spawn_blocking({
-                    let artifact_client = artifact_client_rest.clone();
-                    move || {
-                        tracing::info!("Downloading groth16 artifacts");
-                        install_circuit_artifacts("groth16", artifact_client)
-                    }
-                }),
-                tokio::task::spawn_blocking({
-                    let artifact_client = artifact_client_rest.clone();
-                    move || {
-                        tracing::info!("Downloading plonk artifacts");
-                        install_circuit_artifacts("plonk", artifact_client)
-                    }
-                })
-            )?;
+        //     let artifact_client_rest = S3ArtifactClient::new(
+        //         region.clone(),
+        //         bucket,
+        //         concurrency,
+        //         S3DownloadMode::REST(Arc::new(S3RestClient::new(region.clone()))),
+        //     )
+        //     .await;
+        //     // Download groth16 and plonk artifacts concurrently using shared client.
+        //     // these artifacts will be downloaded with public s3 obj urls.
+        //     let (_, _) = tokio::try_join!(
+        //         tokio::task::spawn_blocking({
+        //             let artifact_client = artifact_client_rest.clone();
+        //             move || {
+        //                 tracing::info!("Downloading groth16 artifacts");
+        //                 install_circuit_artifacts("groth16", artifact_client)
+        //             }
+        //         }),
+        //         tokio::task::spawn_blocking({
+        //             let artifact_client = artifact_client_rest.clone();
+        //             move || {
+        //                 tracing::info!("Downloading plonk artifacts");
+        //                 install_circuit_artifacts("plonk", artifact_client)
+        //             }
+        //         })
+        //     )?;
 
-            let elapsed = start_time.elapsed();
-            tracing::info!(
-                "Circuit artifacts ready after {:.1} seconds",
-                elapsed.as_secs_f64()
-            );
-        }
+        //     let elapsed = start_time.elapsed();
+        //     tracing::info!(
+        //         "Circuit artifacts ready after {:.1} seconds",
+        //         elapsed.as_secs_f64()
+        //     );
+        // }
 
         // Connect to server only after artifacts are ready.
-        let client = WorkerServiceClient::new(addr.clone(), worker_id.clone()).await?;
+        let worker_client = WorkerServiceClient::new(addr.clone(), worker_id.clone()).await?;
 
         let tasks: Arc<DashMap<(String, String), ActiveTask>> = Arc::new(DashMap::new());
-
-        let gpu_semaphore = Arc::new(Semaphore::new(1));
 
         // Gather memory metrics.
         tokio::spawn({
@@ -333,23 +401,17 @@ async fn run_worker<A: ArtifactClient>(
         // Setup SP1 prover.
         cfg_if! {
             if #[cfg(feature = "gpu")] {
-                let inner_prover = moongate_prover::SP1GpuProver::new();
+                let inner_worker = build_worker(artifact_client, worker_client.clone(), task_scope)?;
             } else {
-                let inner_prover = sp1_prover::SP1Prover::new();
+                let inner_worker = build_worker(artifact_client, worker_client.clone())?;
             }
         }
-        let prover = Arc::new(inner_prover);
+        let prover = Arc::new(inner_worker);
 
         // Create worker.
-        let worker = Arc::new(SP1Worker::new(
-            prover.clone(),
-            gpu_semaphore,
-            metrics, // Pass metrics to worker
-            client.clone(),
-            artifact_client,
-        ));
+        let worker = Arc::new(SP1ClusterWorker::new(prover.clone(), metrics));
 
-        let mut channel = client.open().await?;
+        let mut channel = worker_client.open().await?;
 
         // Spawn task to handle messages from the coordinator.
         let main_handle = tokio::spawn({
@@ -384,7 +446,7 @@ async fn run_worker<A: ArtifactClient>(
                                             let worker = worker.clone();
                                             let task = task.clone();
                                             let data = data.clone();
-                                            let client = client.clone();
+                                            let worker_client = worker_client.clone();
                                             let key = key.clone();
                                             let worker_id = worker_id.clone();
                                             let tasks = tasks.clone();
@@ -395,7 +457,7 @@ async fn run_worker<A: ArtifactClient>(
                                                 match status {
                                                     proto::TaskStatus::Succeeded => {
                                                         let metadata_string = serde_json::to_string(&metadata.expect("successful task should have metadata")).unwrap();
-                                                        if let Err(e) = client.complete_task(CompleteTaskRequest {
+                                                        if let Err(e) = worker_client.complete_task(CompleteTaskRequest {
                                                             worker_id,
                                                             proof_id: data.proof_id.clone(),
                                                             task_id: task.task_id.clone(),
@@ -407,7 +469,7 @@ async fn run_worker<A: ArtifactClient>(
                                                     _ => {
                                                         let retryable = status
                                                             == sp1_cluster_common::proto::TaskStatus::FailedRetryable;
-                                                        if let Err(e) = client.fail_task(FailTaskRequest {
+                                                        if let Err(e) = worker_client.fail_task(FailTaskRequest {
                                                             worker_id,
                                                             proof_id: data.proof_id.clone(),
                                                             task_id: task.task_id.clone(),
@@ -448,11 +510,11 @@ async fn run_worker<A: ArtifactClient>(
                                             active_task_ids: task_ids,
                                             current_weight,
                                         };
-                                        if let Err(e) = client.heartbeat(request).await  {
-                                            eprintln!("Failed to send heartbeat: {e}");
+                                        if let Err(e) = worker_client.heartbeat(request).await  {
+                                            eprintln!("Failed to send heartbeat: {}", e);
                                             if e.code() == tonic::Code::NotFound {
                                                 tracing::warn!("Worker not found, reconnecting...");
-                                                match client.open().await {
+                                                match worker_client.open().await {
                                                     Ok(new_channel) => {
                                                         channel = new_channel;
                                                     }
@@ -472,7 +534,7 @@ async fn run_worker<A: ArtifactClient>(
                                 None => {
                                     tracing::error!("Server closed connection");
                                     // Try to reconnect with exponential backoff
-                                    match client.open().await
+                                    match worker_client.open().await
                                     {
                                         Ok(new_channel) => {
                                             channel = new_channel;
@@ -495,7 +557,7 @@ async fn run_worker<A: ArtifactClient>(
                             }
                             if last_heartbeat.elapsed() > Duration::from_secs(10) {
                                 tracing::error!("Heartbeat timed out, reconnecting...");
-                                match client.open().await {
+                                match worker_client.open().await {
                                     Ok(new_channel) => {
                                         channel = new_channel;
                                         last_heartbeat = Instant::now(); // Reset heartbeat timer
@@ -526,7 +588,7 @@ async fn run_worker<A: ArtifactClient>(
                                 };
                                 if let Err(e) = task.1.await {
                                     tracing::error!("Task {:?} panicked: {:?}", task_id, e);
-                                    if let Err(e) = client.fail_task(FailTaskRequest {
+                                    if let Err(e) = worker_client.fail_task(FailTaskRequest {
                                         worker_id: worker_id.clone(),
                                         proof_id: task_id.0,
                                         task_id: task_id.1,
@@ -545,7 +607,7 @@ async fn run_worker<A: ArtifactClient>(
                                 };
                                 tracing::error!("Task {:?} timed out after {:?}", task_id, TASK_TIMEOUT);
                                 task.1.abort();
-                                if let Err(e) = client.fail_task(FailTaskRequest {
+                                if let Err(e) = worker_client.fail_task(FailTaskRequest {
                                     worker_id: worker_id.clone(),
                                     proof_id: task_id.0,
                                     task_id: task_id.1,
@@ -557,7 +619,7 @@ async fn run_worker<A: ArtifactClient>(
                         }
                         _ = shutdown_rx.changed() => {
                             closed = true;
-                            if let Err(e) = client.close(CloseRequest {
+                            if let Err(e) = worker_client.close(CloseRequest {
                                 worker_id: worker_id.clone(),
                             }).await {
                                 tracing::error!("Failed to close worker: {:?}", e);

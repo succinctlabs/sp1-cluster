@@ -9,22 +9,21 @@ categories.workspace = true
 [features]
 default = ["native-gnark"]
 native-gnark = ["sp1-sdk/native-gnark"]
-gpu = ["dep:moongate-core", "dep:moongate-prover"]
+gpu = ["dep:csl-prover", "dep:csl-cuda"]
 
 [dependencies]
 sp1-cluster-artifact = { workspace = true }
 sp1-cluster-common = { workspace = true }
+
 sp1-core-executor = { workspace = true }
 sp1-core-machine = { workspace = true, features = ["bigint-rug"] }
 sp1-prover = { workspace = true }
-sp1-recursion-circuit = { workspace = true }
-sp1-recursion-compiler = { workspace = true }
-sp1-recursion-core = { workspace = true }
 sp1-sdk = { workspace = true }
-sp1-stark = { workspace = true }
+sp1-prover-types = { workspace = true }
+sp1-hypercube = { workspace = true }
 
-moongate-core = { workspace = true, optional = true }
-moongate-prover = { workspace = true, optional = true }
+csl-prover = { workspace = true, optional = true }
+csl-cuda = { workspace = true, optional = true }
 
 p3-baby-bear = { workspace = true }
 p3-challenger = { workspace = true }

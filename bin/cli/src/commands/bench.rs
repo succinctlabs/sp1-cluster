@@ -82,7 +82,7 @@ impl BenchCommand {
                 let elf = include_bytes!("../../../../artifacts/fibonacci.bin");
                 Self::run_benchmark(
                     elf.to_vec(),
-                    bincode::serialize(&stdin).unwrap(),
+                    stdin.clone(),
                     common,
                     Some(*mcycles as u64 * 1_000_000),
                 )
@@ -100,8 +100,8 @@ impl BenchCommand {
                     common.mode
                 );
                 let elf = std::fs::read(elf_file)?;
-                let stdin = std::fs::read(stdin_file)?;
-                Self::run_benchmark(elf.to_vec(), stdin.to_vec(), common, None).await?;
+                let stdin = bincode::deserialize::<SP1Stdin>(&std::fs::read(stdin_file)?)?;
+                Self::run_benchmark(elf.to_vec(), stdin, common, None).await?;
             }
         }
         Ok(())
@@ -109,7 +109,7 @@ impl BenchCommand {
 
     async fn run_benchmark(
         elf: Vec<u8>,
-        stdin: Vec<u8>,
+        stdin: SP1Stdin,
         common: &CommonArgs,
         cycles_estimate: Option<u64>,
     ) -> Result<()> {
@@ -236,7 +236,7 @@ impl BenchCommand {
     async fn setup_artifacts<A: ArtifactClient>(
         artifact_client: A,
         elf: Vec<u8>,
-        stdin: Vec<u8>,
+        stdin: SP1Stdin,
         count: u32,
     ) -> Result<(String, String, Vec<String>)> {
         let elf_id = artifact_client.create_artifact().unwrap();
@@ -246,7 +246,7 @@ impl BenchCommand {
             .map_err(|e| eyre::eyre!(e))?;
         let stdin_id = artifact_client.create_artifact().unwrap();
         artifact_client
-            .upload_raw(&stdin_id, ArtifactType::Stdin, stdin)
+            .upload_with_type(&stdin_id, ArtifactType::Stdin, stdin)
             .await
             .map_err(|e| eyre::eyre!(e))?;
         let proof_output_ids = (0..count)

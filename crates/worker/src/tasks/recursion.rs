@@ -43,12 +43,12 @@ use tokio::try_join;
 use tracing::{instrument, Instrument};
 
 use crate::utils::with_parent;
-use crate::SP1Worker;
+use crate::SP1ClusterWorker;
 use sp1_cluster_common::proto::TaskType;
 
 pub type Traces = Vec<(String, DenseMatrix<Val<InnerSC>>)>;
 
-impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
+impl<W: WorkerService, A: ArtifactClient> SP1ClusterWorker<W, A> {
     /// Get the compress keys for a given shape. If the shape is not in the cache, the keys will be
     /// generated and cached. This should only be called with the GPU lock held.
     pub fn get_compress_keys(

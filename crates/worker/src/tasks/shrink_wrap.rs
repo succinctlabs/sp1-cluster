@@ -11,11 +11,11 @@ use sp1_sdk::{HashableKey, SP1VerifyingKey};
 
 use crate::acquire_gpu;
 use crate::tasks::CommonTaskInput;
-use crate::{client::WorkerService, error::TaskError, SP1Worker};
+use crate::{client::WorkerService, error::TaskError, SP1ClusterWorker};
 
 use super::TaskMetadata;
 
-impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
+impl<W: WorkerService, A: ArtifactClient> SP1ClusterWorker<W, A> {
     pub async fn process_sp1_shrink_wrap(
         self: &Arc<Self>,
         _: Context,

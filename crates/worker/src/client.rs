@@ -1,11 +1,8 @@
 use crate::limiter::get_max_weight;
-use crate::tasks::TaskMetadata;
 use crate::utils::{current_context, task_metadata};
-use crate::POLLING_INTERVAL_MS;
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
 use eyre::Result;
 use mti::prelude::{MagicTypeIdExt, V7};
-use opentelemetry::Context;
 use rand::seq::IteratorRandom;
 use sp1_cluster_artifact::ArtifactId;
 use sp1_cluster_common::client::reconnect_with_backoff;
@@ -16,134 +13,18 @@ use sp1_cluster_common::proto::{
     OpenRequest, OpenSubRequest, ServerMessage, TaskData, UpdateSubRequest, WorkerType,
 };
 use sp1_cluster_common::{
-    proto::{ProofRequestStatus, TaskStatus, TaskType},
     util::{backoff_retry, status_to_backoff_error},
 };
-use std::collections::{HashMap, HashSet};
+use sp1_prover::worker::{
+    ProofId, RawTaskRequest, SubscriberBuilder, TaskId, TaskMetadata, WorkerClient,
+};
+use std::collections::{ HashSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 use tonic::Status;
-use tracing::instrument;
-
-#[async_trait::async_trait]
-pub trait WorkerService: Send + Sync + Clone + 'static {
-    async fn complete_task(
-        &self,
-        proof_id: String,
-        task_id: String,
-        metadata: TaskMetadata,
-    ) -> anyhow::Result<()>;
-
-    #[allow(clippy::too_many_arguments)]
-    async fn create_task(
-        &self,
-        task_type: TaskType,
-        input_artifact_ids: &[&impl ArtifactId],
-        output_artifact_ids: &[&impl ArtifactId],
-        proof_id: String,
-        parent_id: Option<String>,
-        parent_context: Option<Context>,
-        requester: String,
-    ) -> anyhow::Result<String>;
-
-    #[allow(clippy::too_many_arguments)]
-    async fn create_tasks(
-        &self,
-        task_type: TaskType,
-        input_artifact_ids: &[Vec<&impl ArtifactId>],
-        output_artifact_ids: &[Vec<&impl ArtifactId>],
-        proof_id: String,
-        parent_id: Option<String>,
-        parent_context: Option<Context>,
-        requester: String,
-    ) -> anyhow::Result<(String, Vec<String>)>;
-
-    async fn get_task_statuses(
-        &self,
-        proof_id: String,
-        task_ids: &[String],
-    ) -> anyhow::Result<HashMap<TaskStatus, Vec<String>>>;
-
-    async fn wait_tasks_failover(&self, proof_id: String, ids: &[String]) -> anyhow::Result<()> {
-        let mut iterations = 0_u32;
-        let size = ids.len();
-        let start_time = Instant::now();
-
-        loop {
-            let statuses = self.get_task_statuses(proof_id.clone(), ids).await?;
-            let success = statuses
-                .get(&TaskStatus::Succeeded)
-                .unwrap_or(&Vec::new())
-                .len();
-            let failed_fatal = statuses
-                .get(&TaskStatus::FailedFatal)
-                .unwrap_or(&Vec::new())
-                .len();
-
-            if failed_fatal > 0 {
-                return Err(anyhow::anyhow!("one or more tasks failed_fatal"));
-            }
-
-            if success == size {
-                return Ok(());
-            }
-
-            iterations += 1;
-            if iterations % (30 * 60 * 1000 / *POLLING_INTERVAL_MS) as u32 == 0 {
-                tracing::warn!(
-                    "batch has been running for {} minutes",
-                    start_time.elapsed().as_secs() / 60
-                );
-            }
-
-            tokio::time::sleep(std::time::Duration::from_millis(*POLLING_INTERVAL_MS)).await;
-        }
-    }
-
-    #[instrument(name = "wait-tasks", level = "debug", skip_all)]
-    async fn wait_tasks(&self, proof_id: String, ids: &[String]) -> anyhow::Result<()> {
-        // Try to create a subscriber first, otherwise use the failover mechanism.
-        match self.create_subscriber(proof_id.clone()).await {
-            Ok((sub_tx, mut sub_rx)) => {
-                for id in ids {
-                    sub_tx.send(id.clone()).unwrap();
-                }
-                drop(sub_tx);
-                while let Some((_, status)) = sub_rx.recv().await {
-                    if status == TaskStatus::FailedFatal {
-                        return Err(anyhow::anyhow!("one or more tasks failed_fatal"));
-                    }
-                }
-                Ok(())
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to create subscriber, using failover mechanism; error: {:?}",
-                    err
-                );
-                self.wait_tasks_failover(proof_id, ids).await
-            }
-        }
-    }
-
-    async fn create_subscriber(
-        &self,
-        proof_id: String,
-    ) -> anyhow::Result<(
-        mpsc::UnboundedSender<String>,
-        mpsc::UnboundedReceiver<(String, TaskStatus)>,
-    )>;
-
-    async fn complete_proof(
-        &self,
-        proof_id: String,
-        task_id: Option<String>,
-        status: ProofRequestStatus,
-    ) -> anyhow::Result<()>;
-}
 
 #[derive(Clone)]
 pub struct WorkerServiceClient {
@@ -272,36 +153,20 @@ impl WorkerServiceClient {
     }
 }
 
-#[async_trait::async_trait]
-impl WorkerService for WorkerServiceClient {
-    async fn complete_task(
-        &self,
-        proof_id: String,
-        task_id: String,
-        metadata: TaskMetadata,
-    ) -> anyhow::Result<()> {
-        let metadata_string = serde_json::to_string(&metadata).unwrap();
-        let request = CompleteTaskRequest {
-            worker_id: self.worker_id.clone(),
-            proof_id,
-            task_id,
-            metadata: metadata_string,
-        };
-
-        // We can simply delegate to the method above:
-        self.complete_task(request).await
-    }
-
-    async fn create_task(
+impl WorkerClient for WorkerServiceClient {
+    async fn submit_task(
         &self,
         task_type: proto::TaskType,
-        input_artifacts: &[&impl ArtifactId],
-        output_artifacts: &[&impl ArtifactId],
-        proof_id: String,
-        parent_id: Option<String>,
-        parent_context: Option<Context>,
-        requester: String,
-    ) -> anyhow::Result<String> {
+        task: RawTaskRequest,
+    ) -> anyhow::Result<TaskId> {
+        let RawTaskRequest {
+            inputs: input_artifacts,
+            outputs: output_artifacts,
+            proof_id,
+            parent_id,
+            parent_context,
+            requester_id,
+        } = task;
         let context = parent_context.unwrap_or_else(current_context);
         let metadata = serde_json::to_string(&task_metadata(&context))?;
 
@@ -315,10 +180,10 @@ impl WorkerService for WorkerServiceClient {
                     .map(|a| a.id().to_string())
                     .collect(),
                 metadata,
-                proof_id,
-                parent_id,
+                proof_id: proof_id.to_string(),
+                parent_id: parent_id.map(|p| p.to_string()),
                 weight: task_weight(task_type) as u32,
-                requester,
+                requester: requester_id.to_string(),
             }),
         };
 
@@ -331,73 +196,91 @@ impl WorkerService for WorkerServiceClient {
                 .map_err(status_to_backoff_error)
         })
         .await?;
-        Ok(response.into_inner().task_id)
+
+        let result = response.into_inner().task_id;
+        Ok(TaskId::new(result))
     }
 
-    async fn create_tasks(
+    async fn complete_task(
         &self,
-        task_type: proto::TaskType,
-        input_artifact_ids: &[Vec<&impl ArtifactId>],
-        output_artifact_ids: &[Vec<&impl ArtifactId>],
-        proof_id: String,
-        parent_id: Option<String>,
-        parent_context: Option<Context>,
-        requester: String,
-    ) -> anyhow::Result<(String, Vec<String>)> {
-        let mut promises = Vec::new();
-        for (inputs, outputs) in input_artifact_ids.iter().zip(output_artifact_ids.iter()) {
-            promises.push(self.create_task(
-                task_type,
-                inputs,
-                outputs,
-                proof_id.clone(),
-                parent_id.clone(),
-                parent_context.clone(),
-                requester.clone(),
-            ))
-        }
-        let res = futures::future::try_join_all(promises).await?;
-        Ok(("".to_string(), res))
-    }
-
-    async fn get_task_statuses(
-        &self,
-        proof_id: String,
-        task_ids: &[String],
-    ) -> anyhow::Result<HashMap<proto::TaskStatus, Vec<String>>> {
-        let request = proto::GetTaskStatusesRequest {
+        proof_id: ProofId,
+        task_id: TaskId,
+        metadata: TaskMetadata,
+    ) -> anyhow::Result<()> {
+        let metadata_string = serde_json::to_string(&metadata).unwrap();
+        let request = CompleteTaskRequest {
             worker_id: self.worker_id.clone(),
-            proof_id,
-            task_ids: task_ids.to_vec(),
+            proof_id: proof_id.to_string(),
+            task_id: task_id.to_string(),
+            metadata: metadata_string,
         };
 
-        let backoff = self.backoff.clone();
-        let response = backoff::future::retry(backoff, || async {
-            self.client
-                .clone()
-                .get_task_statuses(request.clone())
-                .await
-                .map_err(status_to_backoff_error)
-        })
-        .await?;
-
-        let mut result = HashMap::new();
-        for entry in response.into_inner().statuses {
-            let task_status = proto::TaskStatus::try_from(entry.key).unwrap();
-            result.insert(task_status, entry.value.map_or_else(Vec::new, |v| v.ids));
-        }
-        Ok(result)
+        // We can simply delegate to the method above:
+        self.complete_task(request).await
     }
 
-    async fn create_subscriber(
+    // I think this turned into "submit tasks"
+    // async fn create_tasks(
+    //     &self,
+    //     task_type: proto::TaskType,
+    //     input_artifact_ids: &[Vec<&impl ArtifactId>],
+    //     output_artifact_ids: &[Vec<&impl ArtifactId>],
+    //     proof_id: String,
+    //     parent_id: Option<String>,
+    //     parent_context: Option<Context>,
+    //     requester: String,
+    // ) -> anyhow::Result<(String, Vec<String>)> {
+    //     let mut promises = Vec::new();
+    //     for (inputs, outputs) in input_artifact_ids.iter().zip(output_artifact_ids.iter()) {
+    //         promises.push(self.create_task(
+    //             task_type,
+    //             inputs,
+    //             outputs,
+    //             proof_id.clone(),
+    //             parent_id.clone(),
+    //             parent_context.clone(),
+    //             requester.clone(),
+    //         ))
+    //     }
+    //     let res = futures::future::try_join_all(promises).await?;
+    //     Ok(("".to_string(), res))
+    // }
+
+    // async fn get_task_statuses(
+    //     &self,
+    //     proof_id: String,
+    //     task_ids: &[String],
+    // ) -> anyhow::Result<HashMap<proto::TaskStatus, Vec<String>>> {
+    //     let request = proto::GetTaskStatusesRequest {
+    //         worker_id: self.worker_id.clone(),
+    //         proof_id,
+    //         task_ids: task_ids.to_vec(),
+    //     };
+
+    //     let backoff = self.backoff.clone();
+    //     let response = backoff::future::retry(backoff, || async {
+    //         self.client
+    //             .clone()
+    //             .get_task_statuses(request.clone())
+    //             .await
+    //             .map_err(status_to_backoff_error)
+    //     })
+    //     .await?;
+
+    //     let mut result = HashMap::new();
+    //     for entry in response.into_inner().statuses {
+    //         let task_status = proto::TaskStatus::try_from(entry.key).unwrap();
+    //         result.insert(task_status, entry.value.map_or_else(Vec::new, |v| v.ids));
+    //     }
+    //     Ok(result)
+    // }
+
+    async fn subscriber(
         &self,
-        proof_id: String,
-    ) -> anyhow::Result<(
-        mpsc::UnboundedSender<String>,
-        mpsc::UnboundedReceiver<(String, proto::TaskStatus)>,
-    )> {
-        let (sub_tx, mut sub_rx) = mpsc::unbounded_channel::<String>();
-        let (res_tx, res_rx) = mpsc::unbounded_channel::<(String, proto::TaskStatus)>();
+        proof_id: ProofId,
+    ) -> anyhow::Result<SubscriberBuilder<WorkerServiceClient>> {
+        let (sub_tx, mut sub_rx) = mpsc::unbounded_channel::<TaskId>();
+        let (res_tx, res_rx) = mpsc::unbounded_channel::<(TaskId, proto::TaskStatus)>();
 
         let sub_id = "sub".create_type_id::<V7>().to_string();
         let tasks_set = Arc::new(Mutex::new(HashSet::new()));
@@ -409,7 +292,7 @@ impl WorkerService for WorkerServiceClient {
         let backoff = self.backoff.clone();
         let request = OpenSubRequest {
             sub_id: sub_id.clone(),
-            proof_id: proof_id.clone(),
+            proof_id: proof_id.to_string(),
             task_ids: Vec::new(),
         };
         let response = backoff::future::retry(backoff.clone(), || async {
@@ -459,7 +342,7 @@ impl WorkerService for WorkerServiceClient {
                                             lock.remove(&result.task_id);
                                             drop(lock);
                                             let _ = res_tx.send((
-                                                result.task_id,
+                                                TaskId::new(result.task_id),
                                                 proto::TaskStatus::try_from(result.task_status).unwrap(),
                                             ));
                                         }
@@ -568,12 +451,12 @@ impl WorkerService for WorkerServiceClient {
             async move {
                 while let Some(task_id) = sub_rx.recv().await {
                     let mut lock = tasks_set.lock().await;
-                    lock.insert(task_id.clone());
+                    lock.insert(task_id.to_string());
                     drop(lock);
 
                     let update_request = UpdateSubRequest {
                         sub_id: sub_id.clone(),
-                        task_ids: vec![task_id],
+                        task_ids: vec![task_id.to_string()],
                     };
                     if let Err(e) = channel.update_sub(update_request).await {
                         tracing::error!("Error updating subscription: {}", e);
@@ -584,13 +467,13 @@ impl WorkerService for WorkerServiceClient {
             }
         });
 
-        Ok((sub_tx, res_rx))
+        Ok(SubscriberBuilder::new(self.clone(), sub_tx, res_rx))
     }
 
     async fn complete_proof(
         &self,
-        proof_id: String,
-        task_id: Option<String>,
+        proof_id: ProofId,
+        task_id: Option<TaskId>,
         status: proto::ProofRequestStatus,
     ) -> anyhow::Result<()> {
         let backoff = self.backoff.clone();
@@ -598,7 +481,7 @@ impl WorkerService for WorkerServiceClient {
             proto::ProofRequestStatus::Completed => {
                 let request = proto::CompleteProofRequest {
                     worker_id: self.worker_id.clone(),
-                    proof_id,
+                    proof_id: proof_id.to_string(),
                 };
                 backoff::future::retry(backoff, || async {
                     self.client
@@ -612,8 +495,8 @@ impl WorkerService for WorkerServiceClient {
             _ => {
                 let request = proto::FailProofRequest {
                     worker_id: self.worker_id.clone(),
-                    proof_id,
-                    task_id,
+                    proof_id: proof_id.to_string(),
+                    task_id: task_id.map(|t| t.to_string()),
                 };
                 backoff::future::retry(backoff, || async {
                     self.client

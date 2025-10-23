@@ -2,18 +2,17 @@ use cfg_if::cfg_if;
 use opentelemetry::{global, Context};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use sp1_cluster_common::proto::TaskData;
+use sp1_prover::worker::{ProofId, RawTaskRequest, RequesterId, TaskId};
+use sp1_prover_types::Artifact;
 use std::collections::HashMap;
 use std::env;
 use std::future::Future;
-use std::sync::atomic::AtomicU32;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tokio::sync::OwnedSemaphorePermit;
 use tracing::field::AsField;
 use tracing::{info_span, Span, Value};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-
-use crate::metrics::WorkerMetrics;
 
 pub fn chunk_vec<T>(mut vec: Vec<T>, chunk_size: usize) -> Vec<Vec<T>> {
     let mut result = Vec::new();
@@ -31,6 +30,29 @@ pub fn create_http_client() -> Client {
         .pool_idle_timeout(Duration::from_secs(240))
         .build()
         .unwrap()
+}
+
+/// Converts a WorkerTask to a RawTaskRequest.
+pub fn worker_task_to_raw_task_request(
+    task: &TaskData,
+    parent_context: Option<Context>,
+) -> RawTaskRequest {
+    RawTaskRequest {
+        inputs: task
+            .inputs
+            .iter()
+            .map(|s| Artifact::from(s.clone()))
+            .collect(),
+        outputs: task
+            .outputs
+            .iter()
+            .map(|s| Artifact::from(s.clone()))
+            .collect(),
+        proof_id: ProofId::new(task.proof_id.clone()),
+        parent_id: task.parent_id.clone().map(TaskId::new),
+        parent_context,
+        requester_id: RequesterId::new(task.requester.clone()),
+    }
 }
 
 /// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v4-response.html
@@ -113,40 +135,6 @@ impl Drop for Empty {
     fn drop(&mut self) {}
 }
 
-// This is a macro because we don't want a separate await point for each acquire_gpu call
-#[macro_export]
-macro_rules! acquire_gpu {
-    ($worker:expr, $time:expr) => {{
-        #[cfg(feature = "gpu")]
-        {
-            use tracing::Instrument;
-            use $crate::utils::GpuLock;
-            let permit = $worker
-                .gpu_semaphore
-                .clone()
-                .acquire_owned()
-                .instrument(tracing::info_span!("acquire_gpu"))
-                .await
-                .unwrap();
-            moongate_core::sync_device().unwrap();
-            let metrics = $worker.metrics.clone();
-            let free_memory = moongate_core::device::memory::cuda_mem_get_info()
-                .unwrap()
-                .0;
-
-            log::debug!("free memory: {}", free_memory);
-
-            GpuLock::new(permit, metrics, $time.clone())
-        }
-
-        #[cfg(not(feature = "gpu"))]
-        {
-            let _ = &$time;
-            $crate::utils::Empty
-        }
-    }};
-}
-
 /// Get the size of a tree layer given the total leaf count. Every layer will have an even number of
 /// nodes unless there is only one node. Odd nodes will be effectively deferred to the next odd layer.
 pub fn get_tree_layer_size(leaf_count: u32, layer: usize) -> usize {
@@ -176,38 +164,6 @@ pub async fn conditional_future<T>(future: Option<impl Future<Output = T>>) -> O
     match future {
         Some(fut) => Some(fut.await),
         None => None,
-    }
-}
-
-/// Wrapper around SemaphorePermit for additional drop logic.
-pub struct GpuLock(
-    Option<OwnedSemaphorePermit>,
-    Instant,
-    Option<Arc<WorkerMetrics>>,
-    Arc<AtomicU32>,
-);
-
-impl GpuLock {
-    pub fn new(
-        permit: OwnedSemaphorePermit,
-        metrics: Option<Arc<WorkerMetrics>>,
-        time: Arc<AtomicU32>,
-    ) -> Self {
-        Self(Some(permit), Instant::now(), metrics, time)
-    }
-}
-
-impl Drop for GpuLock {
-    fn drop(&mut self) {
-        #[cfg(feature = "gpu")]
-        tracing::debug_span!("sync_device").in_scope(|| moongate_core::sync_device().unwrap());
-        let elapsed = self.1.elapsed().as_millis() as u64;
-        drop(self.0.take());
-        self.2.as_ref().map(|m| m.gpu_busy_time.increment(elapsed));
-        self.3.fetch_add(
-            elapsed.try_into().unwrap_or(u32::MAX),
-            std::sync::atomic::Ordering::Relaxed,
-        );
     }
 }
 

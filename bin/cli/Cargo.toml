@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 bincode.workspace = true
+dotenv.workspace = true
+sp1-core-executor = { workspace = true }
 clap.workspace = true
 eyre.workspace = true
 opentelemetry_sdk.workspace = true

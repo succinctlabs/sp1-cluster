@@ -1,39 +1,28 @@
-use std::sync::atomic::AtomicU32;
-use std::sync::Arc;
-
+use crate::{error::TaskError, SP1ClusterWorker};
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::proto::WorkerTask;
-use sp1_stark::MachineProver;
+use sp1_prover::worker::{TaskId, TaskMetadata, WorkerClient};
+use sp1_prover_types::Artifact;
 
-use crate::acquire_gpu;
-use crate::{client::WorkerService, error::TaskError, SP1Worker};
-
-use super::TaskMetadata;
-
-impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
+impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
     pub async fn process_sp1_setup_vkey(
         &self,
         task: &WorkerTask,
     ) -> Result<TaskMetadata, TaskError> {
         let data = task.data()?;
-        let elf = self
-            .artifact_client
-            .download_program(&data.inputs[0])
-            .await?;
 
-        let program = self.prover.get_program(&elf)?;
+        let task_id = TaskId::new(task.task_id.clone());
+        let elf_artifact = Artifact::from(data.inputs[0].clone());
+        let output_artifact = Artifact::from(data.outputs[0].clone());
 
-        let gpu_time = Arc::new(AtomicU32::new(0));
-        let permit = acquire_gpu!(self, gpu_time);
+        self.worker
+            .prover_engine()
+            .submit_setup(task_id, elf_artifact, output_artifact)
+            .await?
+            .await
+            .map_err(|e| TaskError::Retryable(anyhow::anyhow!(e)))?;
 
-        let (_, vk) = self.prover.core_prover.setup(&program);
-
-        drop(permit);
-
-        self.artifact_client.upload(&data.outputs[0], vk).await?;
-
-        Ok(TaskMetadata::new(
-            gpu_time.load(std::sync::atomic::Ordering::Relaxed),
-        ))
+        // TODO: get gpu time from submit_setup somehow...
+        Ok(TaskMetadata { gpu_time: None })
     }
 }

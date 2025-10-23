@@ -20,6 +20,9 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
+    if let Err(e) = dotenv::dotenv() {
+        eprintln!("not loading .env file: {}", e);
+    }
     logger::init(Resource::empty());
     let cli = Cli::parse();
 

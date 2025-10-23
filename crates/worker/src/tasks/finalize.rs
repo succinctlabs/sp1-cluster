@@ -11,11 +11,11 @@ use sp1_sdk::{
 };
 use tracing::info_span;
 
-use crate::{error::TaskError, SP1Worker, WorkerService};
+use crate::{error::TaskError, SP1ClusterWorker, WorkerService};
 
 use super::TaskMetadata;
 
-impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
+impl<W: WorkerService, A: ArtifactClient> SP1ClusterWorker<W, A> {
     pub async fn process_sp1_finalize(
         self: &Arc<Self>,
         task: &WorkerTask,

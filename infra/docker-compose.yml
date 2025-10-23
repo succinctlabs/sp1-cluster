@@ -7,8 +7,8 @@ services:
       - REDIS_AOF_ENABLED=no
     volumes:
       - redis_data:/bitnami/redis/data
-    # ports:
-    #   - "127.0.0.1:6379:6379"
+    ports:
+      - "127.0.0.1:6379:6379"
     deploy:
       resources:
         limits:
@@ -25,8 +25,8 @@ services:
       - POSTGRES_DB=postgres
     volumes:
       - postgresql_data:/bitnami/postgresql
-    # ports:
-    #   - "5432:5432"
+    ports:
+      - "5432:5432"
 
   # API Service
   api:
@@ -36,8 +36,8 @@ services:
       - API_HTTP_ADDR=0.0.0.0:3000
       - API_AUTO_MIGRATE=true
       - API_DATABASE_URL=postgresql://postgres:postgrespassword@postgresql:5432/postgres
-    # ports:
-    #   - "127.0.0.1:50051:50051"
+    ports:
+      - "127.0.0.1:50051:50051"
     depends_on:
       - postgresql
 
