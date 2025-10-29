@@ -52,19 +52,6 @@ RUN curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v29.4
   unzip -o $PROTOC_ZIP -d /usr/local 'include/*' && \
   rm -f $PROTOC_ZIP
 
-# Default to SSH, but use HTTPS if GITHUB_TOKEN is present. Note this leaves the token in the image
-# history, so the images should not be pushed to a public registry.
-ARG GITHUB_TOKEN
-ENV GITHUB_TOKEN=${GITHUB_TOKEN}
-RUN if [ -n "$GITHUB_TOKEN" ] ; then \
-  git config --global --replace-all url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"; \
-  git config --global --add url."https://${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:"; \
-  echo "Using HTTPS + GITHUB_TOKEN for git" >&2; \
-  else \
-  git config --global url."git@github.com:".insteadOf https://github.com/; \
-  echo "Using SSH for git" >&2; \
-  fi; mkdir -p -m 0700 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
-
 # Application source code
 WORKDIR /app
 COPY . .
@@ -82,7 +69,7 @@ ENV FEATURES=$FEATURES
 ARG VERGEN_GIT_SHA
 ENV VERGEN_GIT_SHA=$VERGEN_GIT_SHA
 
-RUN --mount=type=ssh \
+RUN \
   --mount=type=cache,target=/root/.cargo/git \    
   --mount=type=cache,target=/root/.cargo/registry \
   --mount=type=cache,target=/app/target \
