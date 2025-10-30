@@ -45,18 +45,6 @@ RUN curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v29.4
     unzip -o $PROTOC_ZIP -d /usr/local 'include/*' && \
     rm -f $PROTOC_ZIP
 
-# TEMP: Setup private git, can remove once node repo is public
-ARG GITHUB_TOKEN
-ENV GITHUB_TOKEN=${GITHUB_TOKEN}
-RUN if [ -n "$GITHUB_TOKEN" ] ; then \
-    git config --global --replace-all url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"; \
-    git config --global --add url."https://${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:"; \
-    echo "Using HTTPS + GITHUB_TOKEN for git" >&2; \
-    else \
-    git config --global url."git@github.com:".insteadOf https://github.com/; \
-    echo "Using SSH for git" >&2; \
-    fi; mkdir -p -m 0700 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
-
 # Application source code
 WORKDIR /app
 COPY . .
@@ -76,7 +64,6 @@ ENV VERGEN_GIT_SHA=$VERGEN_GIT_SHA
 
 # Build the application
 RUN \
-    --mount=type=ssh \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
