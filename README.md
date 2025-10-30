@@ -38,7 +38,7 @@ To get started, you will need to have the following installed:
 
 ```bash
 git clone https://github.com/succinctlabs/sp1-cluster.git
-cd cluster
+cd sp1-cluster
 
 # Build
 cargo build --release
