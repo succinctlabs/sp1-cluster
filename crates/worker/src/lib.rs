@@ -18,6 +18,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use utils::DeferGuard;
 
 pub mod client;
+pub mod config;
 pub mod error;
 pub mod limiter;
 pub mod metrics;
@@ -155,7 +156,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
                 // TaskType::RecursionDeferred => {
                 //     self.process_sp1_recursion_deferred_batch(task).await
                 // }
-                // TaskType::RecursionReduce => self.process_sp1_recursion_reduce_batch(task).await,
+                TaskType::RecursionReduce => self.process_sp1_recursion_reduce_batch(task).await,
                 // TaskType::ShrinkWrap => self.process_sp1_shrink_wrap(context, task).await,
                 TaskType::SetupVkey => self.process_sp1_setup_vkey(task).await,
                 // TaskType::PlonkWrap => self.process_sp1_finalize(task, ProofMode::Plonk).await,

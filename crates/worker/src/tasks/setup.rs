@@ -15,14 +15,14 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
         let elf_artifact = Artifact::from(data.inputs[0].clone());
         let output_artifact = Artifact::from(data.outputs[0].clone());
 
-        self.worker
+        let (_, metadata) = self
+            .worker
             .prover_engine()
             .submit_setup(task_id, elf_artifact, output_artifact)
-            .await?
             .await
-            .map_err(|e| TaskError::Retryable(anyhow::anyhow!(e)))?;
-
-        // TODO: get gpu time from submit_setup somehow...
-        Ok(TaskMetadata { gpu_time: None })
+            .expect("failed to submit setup")
+            .await
+            .expect("failed to wait for setup")?;
+        Ok(metadata)
     }
 }

@@ -14,14 +14,12 @@ use sp1_cluster_common::proto::{
 };
 use sp1_cluster_common::util::get_private_ip;
 use sp1_cluster_worker::client::WorkerServiceClient;
+use sp1_cluster_worker::config::cluster_worker_config;
 use sp1_cluster_worker::metrics::{initialize_metrics, WorkerMetrics};
 use sp1_cluster_worker::utils::get_ecs_task_info;
 use sp1_cluster_worker::ClusterProverComponents;
 use sp1_cluster_worker::SP1ClusterWorker;
-use sp1_hypercube::prover::ProverSemaphore;
-use sp1_prover::worker::SP1WorkerBuilder;
 use sp1_prover::worker::{SP1Worker, WorkerClient};
-use sp1_prover::{components::CoreProver, SP1ProverComponents};
 use std::collections::HashSet;
 use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,44 +41,32 @@ use tokio::task::JoinHandle;
 use csl_cuda::TaskScope;
 
 #[cfg(feature = "gpu")]
-use csl_prover::new_cuda_prover_sumcheck_eval;
-
-#[cfg(not(feature = "gpu"))]
-use sp1_hypercube::prover::CpuShardProver;
-
-#[cfg(feature = "gpu")]
-fn build_worker<A: ArtifactClient, W: WorkerClient>(
+async fn build_worker<A: ArtifactClient, W: WorkerClient>(
     artifact_client: A,
     worker_client: W,
     backend: TaskScope,
 ) -> Result<SP1Worker<A, W, ClusterProverComponents>> {
-    let mut builder = SP1WorkerBuilder::new(artifact_client, worker_client);
-
-    let core_verifier = ClusterProverComponents::core_verifier();
-    let core_air_prover: CoreProver<ClusterProverComponents> =
-        new_cuda_prover_sumcheck_eval(core_verifier.shard_verifier().clone(), backend.clone());
-    let core_air_prover = Arc::new(core_air_prover);
-    let permits = ProverSemaphore::new(1);
-    builder = builder.with_core_air_prover(core_air_prover, permits);
-    builder
+    csl_prover::cuda_worker_builder(backend)
+        .with_config(|conf| *conf = cluster_worker_config())
+        .with_artifact_client(artifact_client)
+        .with_worker_client(worker_client)
         .build()
+        .await
         .map_err(|e| eyre::eyre!("failed to build gpu worker: {}", e))
 }
 
+// TODO: fix to inlcude recursion information to make CPU controller work
 #[cfg(not(feature = "gpu"))]
-fn build_worker<A: ArtifactClient, W: WorkerClient>(
+async fn build_worker<A: ArtifactClient, W: WorkerClient>(
     artifact_client: A,
     worker_client: W,
 ) -> Result<SP1Worker<A, W, ClusterProverComponents>> {
-    let mut builder = SP1WorkerBuilder::new(artifact_client, worker_client);
-    let core_verifier = ClusterProverComponents::core_verifier();
-    let cpu_shard_prover = CpuShardProver::new(core_verifier.shard_verifier().clone());
-    let core_air_prover = Arc::new(cpu_shard_prover);
-
-    let permit = ProverSemaphore::new(1);
-    builder = builder.with_core_air_prover(core_air_prover, permit);
-    builder
+    sp1_prover::worker::cpu_worker_builder()
+        .with_config(|conf| *conf = cluster_worker_config())
+        .with_artifact_client(artifact_client)
+        .with_worker_client(worker_client)
         .build()
+        .await
         .map_err(|e| eyre::eyre!("failed to build worker: {}", e))
 }
 
@@ -401,9 +387,9 @@ async fn run_worker<A: ArtifactClient>(
         // Setup SP1 prover.
         cfg_if! {
             if #[cfg(feature = "gpu")] {
-                let inner_worker = build_worker(artifact_client, worker_client.clone(), task_scope)?;
+                let inner_worker = build_worker(artifact_client, worker_client.clone(), task_scope).await?;
             } else {
-                let inner_worker = build_worker(artifact_client, worker_client.clone())?;
+                let inner_worker = build_worker(artifact_client, worker_client.clone()).await?;
             }
         }
         let prover = Arc::new(inner_worker);

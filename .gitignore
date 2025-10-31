@@ -29,3 +29,7 @@ copybara.jar
 
 values-*.yaml
 !values-example.yaml
+
+# Cluster logs and program artifacts
+logs/
+programs/** 
