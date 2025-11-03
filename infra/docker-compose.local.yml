@@ -13,24 +13,54 @@ services:
     extends:
       file: docker-compose.yml
       service: api
+    image: sp1-cluster-local:api
+    pull_policy: build
+    env_file: .env
     build:
       context: ..
       dockerfile: infra/Dockerfile
+      args:
+        GITHUB_TOKEN: ${GITHUB_TOKEN}
     command: ["/bin/sh", "-c", "/api"]
+    # ports:
+    #   - "127.0.0.1:50051:50051"
+      # - "127.0.0.1:3000:3000"
 
   coordinator:
     extends:
       file: docker-compose.yml
       service: coordinator
+    image: sp1-cluster-local:coordinator
+    pull_policy: build
     build:
       context: ..
       dockerfile: infra/Dockerfile
+      args:
+        GITHUB_TOKEN: ${GITHUB_TOKEN}
     command: ["/bin/sh", "-c", "/coordinator"]
+
+  mixed:
+    extends:
+      file: docker-compose.yml
+      service: mixed
+    image: sp1-cluster-local:mixed
+    pull_policy: build
+    env_file: .env
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.node_gpu
+      args:
+        GITHUB_TOKEN: ${GITHUB_TOKEN}
+    command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
+    runtime: nvidia
 
   cpu-node:
     extends:
       file: docker-compose.yml
       service: cpu-node
+    image: sp1-cluster-local:cpu-node
+    pull_policy: build
+    env_file: .env
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -40,6 +70,9 @@ services:
     extends:
       file: docker-compose.yml
       service: gpu0
+    image: sp1-cluster-local:gpu
+    pull_policy: build
+    env_file: .env
     build:
       context: ..
       dockerfile: infra/Dockerfile.node_gpu
@@ -70,6 +103,8 @@ services:
     extends:
       file: docker-compose.yml
       service: fulfiller
+    image: sp1-cluster-local:fulfiller
+    pull_policy: build
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -79,6 +114,8 @@ services:
     extends:
       file: docker-compose.yml
       service: bidder
+    image: sp1-cluster-local:bidder
+    pull_policy: build
     build:
       context: ..
       dockerfile: infra/Dockerfile

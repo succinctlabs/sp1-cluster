@@ -1,6 +1,5 @@
-name: Build and Push Docker to ECR
+name: Build and Push Docker to ECR + GHCR
 on:
-  TODO: re-enable when the controller and gpu nodes can build.
   push:
     paths-ignore:
       - "docs/**"
@@ -46,7 +45,7 @@ jobs:
           df -h
 
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
@@ -71,6 +70,7 @@ jobs:
           key: cache-base-${{ hashFiles('infra/Dockerfile') }}
           restore-keys: |
             cache-base-
+              
       - name: inject cache into docker
         uses: reproducible-containers/buildkit-cache-dance@v3.1.0
         with:

@@ -8,7 +8,6 @@ categories.workspace = true
 
 [dependencies]
 backoff = { workspace = true, features = ["futures", "tokio"] }
-sp1-prover-types = { workspace = true }
 eyre.workspace = true
 futures.workspace = true
 if-addrs.workspace = true
@@ -25,6 +24,7 @@ opentelemetry_sdk = { workspace = true, features = [
 prost.workspace = true
 rustls.workspace = true
 serde.workspace = true
+sp1-prover-types = { workspace = true }
 tonic.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true

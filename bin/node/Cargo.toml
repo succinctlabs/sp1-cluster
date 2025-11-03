@@ -9,16 +9,16 @@ native-gnark = ["sp1-sdk/native-gnark"]
 gpu = ["dep:csl-prover", "dep:csl-cuda", "sp1-cluster-worker/gpu"]
 
 [dependencies]
-csl-prover = { workspace = true, optional = true }
 csl-cuda = { workspace = true, optional = true }
+csl-prover = { workspace = true, optional = true }
 
 sp1-cluster-artifact.workspace = true
 sp1-cluster-common.workspace = true
 sp1-cluster-worker.workspace = true
+sp1-hypercube.workspace = true
 
 sp1-prover.workspace = true
 sp1-sdk.workspace = true
-sp1-hypercube.workspace = true
 
 cfg-if.workspace = true
 ctrlc.workspace = true

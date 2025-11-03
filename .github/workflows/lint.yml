@@ -24,7 +24,7 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - name: Checkout repository and submodules
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
@@ -76,6 +76,17 @@ jobs:
         env:
           CARGO_INCREMENTAL: 1
 
+      - name: Set up CUDA environment
+        run: |
+          echo "CUDA_HOME=/usr/local/cuda-12.6" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+          echo "/usr/local/cuda-12.6/bin" >> $GITHUB_PATH
+    
+      - name: Confirm CUDA installation
+        run: |
+          echo "CUDA_HOME=$CUDA_HOME"
+          which nvcc
+
       - name: Run cargo clippy
         uses: actions-rs/cargo@v1
         with:
@@ -96,14 +107,15 @@ jobs:
         run: |
           # Ignore error if it's installed already
           # NOTE: cargo-shear@v1.5.2 requires rustc 1.88
-          cargo shear --help || cargo install cargo-shear@1.5.1 --locked
+          # cargo shear --help || cargo install cargo-shear@1.5.1 --locked
           cargo sort --help || cargo install cargo-sort --locked
 
-      - name: Run cargo shear
-        uses: actions-rs/cargo@v1
-        with:
-          command: shear
-          args: --fix
+      # Commented out because it has a false positive
+      # - name: Run cargo shear
+      #   uses: actions-rs/cargo@v1
+      #   with:
+      #     command: shear
+      #     args: --fix
 
       - name: Run cargo sort
         uses: actions-rs/cargo@v1

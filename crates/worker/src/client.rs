@@ -12,13 +12,11 @@ use sp1_cluster_common::proto::{
     AckSubRequest, CloseRequest, CompleteTaskRequest, FailTaskRequest, HeartbeatRequest,
     OpenRequest, OpenSubRequest, ServerMessage, TaskData, UpdateSubRequest, WorkerType,
 };
-use sp1_cluster_common::{
-    util::{backoff_retry, status_to_backoff_error},
-};
+use sp1_cluster_common::util::{backoff_retry, status_to_backoff_error};
 use sp1_prover::worker::{
     ProofId, RawTaskRequest, SubscriberBuilder, TaskId, TaskMetadata, WorkerClient,
 };
-use std::collections::{ HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch, Mutex};
