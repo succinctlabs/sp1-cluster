@@ -218,17 +218,17 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
         task: &WorkerTask,
     ) -> Result<TaskMetadata, TaskError> {
         let data = task.data()?;
-
         let raw_task_request = worker_task_to_raw_task_request(&data, None);
-
-        let metadata = self
-            .worker
+        self.worker
             .prover_engine()
             .submit_recursion_reduce(raw_task_request)
             .await?
             .await
-            .expect("failed to join recursion reduce")?;
-
-        Ok(metadata)
+            .map_err(|e| {
+                TaskError::Fatal(anyhow::anyhow!(
+                    "failed to execute recursion reduce batch: {}",
+                    e
+                ))
+            })?
     }
 }
