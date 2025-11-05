@@ -56,7 +56,7 @@ sp1-sdk = { git = "https://github.com/succinctlabs/sp1-wip", features = [
     "network",
 ], branch = "multilinear_v6" }
 
-# # cuslop
+# cuslop
 csl-cuda = { git = "https://github.com/succinctlabs/cuslop" }
 csl-prover = { git = "https://github.com/succinctlabs/cuslop" }
 

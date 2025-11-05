@@ -99,27 +99,27 @@ services:
   gpu7:
     extends: gpu0
 
-  fulfiller:
-    extends:
-      file: docker-compose.yml
-      service: fulfiller
-    image: sp1-cluster-local:fulfiller
-    pull_policy: build
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-    command: ["/bin/sh", "-c", "/fulfiller"]
+  # fulfiller:
+  #   extends:
+  #     file: docker-compose.yml
+  #     service: fulfiller
+  #   image: sp1-cluster-local:fulfiller
+  #   pull_policy: build
+  #   build:
+  #     context: ..
+  #     dockerfile: infra/Dockerfile
+  #   command: ["/bin/sh", "-c", "/fulfiller"]
 
-  bidder:
-    extends:
-      file: docker-compose.yml
-      service: bidder
-    image: sp1-cluster-local:bidder
-    pull_policy: build
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-    command: ["/bin/sh", "-c", "/bidder"]
+  # bidder:
+  #   extends:
+  #     file: docker-compose.yml
+  #     service: bidder
+  #   image: sp1-cluster-local:bidder
+  #   pull_policy: build
+  #   build:
+  #     context: ..
+  #     dockerfile: infra/Dockerfile
+  #   command: ["/bin/sh", "-c", "/bidder"]
 
 volumes:
   redis_data:

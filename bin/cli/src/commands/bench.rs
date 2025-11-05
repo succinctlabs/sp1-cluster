@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::PathBuf, time::Instant};
+use std::{path::PathBuf, time::Instant};
 
 use clap::{Args, Subcommand};
 use eyre::Result;
@@ -63,6 +63,15 @@ pub enum BenchCommand {
         #[clap(flatten)]
         common: CommonArgs,
     },
+    S3 {
+        /// S3 path to the program (e.g., "path/to/program" for s3://bucket/path/to/program/)
+        s3_path: String,
+        /// S3 bucket to download from
+        #[arg(long, env = "CLI_BENCH_S3_BUCKET", default_value = "sp1-testing-suite")]
+        bucket: String,
+        #[clap(flatten)]
+        common: CommonArgs,
+    },
 }
 
 impl BenchCommand {
@@ -102,6 +111,16 @@ impl BenchCommand {
                 let elf = std::fs::read(elf_file)?;
                 let stdin = bincode::deserialize::<SP1Stdin>(&std::fs::read(stdin_file)?)?;
                 Self::run_benchmark(elf.to_vec(), stdin, common, None).await?;
+            }
+            BenchCommand::S3 {
+                s3_path,
+                bucket,
+                common,
+            } => {
+                tracing::info!("Downloading program from s3://{}/{}...", bucket, s3_path);
+                let (elf, stdin) = Self::download_from_s3(bucket, s3_path).await?;
+                tracing::info!("Running S3 program {:?} benchmark...", s3_path);
+                Self::run_benchmark(elf, stdin, common, None).await?;
             }
         }
         Ok(())
@@ -156,12 +175,79 @@ impl BenchCommand {
                 .as_millis()
         );
         tracing::info!("base_id: {}", base_id);
-        // Worst case timeout is 4 hours.
+        // Worst case timeout is 4 hours per request.
         let deadline = SystemTime::now() + Duration::from_secs(4 * 60 * 60);
+        let mut start_time = Instant::now();
+
+        // OLD ASYNC CODE (creates all requests then polls them in parallel):
+        // for i in 0..common.count {
+        //     client
+        //         .create_proof_request(sp1_cluster_common::proto::ProofRequestCreateRequest {
+        //             proof_id: format!("{}_{}", base_id, i),
+        //             program_artifact_id: elf_id.clone(),
+        //             stdin_artifact_id: stdin_id.clone(),
+        //             options_artifact_id: Some((common.mode as i32).to_string()),
+        //             proof_artifact_id: Some(proof_output_ids[i as usize].clone()),
+        //             requester: vec![],
+        //             deadline: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs(),
+        //             cycle_limit: 0,
+        //             gas_limit: 0,
+        //         })
+        //         .await?;
+        // }
+        // let mut completed = HashSet::new();
+        // loop {
+        //     if deadline < SystemTime::now() {
+        //         return Err(eyre::eyre!(
+        //             "Timeout exceeded after {:?}",
+        //             start_time.elapsed()
+        //         ));
+        //     }
+        //
+        //     for i in 0..common.count {
+        //         if completed.contains(&i) {
+        //             continue;
+        //         }
+        //         let resp = client
+        //             .get_proof_request(proto::ProofRequestGetRequest {
+        //                 proof_id: format!("{}_{}", base_id, i),
+        //             })
+        //             .await?;
+        //         let Some(proof_request) = resp else {
+        //             return Err(eyre::eyre!(
+        //                 "Proof request {} not found after {:?}",
+        //                 i,
+        //                 start_time.elapsed()
+        //             ));
+        //         };
+        //         match proof_request.proof_status() {
+        //             ProofRequestStatus::Completed => {
+        //                 completed.insert(i);
+        //             }
+        //             ProofRequestStatus::Failed | ProofRequestStatus::Cancelled => {
+        //                 return Err(eyre::eyre!(
+        //                     "Proof request {:?} after {:?}",
+        //                     proof_request.proof_status(),
+        //                     start_time.elapsed()
+        //                 ));
+        //             }
+        //             _ => {}
+        //         }
+        //     }
+        //     if completed.len() == common.count as usize {
+        //         break;
+        //     }
+        //     tokio::time::sleep(Duration::from_millis(500)).await;
+        // }
+
+        // NEW SYNC CODE: Synchronously create each proof request and wait for it to complete
         for i in 0..common.count {
+            let proof_id = format!("{}_{}", base_id, i);
+
+            // Create the proof request
             client
                 .create_proof_request(sp1_cluster_common::proto::ProofRequestCreateRequest {
-                    proof_id: format!("{base_id}_{i}"),
+                    proof_id: proof_id.clone(),
                     program_artifact_id: elf_id.clone(),
                     stdin_artifact_id: stdin_id.clone(),
                     options_artifact_id: Some((common.mode as i32).to_string()),
@@ -172,27 +258,26 @@ impl BenchCommand {
                     gas_limit: 0,
                 })
                 .await?;
-        }
-        let start_time = Instant::now();
-        // Poll until the proof request is completed.
-        let mut completed = HashSet::new();
-        loop {
-            if deadline < SystemTime::now() {
-                return Err(eyre::eyre!(
-                    "Timeout exceeded after {:?}",
-                    start_time.elapsed()
-                ));
-            }
 
-            for i in 0..common.count {
-                if completed.contains(&i) {
-                    continue;
+            start_time = Instant::now();
+            tracing::info!("Created proof request {} ({})", i, proof_id);
+
+            // Poll until this specific proof request is completed
+            loop {
+                if deadline < SystemTime::now() {
+                    return Err(eyre::eyre!(
+                        "Timeout exceeded for proof request {} after {:?}",
+                        i,
+                        start_time.elapsed()
+                    ));
                 }
+
                 let resp = client
                     .get_proof_request(proto::ProofRequestGetRequest {
-                        proof_id: format!("{base_id}_{i}"),
+                        proof_id: proof_id.clone(),
                     })
                     .await?;
+
                 let Some(proof_request) = resp else {
                     return Err(eyre::eyre!(
                         "Proof request {} not found after {:?}",
@@ -200,24 +285,29 @@ impl BenchCommand {
                         start_time.elapsed()
                     ));
                 };
+
                 match proof_request.proof_status() {
                     ProofRequestStatus::Completed => {
-                        completed.insert(i);
+                        tracing::info!(
+                            "Proof request {} completed after {:?}",
+                            i,
+                            start_time.elapsed()
+                        );
+                        break;
                     }
                     ProofRequestStatus::Failed | ProofRequestStatus::Cancelled => {
                         return Err(eyre::eyre!(
-                            "Proof request {:?} after {:?}",
+                            "Proof request {} {:?} after {:?}",
+                            i,
                             proof_request.proof_status(),
                             start_time.elapsed()
                         ));
                     }
                     _ => {}
                 }
+
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
-            if completed.len() == common.count as usize {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
         tracing::info!("Completed after {:?}", start_time.elapsed());
@@ -253,5 +343,52 @@ impl BenchCommand {
             .map(|_| artifact_client.create_artifact().unwrap().to_id())
             .collect();
         Ok((elf_id.to_id(), stdin_id.to_id(), proof_output_ids))
+    }
+
+    async fn download_from_s3(bucket: &str, s3_path: &str) -> Result<(Vec<u8>, SP1Stdin)> {
+        // Download program.bin from S3
+        let program_output = std::process::Command::new("aws")
+            .args([
+                "s3",
+                "cp",
+                &format!("s3://{}/{}/program.bin", bucket, s3_path),
+                "program.bin",
+            ])
+            .output()?;
+
+        if !program_output.status.success() {
+            return Err(eyre::eyre!(
+                "Failed to download program.bin: {}",
+                String::from_utf8_lossy(&program_output.stderr)
+            ));
+        }
+
+        // Download stdin.bin from S3
+        let stdin_output = std::process::Command::new("aws")
+            .args([
+                "s3",
+                "cp",
+                &format!("s3://{}/{}/stdin.bin", bucket, s3_path),
+                "stdin.bin",
+            ])
+            .output()?;
+
+        if !stdin_output.status.success() {
+            return Err(eyre::eyre!(
+                "Failed to download stdin.bin: {}",
+                String::from_utf8_lossy(&stdin_output.stderr)
+            ));
+        }
+
+        // Read the downloaded files
+        let program = std::fs::read("program.bin")?;
+        let stdin_bytes = std::fs::read("stdin.bin")?;
+        let stdin: SP1Stdin = bincode::deserialize(&stdin_bytes)?;
+
+        // Clean up the downloaded files
+        std::fs::remove_file("program.bin").ok();
+        std::fs::remove_file("stdin.bin").ok();
+
+        Ok((program, stdin))
     }
 }
