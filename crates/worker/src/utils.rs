@@ -3,7 +3,7 @@ use opentelemetry::{global, Context};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sp1_cluster_common::proto::TaskData;
-use sp1_prover::worker::{ProofId, RawTaskRequest, RequesterId, TaskId};
+use sp1_prover::worker::{ProofId, RawTaskRequest, RequesterId, TaskContext, TaskId};
 use sp1_prover_types::Artifact;
 use std::collections::HashMap;
 use std::env;
@@ -37,6 +37,12 @@ pub fn worker_task_to_raw_task_request(
     task: &TaskData,
     parent_context: Option<Context>,
 ) -> RawTaskRequest {
+    let context = TaskContext {
+        proof_id: ProofId::new(task.proof_id.clone()),
+        parent_id: task.parent_id.clone().map(TaskId::new),
+        parent_context,
+        requester_id: RequesterId::new(task.requester.clone()),
+    };
     RawTaskRequest {
         inputs: task
             .inputs
@@ -48,10 +54,7 @@ pub fn worker_task_to_raw_task_request(
             .iter()
             .map(|s| Artifact::from(s.clone()))
             .collect(),
-        proof_id: ProofId::new(task.proof_id.clone()),
-        parent_id: task.parent_id.clone().map(TaskId::new),
-        parent_context,
-        requester_id: RequesterId::new(task.requester.clone()),
+        context,
     }
 }
 

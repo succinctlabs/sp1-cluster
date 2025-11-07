@@ -14,7 +14,7 @@ use sp1_cluster_common::proto::{
 };
 use sp1_cluster_common::util::{backoff_retry, status_to_backoff_error};
 use sp1_prover::worker::{
-    ProofId, RawTaskRequest, SubscriberBuilder, TaskId, TaskMetadata, WorkerClient,
+    ProofId, RawTaskRequest, SubscriberBuilder, TaskContext, TaskId, TaskMetadata, WorkerClient,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -160,11 +160,14 @@ impl WorkerClient for WorkerServiceClient {
         let RawTaskRequest {
             inputs: input_artifacts,
             outputs: output_artifacts,
+            context: task_context,
+        } = task;
+        let TaskContext {
             proof_id,
             parent_id,
             parent_context,
             requester_id,
-        } = task;
+        } = task_context;
         let context = parent_context.unwrap_or_else(current_context);
         let metadata = serde_json::to_string(&task_metadata(&context))?;
 
