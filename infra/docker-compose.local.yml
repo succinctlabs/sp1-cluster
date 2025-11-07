@@ -1,4 +1,17 @@
 services:
+
+  alloy:
+    build:
+      context: .
+      dockerfile: Dockerfile.alloy
+    volumes:
+      - ./config.alloy:/etc/alloy/test.alloy
+    ports:
+      - "12345:12345"
+      - "4317:4317"
+      - "4318:4318"
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/test.alloy"]
+
   redis:
     extends:
       file: docker-compose.yml
@@ -22,6 +35,10 @@ services:
       args:
         GITHUB_TOKEN: ${GITHUB_TOKEN}
     command: ["/bin/sh", "-c", "/api"]
+    depends_on:
+      - alloy
+      - redis
+      - postgresql
     # ports:
     #   - "127.0.0.1:50051:50051"
       # - "127.0.0.1:3000:3000"
@@ -32,6 +49,7 @@ services:
       service: coordinator
     image: sp1-cluster-local:coordinator
     pull_policy: build
+    env_file: .env
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -39,20 +57,20 @@ services:
         GITHUB_TOKEN: ${GITHUB_TOKEN}
     command: ["/bin/sh", "-c", "/coordinator"]
 
-  mixed:
-    extends:
-      file: docker-compose.yml
-      service: mixed
-    image: sp1-cluster-local:mixed
-    pull_policy: build
-    env_file: .env
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile.node_gpu
-      args:
-        GITHUB_TOKEN: ${GITHUB_TOKEN}
-    command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
-    runtime: nvidia
+  # mixed:
+  #   extends:
+  #     file: docker-compose.yml
+  #     service: mixed
+  #   image: sp1-cluster-local:mixed
+  #   pull_policy: build
+  #   env_file: .env
+  #   build:
+  #     context: ..
+  #     dockerfile: infra/Dockerfile.node_gpu
+  #     args:
+  #       GITHUB_TOKEN: ${GITHUB_TOKEN}
+  #   command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
+  #   runtime: nvidia
 
   cpu-node:
     extends:
@@ -64,6 +82,8 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile
+      args:
+        GITHUB_TOKEN: ${GITHUB_TOKEN}
     command: ["/bin/sh", "-c", "/node"]
 
   gpu0:
@@ -76,28 +96,44 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.node_gpu
+      args:
+        GITHUB_TOKEN: ${GITHUB_TOKEN}
     command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
 
   gpu1:
+    environment:
+      - CUDA_VISIBLE_DEVICES=1
     extends: gpu0
 
   gpu2:
+    environment:
+      - CUDA_VISIBLE_DEVICES=2
     extends: gpu0
 
   gpu3:
+    environment:
+      - CUDA_VISIBLE_DEVICES=3
     extends: gpu0
 
-  gpu4:
-    extends: gpu0
+  # gpu4:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=4
+  #   extends: gpu0
 
-  gpu5:
-    extends: gpu0
+  # gpu5:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=5
+  #   extends: gpu0
 
-  gpu6:
-    extends: gpu0
+  # gpu6:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=6
+  #   extends: gpu0
 
-  gpu7:
-    extends: gpu0
+  # gpu7:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=7
+  #   extends: gpu0
 
   # fulfiller:
   #   extends:

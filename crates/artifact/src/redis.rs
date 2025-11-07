@@ -7,7 +7,7 @@ use deadpool_redis::{Config, Connection as RedisConnection, Pool, PoolConfig, Ru
 use sp1_cluster_common::util::backoff_retry;
 use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType};
 use tokio::task::JoinSet;
-use tracing::instrument;
+use tracing::{instrument, Instrument};
 
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
@@ -59,13 +59,14 @@ impl RedisArtifactClient {
         id: &str,
     ) -> Result<RedisConnection, backoff::Error<anyhow::Error>> {
         let idx = get_connection_idx(id, self.connection_pools.len());
-        let now = std::time::Instant::now();
-        tracing::debug!("getting redis connection: idx: {}", idx);
-        let result = self.connection_pools[idx].get().await.map_err(|e| {
-            tracing::warn!("Failed to get redis connection: {:?}", e);
-            backoff::Error::transient(e.into())
-        })?;
-        tracing::debug!("got redis connection, elapsed: {:?}", now.elapsed());
+        let result = self.connection_pools[idx]
+            .get()
+            .instrument(tracing::trace_span!("get_redis_connection",))
+            .await
+            .map_err(|e| {
+                tracing::warn!("Failed to get redis connection: {:?}", e);
+                backoff::Error::transient(e.into())
+            })?;
         Ok(result)
     }
 
@@ -201,7 +202,7 @@ impl RedisArtifactClient {
 }
 
 impl ArtifactClient for RedisArtifactClient {
-    #[instrument(name = "upload", level = "info", fields(id = artifact.id()), skip(self, artifact, data))]
+    #[instrument(name = "upload", level = "trace", fields(id = artifact.id()), skip(self, artifact, data))]
     async fn upload_raw(
         &self,
         artifact: &impl ArtifactId,
@@ -216,7 +217,7 @@ impl ArtifactClient for RedisArtifactClient {
         .map_err(|e| anyhow!(e))
     }
 
-    #[instrument(name = "download", level = "info", fields(id = artifact.id()), skip(self, artifact))]
+    #[instrument(name = "download", level = "trace", fields(id = artifact.id()), skip(self, artifact))]
     async fn download_raw(
         &self,
         artifact: &impl ArtifactId,

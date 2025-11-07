@@ -111,7 +111,6 @@ services:
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=GPU
-      - RUST_LOG=info,moongate_core=off
     deploy:
       resources:
         limits:

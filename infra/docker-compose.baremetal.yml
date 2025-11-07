@@ -53,7 +53,7 @@ services:
 
   # API Service
   api:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-5e1fff7
+    image: sp1-cluster-wip:base-yuwen-latest-d3dbc39
     env_file: .env
     environment:
       - API_GRPC_ADDR=0.0.0.0:50051
@@ -69,7 +69,7 @@ services:
 
   # Coordinator Service
   coordinator:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-5e1fff7
+    image: sp1-cluster-wip:base-yuwen-latest-d3dbc39
     env_file: .env
     environment:
       - COORDINATOR_CLUSTER_RPC=http://api:50051
@@ -85,7 +85,7 @@ services:
 
   # CPU Node
   cpu-node:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-5e1fff7
+    image: sp1-cluster-wip:base-yuwen-latest-d3dbc39
     env_file: .env
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
@@ -138,7 +138,7 @@ services:
 
   # GPU Node
   gpu0:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:node-gpu-5e1fff7
+    image: sp1-cluster-wip:node-gpu-yuwen-latest-d3dbc39
     env_file: .env
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
