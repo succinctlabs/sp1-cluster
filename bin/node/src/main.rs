@@ -46,7 +46,9 @@ async fn build_worker<A: ArtifactClient, W: WorkerClient>(
     worker_client: W,
     backend: TaskScope,
 ) -> Result<SP1Worker<A, W, ClusterProverComponents>> {
-    csl_prover::cuda_worker_builder(backend)
+    csl_prover::prover_clean_worker_builder(backend)
+        .await
+        // csl_prover::cuda_worker_builder(backend)
         .with_config(|conf| *conf = cluster_worker_config())
         .with_artifact_client(artifact_client)
         .with_worker_client(worker_client)

@@ -1,0 +1,84 @@
+# GPU Worker Node Docker Compose
+# This runs on GPU machines, connecting to management node at 10.10.100.29
+# Includes: Alloy (local) and 8 GPU nodes
+
+services:
+  # Alloy observability service (local to this worker)
+  alloy:
+    build:
+      context: .
+      dockerfile: Dockerfile.alloy
+    volumes:
+      - ./config.alloy:/etc/alloy/test.alloy
+    ports:
+      - "12345:12345"
+      - "4317:4317"
+      - "4318:4318"
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/test.alloy"]
+
+  # GPU Node 0
+  gpu0:
+    image: ghcr.io/succinctlabs/sp1-cluster-wip:node-gpu-yuwen-latest-505ff8b
+    environment:
+      - NODE_COORDINATOR_RPC=http://10.10.100.29:50052
+      - WORKER_MAX_WEIGHT_OVERRIDE=24
+      - NODE_ARTIFACT_STORE=redis
+      - NODE_REDIS_NODES=redis://:redispassword@10.10.100.29:6379/0
+      - WORKER_TYPE=GPU
+      - RUST_LOG=debug,tower=info,h2=info,tonic-web=info,hyper-util=info
+      - TRACING_ENABLED=true
+      - OTLP_ENDPOINT=http://alloy:4317
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        limits:
+          cpus: '64'
+          memory: 24G
+        reservations:
+          cpus: '64'
+          memory: 24G
+    depends_on:
+      - alloy
+    runtime: nvidia
+
+  gpu1:
+    environment:
+      - CUDA_VISIBLE_DEVICES=1
+    extends:
+      service: gpu0
+
+  gpu2:
+    environment:
+      - CUDA_VISIBLE_DEVICES=2
+    extends:
+      service: gpu0
+
+  gpu3:
+    environment:
+    - CUDA_VISIBLE_DEVICES=3
+    extends:
+      service: gpu0
+
+  gpu4:
+    environment:
+      - CUDA_VISIBLE_DEVICES=4
+    extends:
+      service: gpu0
+
+  gpu5:
+    environment:
+      - CUDA_VISIBLE_DEVICES=5
+    extends:
+      service: gpu0
+
+  gpu6:
+    environment:
+      - CUDA_VISIBLE_DEVICES=6
+    extends:
+      service: gpu0
+
+  gpu7:
+    environment:
+      - CUDA_VISIBLE_DEVICES=7
+    extends:
+      service: gpu0

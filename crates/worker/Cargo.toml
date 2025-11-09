@@ -35,6 +35,7 @@ async-channel.workspace = true
 async-trait.workspace = true
 backoff.workspace = true
 cfg-if.workspace = true
+chrono.workspace = true
 eyre.workspace = true
 futures.workspace = true
 hashbrown = { workspace = true, features = ["serde"] }

@@ -45,7 +45,9 @@ lazy_static! {
 }
 
 #[cfg(feature = "gpu")]
-pub type ClusterProverComponents = csl_prover::CudaSP1ProverComponents;
+pub type ClusterProverComponents = csl_prover::ProverCleanSP1ProverComponents;
+// #[cfg(feature = "gpu")]
+// pub type ClusterProverComponents = csl_prover::CudaSP1ProverComponents;
 #[cfg(not(feature = "gpu"))]
 pub type ClusterProverComponents = sp1_prover::components::CpuSP1ProverComponents;
 

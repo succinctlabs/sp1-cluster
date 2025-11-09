@@ -12,6 +12,9 @@ use sp1_cluster_common::{
     proto::{self, ProofRequestStatus},
 };
 use sp1_sdk::{network::proto::types::ProofMode, SP1Stdin};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Args)]
@@ -66,6 +69,8 @@ pub enum BenchCommand {
     S3 {
         /// S3 path to the program (e.g., "path/to/program" for s3://bucket/path/to/program/)
         s3_path: String,
+        #[arg(short, long, default_value = "")]
+        param: String,
         /// S3 bucket to download from
         #[arg(long, env = "CLI_BENCH_S3_BUCKET", default_value = "sp1-testing-suite")]
         bucket: String,
@@ -116,11 +121,19 @@ impl BenchCommand {
                 s3_path,
                 bucket,
                 common,
+                param,
             } => {
                 tracing::info!("Downloading program from s3://{}/{}...", bucket, s3_path);
-                let (elf, stdin) = Self::download_from_s3(bucket, s3_path).await?;
+                let (elf, stdin) = Self::download_from_s3(bucket, s3_path, &param).await?;
                 tracing::info!("Running S3 program {:?} benchmark...", s3_path);
-                Self::run_benchmark(elf, stdin, common, None).await?;
+                let proof_ids = Self::run_benchmark(elf, stdin, common, None).await?;
+
+                // Write all proof IDs to CSV
+                for proof_id in proof_ids {
+                    if let Err(e) = Self::append_to_csv(&proof_id, s3_path, Some(param.as_str())) {
+                        tracing::warn!("Failed to write to CSV: {}", e);
+                    }
+                }
             }
         }
         Ok(())
@@ -131,7 +144,7 @@ impl BenchCommand {
         stdin: SP1Stdin,
         common: &CommonArgs,
         cycles_estimate: Option<u64>,
-    ) -> Result<()> {
+    ) -> Result<Vec<String>> {
         let client = ClusterServiceClient::new(common.cluster_rpc.clone()).await?;
 
         let (elf_id, stdin_id, proof_output_ids) = if let Some(redis_nodes) = &common.redis_nodes {
@@ -178,6 +191,7 @@ impl BenchCommand {
         // Worst case timeout is 4 hours per request.
         let deadline = SystemTime::now() + Duration::from_secs(4 * 60 * 60);
         let mut start_time = Instant::now();
+        let mut proof_ids = Vec::new();
 
         // OLD ASYNC CODE (creates all requests then polls them in parallel):
         // for i in 0..common.count {
@@ -293,6 +307,8 @@ impl BenchCommand {
                             i,
                             start_time.elapsed()
                         );
+
+                        proof_ids.push(proof_id.clone());
                         break;
                     }
                     ProofRequestStatus::Failed | ProofRequestStatus::Cancelled => {
@@ -306,7 +322,7 @@ impl BenchCommand {
                     _ => {}
                 }
 
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
 
@@ -320,7 +336,7 @@ impl BenchCommand {
                     / 1_000_000.0
             );
         }
-        Ok(())
+        Ok(proof_ids)
     }
 
     async fn setup_artifacts<A: ArtifactClient>(
@@ -345,7 +361,11 @@ impl BenchCommand {
         Ok((elf_id.to_id(), stdin_id.to_id(), proof_output_ids))
     }
 
-    async fn download_from_s3(bucket: &str, s3_path: &str) -> Result<(Vec<u8>, SP1Stdin)> {
+    async fn download_from_s3(
+        bucket: &str,
+        s3_path: &str,
+        param: &str,
+    ) -> Result<(Vec<u8>, SP1Stdin)> {
         // Download program.bin from S3
         let program_output = std::process::Command::new("aws")
             .args([
@@ -364,14 +384,25 @@ impl BenchCommand {
         }
 
         // Download stdin.bin from S3
-        let stdin_output = std::process::Command::new("aws")
-            .args([
-                "s3",
-                "cp",
-                &format!("s3://{}/{}/stdin.bin", bucket, s3_path),
-                "stdin.bin",
-            ])
-            .output()?;
+        let stdin_output = if param.is_empty() {
+            std::process::Command::new("aws")
+                .args([
+                    "s3",
+                    "cp",
+                    &format!("s3://{}/{}/stdin.bin", bucket, s3_path),
+                    "stdin.bin",
+                ])
+                .output()?
+        } else {
+            std::process::Command::new("aws")
+                .args([
+                    "s3",
+                    "cp",
+                    &format!("s3://{}/{}/input/{}.bin", bucket, s3_path, param),
+                    "stdin.bin",
+                ])
+                .output()?
+        };
 
         if !stdin_output.status.success() {
             return Err(eyre::eyre!(
@@ -390,5 +421,31 @@ impl BenchCommand {
         std::fs::remove_file("stdin.bin").ok();
 
         Ok((program, stdin))
+    }
+
+    fn append_to_csv(proof_id: &str, s3_path: &str, param: Option<&str>) -> Result<()> {
+        let csv_path = "data/s3_bench_results.csv";
+
+        // Create data directory if it doesn't exist
+        if let Some(parent) = Path::new(csv_path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let file_exists = Path::new(csv_path).exists();
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(csv_path)?;
+
+        // Write header if file is new
+        if !file_exists {
+            writeln!(file, "proof_id,s3_path,param")?;
+        }
+
+        // Write data row
+        writeln!(file, "{},{},{}", proof_id, s3_path, param.unwrap_or(""))?;
+
+        Ok(())
     }
 }

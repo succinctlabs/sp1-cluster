@@ -9,6 +9,9 @@ use opentelemetry::Context;
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::proto::{ProofRequestStatus, WorkerTask};
 use sp1_prover::worker::{ProofId, TaskId, TaskMetadata, WorkerClient};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 
 impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
@@ -19,12 +22,16 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
         parent: Context,
         task: &WorkerTask,
     ) -> Result<TaskMetadata, TaskError> {
-        let data = task.data()?;
+        let now = std::time::Instant::now();
+        let mut data = task.data()?.clone();
 
         if data.inputs.is_empty() {
             log::info!("no inputs for task");
             return Err(TaskError::Fatal(anyhow::anyhow!("no inputs for task")));
         }
+
+        // Truncate the cycle limit and TODO thing for now.
+        data.inputs = data.inputs.into_iter().take(3).collect();
 
         let raw_task_request = worker_task_to_raw_task_request(&data, Some(parent));
 
@@ -40,6 +47,35 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
             )
             .await?;
 
+        let duration = now.elapsed().as_secs_f64();
+
+        tracing::info!("PROOF {} COMPLETED in {} seconds", data.proof_id, duration);
+
+        // Write to CSV file if path is configured
+        if let Ok(csv_path) = std::env::var("PROOF_DURATIONS_CSV") {
+            if let Err(e) = Self::append_to_csv(&csv_path, &data.proof_id, &task.task_id, duration)
+            {
+                tracing::warn!("Failed to write to CSV: {}", e);
+            }
+        }
+
         Ok(TaskMetadata { gpu_time: None })
+    }
+
+    fn append_to_csv(path: &str, proof_id: &str, task_id: &str, duration: f64) -> Result<()> {
+        let file_exists = Path::new(path).exists();
+
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+
+        // Write header if file is new
+        if !file_exists {
+            writeln!(file, "timestamp,proof_id,task_id,duration_secs")?;
+        }
+
+        // Write data row
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        writeln!(file, "{},{},{},{}", timestamp, proof_id, task_id, duration)?;
+
+        Ok(())
     }
 }

@@ -27,6 +27,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          token: ${{ secrets.PRIVATE_PULL_TOKEN }}
 
       - name: Install Go
         uses: actions/setup-go@v5
@@ -57,16 +58,24 @@ jobs:
             ~/.cargo/git/db/
             target/
             ~/.rustup/
-          key: rust-nightly-2025-06-24-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: rust-nightly-2025-06-24-
+          key: rust-nightly-2025-04-15-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: rust-nightly-2025-04-15-
 
       - name: Setup Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly-2025-06-24
+          toolchain: nightly-2025-04-15
           profile: minimal
           override: true
           components: rustfmt, clippy
+
+      - name: Setup private git access
+        run: |
+          git config --global --replace-all url."https://${PRIVATE_PULL_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global --add url."https://${PRIVATE_PULL_TOKEN}@github.com/".insteadOf "git@github.com:"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
+        env:
+          PRIVATE_PULL_TOKEN: ${{ secrets.PRIVATE_PULL_TOKEN }}
 
       - name: Run cargo fmt
         uses: actions-rs/cargo@v1
@@ -75,17 +84,6 @@ jobs:
           args: --manifest-path Cargo.toml --all -- --check -v
         env:
           CARGO_INCREMENTAL: 1
-
-      - name: Set up CUDA environment
-        run: |
-          echo "CUDA_HOME=/usr/local/cuda-12.6" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
-          echo "/usr/local/cuda-12.6/bin" >> $GITHUB_PATH
-    
-      - name: Confirm CUDA installation
-        run: |
-          echo "CUDA_HOME=$CUDA_HOME"
-          which nvcc
 
       - name: Run cargo clippy
         uses: actions-rs/cargo@v1
