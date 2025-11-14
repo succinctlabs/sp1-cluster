@@ -1,0 +1,18 @@
+[package]
+name = "sp1-cluster-bench-utils"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sp1-cluster-common = { workspace = true }
+sp1-prover-types = { workspace = true }
+sp1-cluster-artifact = { workspace = true }
+sp1-sdk = { workspace = true }
+eyre = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]

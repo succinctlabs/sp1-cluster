@@ -202,7 +202,7 @@ impl RedisArtifactClient {
 }
 
 impl ArtifactClient for RedisArtifactClient {
-    #[instrument(name = "upload", level = "trace", fields(id = artifact.id()), skip(self, artifact, data))]
+    #[instrument(name = "upload", level = "debug", fields(id = artifact.id()), skip(self, artifact, data))]
     async fn upload_raw(
         &self,
         artifact: &impl ArtifactId,
@@ -217,7 +217,7 @@ impl ArtifactClient for RedisArtifactClient {
         .map_err(|e| anyhow!(e))
     }
 
-    #[instrument(name = "download", level = "trace", fields(id = artifact.id()), skip(self, artifact))]
+    #[instrument(name = "download", level = "debug", fields(id = artifact.id()), skip(self, artifact))]
     async fn download_raw(
         &self,
         artifact: &impl ArtifactId,

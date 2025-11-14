@@ -18,9 +18,9 @@ services:
 
   # GPU Node 0
   gpu0:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:node-gpu-yuwen-latest-505ff8b
+    image: ghcr.io/succinctlabs/sp1-cluster-wip:node-gpu-yuwen01-afc72db
     environment:
-      - NODE_COORDINATOR_RPC=http://10.10.100.29:50052
+      - NODE_COORDINATOR_RPC=http://10.10.100.29:50053
       - WORKER_MAX_WEIGHT_OVERRIDE=24
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@10.10.100.29:6379/0
@@ -28,6 +28,9 @@ services:
       - RUST_LOG=debug,tower=info,h2=info,tonic-web=info,hyper-util=info
       - TRACING_ENABLED=true
       - OTLP_ENDPOINT=http://alloy:4317
+      - NO_COLOR=true
+      - SP1_WORKER_USE_FIXED_PK=true
+      - SP1_WORKER_VERIFY_INTERMEDIATES=false
       - CUDA_VISIBLE_DEVICES=0
     deploy:
       resources:

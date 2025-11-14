@@ -35,3 +35,6 @@ config.alloy
 # Cluster logs and program artifacts
 logs/
 programs/** 
+**.csv
+scripts/*.csv
+ELF_ID

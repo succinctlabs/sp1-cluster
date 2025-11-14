@@ -79,6 +79,9 @@ services:
     image: sp1-cluster-local:cpu-node
     pull_policy: build
     env_file: .env
+    environment:
+      - SP1_WORKER_USE_FIXED_PK=true
+      - SP1_WORKER_VERIFY_INTERMEDIATES=false
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -93,6 +96,9 @@ services:
     image: sp1-cluster-local:gpu
     pull_policy: build
     env_file: .env
+    environment:
+      - SP1_WORKER_USE_FIXED_PK=true
+      - SP1_WORKER_VERIFY_INTERMEDIATES=false
     build:
       context: ..
       dockerfile: infra/Dockerfile.node_gpu

@@ -1,21 +1,15 @@
-use std::{path::PathBuf, time::Instant};
+use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use eyre::Result;
-use sp1_cluster_artifact::{
-    redis::RedisArtifactClient,
-    s3::{S3ArtifactClient, S3DownloadMode},
-    ArtifactClient, ArtifactType,
+use sp1_cluster_bench_utils::{
+    run_benchmark_with_config, ArtifactStoreConfig, BenchmarkConfig, ClusterElf, ELF_ID_PATH,
 };
-use sp1_cluster_common::{
-    client::ClusterServiceClient,
-    proto::{self, ProofRequestStatus},
-};
+use sp1_prover_types::Artifact;
 use sp1_sdk::{network::proto::types::ProofMode, SP1Stdin};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Args)]
 pub struct CommonArgs {
@@ -115,7 +109,16 @@ impl BenchCommand {
                 );
                 let elf = std::fs::read(elf_file)?;
                 let stdin = bincode::deserialize::<SP1Stdin>(&std::fs::read(stdin_file)?)?;
-                Self::run_benchmark(elf.to_vec(), stdin, common, None).await?;
+                let proof_ids = Self::run_benchmark(elf.to_vec(), stdin, common, None).await?;
+
+                let elf_name = elf_file.file_name().unwrap().to_str().unwrap();
+                let workload_name = stdin_file.file_name().unwrap().to_str().unwrap();
+                // Write all proof IDs to CSV
+                for proof_id in proof_ids {
+                    if let Err(e) = Self::append_to_csv(&proof_id, elf_name, Some(workload_name)) {
+                        tracing::warn!("Failed to write to CSV: {}", e);
+                    }
+                }
             }
             BenchCommand::S3 {
                 s3_path,
@@ -145,220 +148,52 @@ impl BenchCommand {
         common: &CommonArgs,
         cycles_estimate: Option<u64>,
     ) -> Result<Vec<String>> {
-        let client = ClusterServiceClient::new(common.cluster_rpc.clone()).await?;
-
-        let (elf_id, stdin_id, proof_output_ids) = if let Some(redis_nodes) = &common.redis_nodes {
-            tracing::info!("using redis artifact store");
-            let artifact_client = RedisArtifactClient::new(
-                redis_nodes
+        let artifact_store = if let Some(redis_nodes) = &common.redis_nodes {
+            ArtifactStoreConfig::Redis {
+                nodes: redis_nodes
                     .clone()
                     .split(',')
                     .map(|s| s.to_string())
                     .collect(),
-                16,
-            );
-            Self::setup_artifacts(artifact_client, elf, stdin, common.count).await?
+            }
         } else {
             if common.s3_bucket.is_none() || common.s3_region.is_none() {
                 return Err(eyre::eyre!(
                     "S3 bucket and region or Redis nodes must be specified"
                 ));
             }
-            tracing::info!("using s3 artifact store");
-            let artifact_client = S3ArtifactClient::new(
-                common.s3_region.clone().unwrap(),
-                common.s3_bucket.clone().unwrap(),
-                32,
-                S3DownloadMode::AwsSDK(
-                    S3ArtifactClient::create_s3_sdk_download_client(
-                        common.s3_region.clone().unwrap(),
-                    )
-                    .await,
-                ),
-            )
-            .await;
-            Self::setup_artifacts(artifact_client, elf, stdin, common.count).await?
+            ArtifactStoreConfig::S3 {
+                bucket: common.s3_bucket.clone().unwrap(),
+                region: common.s3_region.clone().unwrap(),
+            }
         };
 
-        let base_id = format!(
-            "cli_{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        );
-        tracing::info!("base_id: {}", base_id);
-        // Worst case timeout is 4 hours per request.
-        let deadline = SystemTime::now() + Duration::from_secs(4 * 60 * 60);
-        let mut start_time = Instant::now();
-        let mut proof_ids = Vec::new();
+        let config = BenchmarkConfig {
+            cluster_rpc: common.cluster_rpc.clone(),
+            count: common.count,
+            mode: common.mode,
+            timeout_hours: 4,
+            artifact_store,
+        };
 
-        // OLD ASYNC CODE (creates all requests then polls them in parallel):
-        // for i in 0..common.count {
-        //     client
-        //         .create_proof_request(sp1_cluster_common::proto::ProofRequestCreateRequest {
-        //             proof_id: format!("{}_{}", base_id, i),
-        //             program_artifact_id: elf_id.clone(),
-        //             stdin_artifact_id: stdin_id.clone(),
-        //             options_artifact_id: Some((common.mode as i32).to_string()),
-        //             proof_artifact_id: Some(proof_output_ids[i as usize].clone()),
-        //             requester: vec![],
-        //             deadline: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs(),
-        //             cycle_limit: 0,
-        //             gas_limit: 0,
-        //         })
-        //         .await?;
-        // }
-        // let mut completed = HashSet::new();
-        // loop {
-        //     if deadline < SystemTime::now() {
-        //         return Err(eyre::eyre!(
-        //             "Timeout exceeded after {:?}",
-        //             start_time.elapsed()
-        //         ));
-        //     }
-        //
-        //     for i in 0..common.count {
-        //         if completed.contains(&i) {
-        //             continue;
-        //         }
-        //         let resp = client
-        //             .get_proof_request(proto::ProofRequestGetRequest {
-        //                 proof_id: format!("{}_{}", base_id, i),
-        //             })
-        //             .await?;
-        //         let Some(proof_request) = resp else {
-        //             return Err(eyre::eyre!(
-        //                 "Proof request {} not found after {:?}",
-        //                 i,
-        //                 start_time.elapsed()
-        //             ));
-        //         };
-        //         match proof_request.proof_status() {
-        //             ProofRequestStatus::Completed => {
-        //                 completed.insert(i);
-        //             }
-        //             ProofRequestStatus::Failed | ProofRequestStatus::Cancelled => {
-        //                 return Err(eyre::eyre!(
-        //                     "Proof request {:?} after {:?}",
-        //                     proof_request.proof_status(),
-        //                     start_time.elapsed()
-        //                 ));
-        //             }
-        //             _ => {}
-        //         }
-        //     }
-        //     if completed.len() == common.count as usize {
-        //         break;
-        //     }
-        //     tokio::time::sleep(Duration::from_millis(500)).await;
-        // }
+        // If the ELF_ID file exists, read from it and use the existing artifact
+        let elf_id_path = std::env::var("CARGO_MANIFEST_DIR")
+            .map(|dir| format!("{}/{}", dir, ELF_ID_PATH))
+            .unwrap_or_else(|_| ELF_ID_PATH.to_string());
 
-        // NEW SYNC CODE: Synchronously create each proof request and wait for it to complete
-        for i in 0..common.count {
-            let proof_id = format!("{}_{}", base_id, i);
-
-            // Create the proof request
-            client
-                .create_proof_request(sp1_cluster_common::proto::ProofRequestCreateRequest {
-                    proof_id: proof_id.clone(),
-                    program_artifact_id: elf_id.clone(),
-                    stdin_artifact_id: stdin_id.clone(),
-                    options_artifact_id: Some((common.mode as i32).to_string()),
-                    proof_artifact_id: Some(proof_output_ids[i as usize].clone()),
-                    requester: vec![],
-                    deadline: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs(),
-                    cycle_limit: 0,
-                    gas_limit: 0,
-                })
-                .await?;
-
-            start_time = Instant::now();
-            tracing::info!("Created proof request {} ({})", i, proof_id);
-
-            // Poll until this specific proof request is completed
-            loop {
-                if deadline < SystemTime::now() {
-                    return Err(eyre::eyre!(
-                        "Timeout exceeded for proof request {} after {:?}",
-                        i,
-                        start_time.elapsed()
-                    ));
-                }
-
-                let resp = client
-                    .get_proof_request(proto::ProofRequestGetRequest {
-                        proof_id: proof_id.clone(),
-                    })
-                    .await?;
-
-                let Some(proof_request) = resp else {
-                    return Err(eyre::eyre!(
-                        "Proof request {} not found after {:?}",
-                        i,
-                        start_time.elapsed()
-                    ));
-                };
-
-                match proof_request.proof_status() {
-                    ProofRequestStatus::Completed => {
-                        tracing::info!(
-                            "Proof request {} completed after {:?}",
-                            i,
-                            start_time.elapsed()
-                        );
-
-                        proof_ids.push(proof_id.clone());
-                        break;
-                    }
-                    ProofRequestStatus::Failed | ProofRequestStatus::Cancelled => {
-                        return Err(eyre::eyre!(
-                            "Proof request {} {:?} after {:?}",
-                            i,
-                            proof_request.proof_status(),
-                            start_time.elapsed()
-                        ));
-                    }
-                    _ => {}
-                }
-
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-
-        tracing::info!("Completed after {:?}", start_time.elapsed());
-        if let Some(cycles_estimate) = cycles_estimate {
-            tracing::info!(
-                "Total Cycles: {:.2} | Aggregate MHz: {:.2}",
-                cycles_estimate * common.count as u64,
-                cycles_estimate as f64 * common.count as f64
-                    / start_time.elapsed().as_secs_f64()
-                    / 1_000_000.0
+        let cluster_elf = if Path::new(&elf_id_path).exists() {
+            let elf_id = std::fs::read_to_string(&elf_id_path)?;
+            tracing::warn!(
+                "Using existing artifact ID from {}: {}",
+                elf_id_path,
+                elf_id
             );
-        }
-        Ok(proof_ids)
-    }
+            ClusterElf::ExistingElf(Artifact::from(elf_id))
+        } else {
+            ClusterElf::NewElf(elf)
+        };
 
-    async fn setup_artifacts<A: ArtifactClient>(
-        artifact_client: A,
-        elf: Vec<u8>,
-        stdin: SP1Stdin,
-        count: u32,
-    ) -> Result<(String, String, Vec<String>)> {
-        let elf_id = artifact_client.create_artifact().unwrap();
-        artifact_client
-            .upload_with_type(&elf_id, ArtifactType::Program, elf)
-            .await
-            .map_err(|e| eyre::eyre!(e))?;
-        let stdin_id = artifact_client.create_artifact().unwrap();
-        artifact_client
-            .upload_with_type(&stdin_id, ArtifactType::Stdin, stdin)
-            .await
-            .map_err(|e| eyre::eyre!(e))?;
-        let proof_output_ids = (0..count)
-            .map(|_| artifact_client.create_artifact().unwrap().to_id())
-            .collect();
-        Ok((elf_id.to_id(), stdin_id.to_id(), proof_output_ids))
+        run_benchmark_with_config(cluster_elf, stdin, &config, cycles_estimate).await
     }
 
     async fn download_from_s3(
@@ -424,7 +259,7 @@ impl BenchCommand {
     }
 
     fn append_to_csv(proof_id: &str, s3_path: &str, param: Option<&str>) -> Result<()> {
-        let csv_path = "data/s3_bench_results.csv";
+        let csv_path = "data/bench_results.csv";
 
         // Create data directory if it doesn't exist
         if let Some(parent) = Path::new(csv_path).parent() {
