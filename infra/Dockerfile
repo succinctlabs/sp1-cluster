@@ -1,7 +1,7 @@
 #
 # Build Stage
 #
-FROM --platform=linux/amd64 debian:bookworm-slim@sha256:364d3f277f79b11fafee2f44e8198054486583d3392e2472eb656d5c780156f5 AS build
+FROM --platform=linux/amd64 rustlang/rust:nightly-slim AS build
 
 # Install dependencies
 RUN apt-get update -y && \
@@ -27,9 +27,7 @@ RUN apt-get update -y && \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Rust
-RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
+# Install the specific Rust nightly version from rust-toolchain.toml
 COPY rust-toolchain.toml rust-toolchain.toml
 RUN rustup show
 
