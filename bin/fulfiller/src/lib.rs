@@ -17,7 +17,8 @@ use spn_artifacts::{extract_artifact_name, Artifact};
 use spn_network_types::{
     prover_network_client::ProverNetworkClient, ExecutionStatus, FailFulfillmentRequest,
     FailFulfillmentRequestBody, FulfillProofRequest, FulfillProofRequestBody, FulfillmentStatus,
-    GetNonceRequest, GetOwnerRequest, MessageFormat, Signable, TransactionVariant,
+    GetNonceRequest, GetOwnerRequest, MessageFormat, ProofRequestError, Signable,
+    TransactionVariant,
 };
 use spn_utils::time_now;
 use tokio::{task::JoinSet, time::sleep};
@@ -35,6 +36,12 @@ pub mod metrics;
 const REFRESH_INTERVAL_SEC: u64 = 3;
 /// The maximum number of requests to handle in a single refresh loop.
 const REQUEST_LIMIT: u32 = 1000;
+/// The error strings that should trigger a VERIFICATION_KEY_MISMATCH error.
+const VK_MISMATCH_STRINGS: &[&str] = &[
+    "InvalidPowWitness",
+    "sp1 vk hash mismatch",
+    "vk hash from syscall does not match vkey from input",
+];
 
 #[derive(Clone)]
 pub struct Fulfiller<A: ArtifactClient> {
@@ -157,6 +164,31 @@ impl<A: ArtifactClient> Fulfiller<A> {
                     Err(e) => {
                         error!("failed to submit request 0x{}: {:?}", request_id, e);
                         self_clone.metrics.request_submission_failures.increment(1);
+
+                        // Fail the request if the verification key does not match the one
+                        // expected for the program.
+                        let err_text = format!("{:?}", e);
+                        if VK_MISMATCH_STRINGS.iter().any(|s| err_text.contains(s)) {
+                            match self_clone
+                                .fail_request(
+                                    &request_id,
+                                    Some(ProofRequestError::VerificationKeyMismatch as i32),
+                                )
+                                .await
+                            {
+                                Ok(_) => {
+                                    info!("failed request 0x{} due to VK mismatch", request_id);
+                                    self_clone.metrics.requests_failed.increment(1);
+                                    self_clone.metrics.total_requests_processed.increment(1);
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "failed to fail request 0x{} with VK mismatch: {:?}",
+                                        request_id, e
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             })
@@ -261,7 +293,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
             let self_clone = self.clone();
             let request_id = request.id;
             tokio::spawn(async move {
-                match self_clone.fail_request(request_id.as_str()).await {
+                match self_clone.fail_request(request_id.as_str(), None).await {
                     Ok(_) => {
                         info!("failed request 0x{}", request_id);
                         self_clone.metrics.requests_failed.increment(1);
@@ -280,7 +312,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
         Ok(())
     }
 
-    async fn fail_request(&self, request_id: &str) -> Result<()> {
+    async fn fail_request(&self, request_id: &str, error: Option<i32>) -> Result<()> {
         // Send the failed fulfillment to the network.
         let nonce = self
             .network
@@ -294,6 +326,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
         let body = FailFulfillmentRequestBody {
             nonce,
             request_id: hex::decode(request_id).context("failed to decode request_id")?,
+            error,
         };
         let fail_request = FailFulfillmentRequest {
             format: MessageFormat::Binary.into(),
@@ -354,6 +387,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 to: None,
                 mode: None,
                 not_bid_by: None,
+                error: None,
                 settlement_status: None,
             });
         }
@@ -413,6 +447,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
         let body = FailFulfillmentRequestBody {
             nonce,
             request_id: hex::decode(request_id).context("failed to decode request_id")?,
+            error: None,
         };
         let fail_request = FailFulfillmentRequest {
             format: MessageFormat::Binary.into(),
@@ -553,6 +588,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 to: None,
                 mode: None,
                 not_bid_by: None,
+                error: None,
                 settlement_status: None,
             });
         }

@@ -175,6 +175,7 @@ impl Bidder {
             to: None,
             mode: None,
             not_bid_by: Some(prover.to_vec()),
+            error: None,
             settlement_status: None,
         };
         let network_requests_resp = self
@@ -207,6 +208,7 @@ impl Bidder {
                 to: None,
                 mode: None,
                 not_bid_by: None,
+                error: None,
                 settlement_status: None,
             })
             .await?
