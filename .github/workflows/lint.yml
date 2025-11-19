@@ -57,13 +57,13 @@ jobs:
             ~/.cargo/git/db/
             target/
             ~/.rustup/
-          key: rust-nightly-2025-03-30-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: rust-nightly-2025-03-30-
+          key: rust-nightly-2025-03-12-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: rust-nightly-2025-03-12-
 
       - name: Setup Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly-2025-03-30
+          toolchain: nightly-2025-03-12
           profile: minimal
           override: true
           components: rustfmt, clippy
@@ -80,7 +80,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --manifest-path Cargo.toml --package sp1-cluster-fulfiller --package sp1-cluster-api --package sp1-cluster-bidder -- -D warnings -A incomplete-features
+          args: --manifest-path Cargo.toml --all-features --all-targets -- -D warnings -A incomplete-features
         env:
           CARGO_INCREMENTAL: 1
 

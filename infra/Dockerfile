@@ -1,7 +1,7 @@
 #
 # Build Stage
 #
-FROM --platform=linux/amd64 rustlang/rust:nightly-slim AS build
+FROM --platform=linux/amd64 rustlang/rust:nightly-slim@sha256:1489939da2c8e707b56129b25417cb1f52f441d37f748f7e4d0550a56475a6ba AS build
 
 # Install dependencies
 RUN apt-get update -y && \
@@ -26,10 +26,6 @@ RUN apt-get update -y && \
     openssh-client \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-
-# Install the specific Rust nightly version from rust-toolchain.toml
-COPY rust-toolchain.toml rust-toolchain.toml
-RUN rustup show
 
 # Install Go
 ENV GO_VERSION=1.22.5
