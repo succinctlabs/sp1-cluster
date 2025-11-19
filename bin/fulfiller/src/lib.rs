@@ -165,68 +165,27 @@ impl<A: ArtifactClient> Fulfiller<A> {
                         error!("failed to submit request 0x{}: {:?}", request_id, e);
                         self_clone.metrics.request_submission_failures.increment(1);
 
-                        // Send failure to network if the verification key does not match the one
+                        // Fail the request if the verification key does not match the one
                         // expected for the program.
                         let err_text = format!("{:?}", e);
                         if VK_MISMATCH_STRINGS.iter().any(|s| err_text.contains(s)) {
-                            info!("detected VK mismatch for request 0x{}, sending failure to network", request_id);
-
-                            // Get nonce for the failure request.
-                            match self_clone.network.clone().get_nonce(GetNonceRequest {
-                                address: self_clone.signer.address().to_vec(),
-                            }).await {
-                                Ok(nonce_response) => {
-                                    let nonce = nonce_response.into_inner().nonce;
-
-                                    // Decode the request ID.
-                                    match hex::decode(&request_id) {
-                                        Ok(request_id_bytes) => {
-                                            // Send the failed fulfillment to the network with error code.
-                                            let body = FailFulfillmentRequestBody {
-                                                nonce,
-                                                request_id: request_id_bytes,
-                                                error: Some(ProofRequestError::VerificationKeyMismatch as i32),
-                                            };
-                                            let fail_request = FailFulfillmentRequest {
-                                                format: MessageFormat::Binary.into(),
-                                                signature: body.sign(&self_clone.signer).into(),
-                                                body: Some(body),
-                                            };
-
-                                            if let Err(e) = self_clone.network.clone().fail_fulfillment(fail_request).await {
-                                                match e.code() {
-                                                    Code::PermissionDenied | Code::FailedPrecondition | Code::NotFound | Code::InvalidArgument => {
-                                                        tracing::warn!("fail fulfillment rejected for VK mismatch 0x{}: {:?}", request_id, e);
-                                                    }
-                                                    _ => {
-                                                        error!("failed to send VK mismatch failure to network for 0x{}: {:?}", request_id, e);
-                                                    }
-                                                }
-                                            } else {
-                                                info!("sent VK mismatch failure to network for 0x{}", request_id);
-                                            }
-
-                                            // Mark the request as handled in the cluster.
-                                            match self_clone.cluster.update_proof_request(ProofRequestUpdateRequest {
-                                                proof_id: request_id.clone(),
-                                                handled: Some(true),
-                                                ..Default::default()
-                                            }).await {
-                                                Ok(_) => {
-                                                    info!("marked request 0x{} as handled due to VK mismatch", request_id);
-                                                }
-                                                Err(e) => {
-                                                    error!("failed to mark request 0x{} as handled: {:?}", request_id, e);
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("failed to decode request_id 0x{} for VK mismatch handling: {:?}", request_id, e);
-                                        }
-                                    }
+                            match self_clone
+                                .fail_request(
+                                    &request_id,
+                                    Some(ProofRequestError::VerificationKeyMismatch as i32),
+                                )
+                                .await
+                            {
+                                Ok(_) => {
+                                    info!("failed request 0x{} due to VK mismatch", request_id);
+                                    self_clone.metrics.requests_failed.increment(1);
+                                    self_clone.metrics.total_requests_processed.increment(1);
                                 }
                                 Err(e) => {
-                                    error!("failed to get nonce for VK mismatch failure 0x{}: {:?}", request_id, e);
+                                    error!(
+                                        "failed to fail request 0x{} with VK mismatch: {:?}",
+                                        request_id, e
+                                    );
                                 }
                             }
                         }
@@ -334,7 +293,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
             let self_clone = self.clone();
             let request_id = request.id;
             tokio::spawn(async move {
-                match self_clone.fail_request(request_id.as_str()).await {
+                match self_clone.fail_request(request_id.as_str(), None).await {
                     Ok(_) => {
                         info!("failed request 0x{}", request_id);
                         self_clone.metrics.requests_failed.increment(1);
@@ -353,7 +312,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
         Ok(())
     }
 
-    async fn fail_request(&self, request_id: &str) -> Result<()> {
+    async fn fail_request(&self, request_id: &str, error: Option<i32>) -> Result<()> {
         // Send the failed fulfillment to the network.
         let nonce = self
             .network
@@ -367,6 +326,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
         let body = FailFulfillmentRequestBody {
             nonce,
             request_id: hex::decode(request_id).context("failed to decode request_id")?,
+            error,
         };
         let fail_request = FailFulfillmentRequest {
             format: MessageFormat::Binary.into(),
@@ -427,6 +387,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 to: None,
                 mode: None,
                 not_bid_by: None,
+                error: None,
                 settlement_status: None,
             });
         }
@@ -486,6 +447,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
         let body = FailFulfillmentRequestBody {
             nonce,
             request_id: hex::decode(request_id).context("failed to decode request_id")?,
+            error: None,
         };
         let fail_request = FailFulfillmentRequest {
             format: MessageFormat::Binary.into(),
@@ -626,6 +588,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 to: None,
                 mode: None,
                 not_bid_by: None,
+                error: None,
                 settlement_status: None,
             });
         }
