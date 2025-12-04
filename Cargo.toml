@@ -35,7 +35,7 @@ sp1-recursion-compiler = { version = "5.2.1" }
 sp1-recursion-core = { version = "5.2.1" }
 sp1-sdk = { version = "5.2.1" }
 sp1-stark = { version = "5.2.1" }
-spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "ernesto/artifact-timeout" }
 spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
 spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }

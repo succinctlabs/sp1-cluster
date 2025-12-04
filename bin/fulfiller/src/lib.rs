@@ -641,7 +641,14 @@ impl<A: ArtifactClient> Fulfiller<A> {
             };
             let network_artifact_type = (artifact_type as i32).try_into()?;
             let bytes = artifact
-                .download_raw_from_uri(uri, "us-east-2", network_artifact_type) // TODO: fix
+                .download_raw_from_uri_par(
+                    uri,
+                    "us-east-2",
+                    network_artifact_type,
+                    std::env::var("FULFILLER_S3_CONCURRENCY")
+                        .map(|s| s.parse().unwrap_or(32))
+                        .unwrap_or(32),
+                )
                 .await?;
             self.cluster_artifact_client
                 .upload_raw(&id, artifact_type, bytes.into())
