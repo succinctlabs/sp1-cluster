@@ -6,10 +6,11 @@ use sp1_prover::worker::SP1WorkerConfig;
 pub fn cluster_opts() -> SP1CoreOpts {
     let mut opts = SP1CoreOpts::default();
 
-    let shard_threshold = ELEMENT_THRESHOLD - (1 << 27);
+    let shard_threshold = ELEMENT_THRESHOLD - (1 << 27) - (1 << 26);
 
     println!("Shard threshold: {shard_threshold}");
     opts.sharding_threshold.element_threshold = shard_threshold;
+    opts.global_dependencies_opt = true;
 
     opts
 }

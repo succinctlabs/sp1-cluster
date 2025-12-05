@@ -16,19 +16,34 @@ services:
     extends:
       file: docker-compose.yml
       service: redis
+      environment:
+      - REDIS_PASSWORD=redispassword
+      - REDIS_AOF_ENABLED=no
+      - REDIS_MAXMEMORY=25gb
+      - REDIS_MAXMEMORY_POLICY=volatile-lru
 
   postgresql:
     extends:
       file: docker-compose.yml
       service: postgresql
+      environment:
+        - POSTGRES_PASSWORD=postgrespassword
+        - POSTGRES_USER=postgres
+        - POSTGRES_DB=postgres
 
   api:
     extends:
       file: docker-compose.yml
       service: api
     image: sp1-cluster-local:api
+    environment:
+      - API_GRPC_ADDR=0.0.0.0:50051
+      - API_HTTP_ADDR=0.0.0.0:3000
+      - API_AUTO_MIGRATE=true
+      - API_DATABASE_URL=postgresql://postgres:postgrespassword@postgresql:5432/postgres
+      - OTLP_ENDPOINT=http://alloy:4317
+      - RUST_LOG=debug,tower=info,h2=info,tonic-web=info,hyper-util=info
     pull_policy: build
-    env_file: .env
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -48,8 +63,15 @@ services:
       file: docker-compose.yml
       service: coordinator
     image: sp1-cluster-local:coordinator
+    environment:
+      - COORDINATOR_CLUSTER_RPC=http://api:50051
+      - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
+      - COORDINATOR_ADDR=0.0.0.0:50051
+      - RUST_LOG=debug,tower=info,h2=info,tonic-web=info
+      - OTLP_ENDPOINT=http://alloy:4317
     pull_policy: build
-    env_file: .env
+    ports:
+      - "0.0.0.0:50053:50051"
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -78,10 +100,22 @@ services:
       service: cpu-node
     image: sp1-cluster-local:cpu-node
     pull_policy: build
-    env_file: .env
     environment:
-      - SP1_WORKER_USE_FIXED_PK=true
-      - SP1_WORKER_VERIFY_INTERMEDIATES=false
+      - NODE_COORDINATOR_RPC=http://coordinator:50051
+      - WORKER_MAX_WEIGHT_OVERRIDE=32
+      - NODE_ARTIFACT_STORE=redis
+      - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
+      - WORKER_TYPE=CPU
+      - TRACING_ENABLED=true
+      - SP1_WORKER_NUM_SPLICING_WORKERS=12
+      - SP1_WORKER_SPLICING_BUFFER_SIZE=12
+      - SP1_WORKER_NUMBER_OF_SEND_SPLICE_WORKERS_PER_SPLICE=4
+      - SP1_WORKER_SEND_SPLICE_INPUT_BUFFER_SIZE_PER_SPLICE=4
+      - MINIMAL_TRACE_CHUNK_THRESHOLD=33554432
+      - RUST_LOG=debug,tower=info,h2=info
+      - OTLP_ENDPOINT=http://alloy:4317
+      - PROOF_DURATIONS_CSV=/data/proof_durations.csv
+      # - SP1_WORKER_USE_FIXED_PK=true
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -95,10 +129,22 @@ services:
       service: gpu0
     image: sp1-cluster-local:gpu
     pull_policy: build
-    env_file: .env
     environment:
-      - SP1_WORKER_USE_FIXED_PK=true
-      - SP1_WORKER_VERIFY_INTERMEDIATES=false
+      - NODE_COORDINATOR_RPC=http://coordinator:50051
+      - WORKER_MAX_WEIGHT_OVERRIDE=24
+      - NODE_ARTIFACT_STORE=redis
+      - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
+      - WORKER_TYPE=GPU
+      - RUST_LOG=debug,tower=info,h2=info,tonic-web=info,hyper-util=info
+      - TRACING_ENABLED=true
+      - OTLP_ENDPOINT=http://alloy:4317
+      - NO_COLOR=true
+      - CUDA_VISIBLE_DEVICES=0
+      - RUST_BACKTRACE=full
+      - RUSTFLAGS="-g"
+      - SP1_DEBUG=true
+      # - SP1_WORKER_USE_FIXED_PK=true
+      # - SP1_WORKER_VERIFY_INTERMEDIATES=false
     build:
       context: ..
       dockerfile: infra/Dockerfile.node_gpu
@@ -106,20 +152,20 @@ services:
         GITHUB_TOKEN: ${GITHUB_TOKEN}
     command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
 
-  gpu1:
-    environment:
-      - CUDA_VISIBLE_DEVICES=1
-    extends: gpu0
+  # gpu1:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=1
+  #   extends: gpu0
 
-  gpu2:
-    environment:
-      - CUDA_VISIBLE_DEVICES=2
-    extends: gpu0
+  # gpu2:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=2
+  #   extends: gpu0
 
-  gpu3:
-    environment:
-      - CUDA_VISIBLE_DEVICES=3
-    extends: gpu0
+  # gpu3:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=3
+  #   extends: gpu0
 
   # gpu4:
   #   environment:

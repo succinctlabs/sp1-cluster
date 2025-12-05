@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 use eyre::Result;
 use sp1_cluster_bench_utils::{
-    run_benchmark_with_config, ArtifactStoreConfig, BenchmarkConfig, ClusterElf, ELF_ID_PATH,
+    run_benchmark_with_config, ArtifactStoreConfig, BenchmarkConfig, BenchmarkResults, ClusterElf,
 };
-use sp1_prover_types::Artifact;
 use sp1_sdk::{network::proto::types::ProofMode, SP1Stdin};
+use sp1_sdk::{CpuProver, Prover, ProvingKey};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -176,24 +176,24 @@ impl BenchCommand {
             artifact_store,
         };
 
-        // If the ELF_ID file exists, read from it and use the existing artifact
-        let elf_id_path = std::env::var("CARGO_MANIFEST_DIR")
-            .map(|dir| format!("{}/{}", dir, ELF_ID_PATH))
-            .unwrap_or_else(|_| ELF_ID_PATH.to_string());
+        let client = CpuProver::new_experimental().await;
 
-        let cluster_elf = if Path::new(&elf_id_path).exists() {
-            let elf_id = std::fs::read_to_string(&elf_id_path)?;
-            tracing::warn!(
-                "Using existing artifact ID from {}: {}",
-                elf_id_path,
-                elf_id
-            );
-            ClusterElf::ExistingElf(Artifact::from(elf_id))
-        } else {
-            ClusterElf::NewElf(elf)
-        };
+        let elf_arc = sp1_sdk::Elf::from(elf.clone());
+        let pk = client.setup(elf_arc).await.expect("failed to setup elf");
 
-        run_benchmark_with_config(cluster_elf, stdin, &config, cycles_estimate).await
+        let cluster_elf = ClusterElf::NewElf(elf);
+
+        let BenchmarkResults { proof_ids, proofs } =
+            run_benchmark_with_config(cluster_elf, stdin, &config, cycles_estimate).await?;
+
+        // Write all proofs to CSV
+        for proof in proofs {
+            client
+                .verify(&proof.into(), pk.verifying_key(), None)
+                .expect("failed to verify proof");
+        }
+
+        Ok(proof_ids)
     }
 
     async fn download_from_s3(

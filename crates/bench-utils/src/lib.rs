@@ -11,7 +11,7 @@ use sp1_cluster_common::{
     proto::{self, ProofRequestStatus},
 };
 use sp1_prover_types::Artifact;
-use sp1_sdk::{network::proto::types::ProofMode, SP1Stdin};
+use sp1_sdk::{network::proto::types::ProofMode, ProofFromNetwork, SP1Stdin};
 
 pub struct BenchmarkConfig {
     pub cluster_rpc: String,
@@ -19,6 +19,11 @@ pub struct BenchmarkConfig {
     pub mode: ProofMode,
     pub timeout_hours: u64,
     pub artifact_store: ArtifactStoreConfig,
+}
+
+pub struct BenchmarkResults {
+    pub proof_ids: Vec<String>,
+    pub proofs: Vec<ProofFromNetwork>,
 }
 
 pub enum ArtifactStoreConfig {
@@ -39,11 +44,11 @@ pub async fn run_benchmark<A: ArtifactClient>(
     stdin: SP1Stdin,
     config: &BenchmarkConfig,
     cycles_estimate: Option<u64>,
-) -> Result<Vec<String>> {
+) -> Result<BenchmarkResults> {
     let client = ClusterServiceClient::new(config.cluster_rpc.clone()).await?;
 
     let (elf_id, stdin_id, proof_output_ids) =
-        setup_artifacts(artifact_client, elf, stdin, config.count).await?;
+        setup_artifacts(artifact_client.clone(), elf, stdin, config.count).await?;
 
     let base_id = format!(
         "cli_{}",
@@ -58,6 +63,7 @@ pub async fn run_benchmark<A: ArtifactClient>(
     let deadline = SystemTime::now() + Duration::from_secs(config.timeout_hours * 60 * 60);
     let mut start_time = Instant::now();
     let mut proof_ids = Vec::new();
+    let mut proofs = Vec::new();
 
     // Synchronously create each proof request and wait for it to complete
     for i in 0..config.count {
@@ -67,10 +73,10 @@ pub async fn run_benchmark<A: ArtifactClient>(
         client
             .create_proof_request(sp1_cluster_common::proto::ProofRequestCreateRequest {
                 proof_id: proof_id.clone(),
-                program_artifact_id: elf_id.clone(),
-                stdin_artifact_id: stdin_id.clone(),
+                program_artifact_id: elf_id.clone().to_id(),
+                stdin_artifact_id: stdin_id.clone().to_id(),
                 options_artifact_id: Some((config.mode as i32).to_string()),
-                proof_artifact_id: Some(proof_output_ids[i as usize].clone()),
+                proof_artifact_id: Some(proof_output_ids[i as usize].clone().to_id()),
                 requester: vec![],
                 deadline: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs(),
                 cycle_limit: 0,
@@ -114,6 +120,11 @@ pub async fn run_benchmark<A: ArtifactClient>(
                     );
 
                     proof_ids.push(proof_id.clone());
+                    let proof = artifact_client
+                        .download_with_type(&proof_output_ids[i as usize], ArtifactType::Proof)
+                        .await
+                        .expect("failed to download proof");
+                    proofs.push(proof);
                     break;
                 }
                 ProofRequestStatus::Failed | ProofRequestStatus::Cancelled => {
@@ -127,7 +138,7 @@ pub async fn run_benchmark<A: ArtifactClient>(
                 _ => {}
             }
 
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
 
@@ -141,7 +152,9 @@ pub async fn run_benchmark<A: ArtifactClient>(
                 / 1_000_000.0
         );
     }
-    Ok(proof_ids)
+
+    let result = BenchmarkResults { proof_ids, proofs };
+    Ok(result)
 }
 
 async fn setup_artifacts<A: ArtifactClient>(
@@ -149,7 +162,7 @@ async fn setup_artifacts<A: ArtifactClient>(
     elf: ClusterElf,
     stdin: SP1Stdin,
     count: u32,
-) -> Result<(String, String, Vec<String>)> {
+) -> Result<(Artifact, Artifact, Vec<Artifact>)> {
     let elf_id = match elf {
         ClusterElf::NewElf(elf) => {
             let elf_id = artifact_client.create_artifact().unwrap();
@@ -167,7 +180,7 @@ async fn setup_artifacts<A: ArtifactClient>(
         .await
         .map_err(|e| eyre::eyre!(e))?;
     let proof_output_ids = (0..count)
-        .map(|_| artifact_client.create_artifact().unwrap().to_id())
+        .map(|_| artifact_client.create_artifact().unwrap())
         .collect();
 
     // Save the elf id to ELF_ID file in the cargo manifest directory
@@ -175,7 +188,7 @@ async fn setup_artifacts<A: ArtifactClient>(
         .map(|dir| format!("{}/{}", dir, ELF_ID_PATH))
         .unwrap_or_else(|_| ELF_ID_PATH.to_string());
     std::fs::write(&elf_id_path, elf_id.clone().to_id())?;
-    Ok((elf_id.to_id(), stdin_id.to_id(), proof_output_ids))
+    Ok((elf_id, stdin_id, proof_output_ids))
 }
 
 /// Public API to run a benchmark with automatic artifact client setup
@@ -184,15 +197,15 @@ pub async fn run_benchmark_with_config(
     stdin: SP1Stdin,
     config: &BenchmarkConfig,
     cycles_estimate: Option<u64>,
-) -> Result<Vec<String>> {
+) -> Result<BenchmarkResults> {
     match &config.artifact_store {
         ArtifactStoreConfig::Redis { nodes } => {
-            tracing::info!("using redis artifact store");
+            tracing::debug!("using redis artifact store");
             let artifact_client = RedisArtifactClient::new(nodes.clone(), 16);
             run_benchmark(artifact_client, elf, stdin, config, cycles_estimate).await
         }
         ArtifactStoreConfig::S3 { bucket, region } => {
-            tracing::info!("using s3 artifact store");
+            tracing::debug!("using s3 artifact store");
             let artifact_client = S3ArtifactClient::new(
                 region.clone(),
                 bucket.clone(),

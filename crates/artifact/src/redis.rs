@@ -45,8 +45,8 @@ impl RedisArtifactClient {
             .collect();
         let backoff = ExponentialBackoffBuilder::new()
             .with_initial_interval(Duration::from_millis(100))
-            .with_max_interval(Duration::from_secs(4))
-            .with_max_elapsed_time(None)
+            .with_max_interval(Duration::from_secs(1))
+            .with_max_elapsed_time(Some(Duration::from_secs(1)))
             .build();
         Self {
             connection_pools: pools,
@@ -61,7 +61,7 @@ impl RedisArtifactClient {
         let idx = get_connection_idx(id, self.connection_pools.len());
         let result = self.connection_pools[idx]
             .get()
-            .instrument(tracing::trace_span!("get_redis_connection",))
+            .instrument(tracing::debug_span!("get_redis_connection",))
             .await
             .map_err(|e| {
                 tracing::warn!("Failed to get redis connection: {:?}", e);
@@ -201,6 +201,8 @@ impl RedisArtifactClient {
     }
 }
 
+const TRANSFER_TIMEOUT: Duration = Duration::from_secs(1);
+
 impl ArtifactClient for RedisArtifactClient {
     #[instrument(name = "upload", level = "debug", fields(id = artifact.id()), skip(self, artifact, data))]
     async fn upload_raw(
@@ -209,12 +211,42 @@ impl ArtifactClient for RedisArtifactClient {
         artifact_type: ArtifactType,
         data: Vec<u8>,
     ) -> Result<()> {
+        let artifact_id = artifact.id();
+
         backoff_retry(self.backoff.clone(), || async {
-            self.par_upload_file(artifact_type, artifact.id(), &data)
-                .await
+            match tokio::time::timeout(
+                TRANSFER_TIMEOUT,
+                self.par_upload_file(artifact_type, artifact_id, &data),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::warn!(
+                        "Upload attempt timed out after {:?} for artifact: {}",
+                        e,
+                        artifact_id
+                    );
+                    Err(backoff::Error::transient(anyhow!(
+                        "Upload timed out after {:?}",
+                        e
+                    )))
+                }
+            }
         })
         .await
-        .map_err(|e| anyhow!(e))
+        .map_err(|e| {
+            let err_msg = e.to_string();
+            if err_msg.contains("timed out") {
+                anyhow!(
+                    "Upload operation timed out after all retries for artifact: {} (timeout: {:?} per attempt)",
+                    artifact_id,
+                    TRANSFER_TIMEOUT
+                )
+            } else {
+                anyhow!("Upload failed for artifact {}: {}", artifact_id, e)
+            }
+        })
     }
 
     #[instrument(name = "download", level = "debug", fields(id = artifact.id()), skip(self, artifact))]
@@ -223,11 +255,43 @@ impl ArtifactClient for RedisArtifactClient {
         artifact: &impl ArtifactId,
         artifact_type: ArtifactType,
     ) -> Result<Vec<u8>> {
+        let artifact_id = artifact.id();
+        let timeout_duration = Duration::from_secs(1);
+
         backoff_retry(self.backoff.clone(), || async {
-            self.par_download_file(artifact_type, artifact.id()).await
+            match tokio::time::timeout(
+                timeout_duration,
+                self.par_download_file(artifact_type, artifact_id),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    tracing::warn!(
+                        "Download attempt timed out after {:?} for artifact: {}",
+                        timeout_duration,
+                        artifact_id
+                    );
+                    Err(backoff::Error::transient(anyhow!(
+                        "Download timed out after {:?}",
+                        timeout_duration
+                    )))
+                }
+            }
         })
         .await
-        .map_err(|e| anyhow!(e))
+        .map_err(|e| {
+            let err_msg = e.to_string();
+            if err_msg.contains("timed out") {
+                anyhow!(
+                    "Download operation timed out after all retries for artifact: {} (timeout: {:?} per attempt)",
+                    artifact_id,
+                    timeout_duration
+                )
+            } else {
+                anyhow!("Download failed for artifact {}: {}", artifact_id, e)
+            }
+        })
     }
 
     async fn exists(&self, artifact: &impl ArtifactId, _: ArtifactType) -> Result<bool> {
