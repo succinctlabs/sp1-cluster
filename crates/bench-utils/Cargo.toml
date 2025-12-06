@@ -10,7 +10,7 @@ categories.workspace = true
 sp1-cluster-common = { workspace = true }
 sp1-prover-types = { workspace = true }
 sp1-cluster-artifact = { workspace = true }
-sp1-sdk = { workspace = true }
+sp1-sdk = { workspace = true, features = ["native-gnark"] }
 eyre = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

@@ -43,7 +43,6 @@ services:
       - API_DATABASE_URL=postgresql://postgres:postgrespassword@postgresql:5432/postgres
       - OTLP_ENDPOINT=http://alloy:4317
       - RUST_LOG=debug,tower=info,h2=info,tonic-web=info,hyper-util=info
-    pull_policy: build
     build:
       context: ..
       dockerfile: infra/Dockerfile
@@ -99,7 +98,6 @@ services:
       file: docker-compose.yml
       service: cpu-node
     image: sp1-cluster-local:cpu-node
-    pull_policy: build
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=32
@@ -121,14 +119,21 @@ services:
       dockerfile: infra/Dockerfile
       args:
         GITHUB_TOKEN: ${GITHUB_TOKEN}
+    deploy:
+      resources:
+        limits:
+          memory: 64G
+        reservations:
+          memory: 32G
     command: ["/bin/sh", "-c", "/node"]
+    volumes:
+      - ~/.sp1/circuits:/home/appuser/.sp1/circuits
 
   gpu0:
     extends:
       file: docker-compose.yml
       service: gpu0
     image: sp1-cluster-local:gpu
-    pull_policy: build
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=24
