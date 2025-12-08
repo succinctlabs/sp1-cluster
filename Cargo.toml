@@ -27,14 +27,14 @@ moongate-core = { git = "https://github.com/succinctlabs/moongate", branch = "de
 moongate-prover = { git = "https://github.com/succinctlabs/moongate", branch = "dev" }
 
 # SP1
-sp1-core-executor = { version = "5.2.1" }
-sp1-core-machine = { version = "5.2.1", features = ["bigint-rug"] }
-sp1-prover = { version = "5.2.1" }
-sp1-recursion-circuit = { version = "5.2.1" }
-sp1-recursion-compiler = { version = "5.2.1" }
-sp1-recursion-core = { version = "5.2.1" }
-sp1-sdk = { version = "5.2.1" }
-sp1-stark = { version = "5.2.1" }
+sp1-core-executor = { version = "5.2.3" }
+sp1-core-machine = { version = "5.2.3", features = ["bigint-rug"] }
+sp1-prover = { version = "5.2.3" }
+sp1-recursion-circuit = { version = "5.2.3" }
+sp1-recursion-compiler = { version = "5.2.3" }
+sp1-recursion-core = { version = "5.2.3" }
+sp1-sdk = { version = "5.2.3" }
+sp1-stark = { version = "5.2.3" }
 # TODO: replace "ernesto/artifact-timeout" with "main"
 spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "ernesto/artifact-timeout" }
 spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "ernesto/artifact-timeout" }
@@ -42,9 +42,9 @@ spn-network-types = { git = "https://github.com/succinctlabs/network", branch = 
 spn-utils = { git = "https://github.com/succinctlabs/network", branch = "ernesto/artifact-timeout" }
 
 # Misc
-alloy = { version = "0.14.0", default-features = false, features = ["serde"] }
+alloy = { version = "1.1.3", default-features = false, features = ["serde"] }
 alloy-primitives = { version = "1.2.0", default-features = false, features = ["serde"] }
-alloy-signer-local = { version = "0.14.0" }
+alloy-signer-local = { version = "1.1.3" }
 anyhow = "1.0.95"
 async-channel = "2.3.1"
 async-scoped = "0.9.0"
