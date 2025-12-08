@@ -8269,7 +8269,7 @@ dependencies = [
 [[package]]
 name = "spn-metrics"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#55b632bb7496586eb5fb7986cd65e1cb3204a0b1"
+source = "git+https://github.com/succinctlabs/network?branch=ernesto%2Fartifact-timeout#1312eab36c8034397f63f5881a38950985877e5f"
 dependencies = [
  "axum 0.7.9",
  "eyre",
@@ -8288,7 +8288,7 @@ dependencies = [
 [[package]]
 name = "spn-network-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#55b632bb7496586eb5fb7986cd65e1cb3204a0b1"
+source = "git+https://github.com/succinctlabs/network?branch=ernesto%2Fartifact-timeout#1312eab36c8034397f63f5881a38950985877e5f"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -8306,7 +8306,7 @@ dependencies = [
 [[package]]
 name = "spn-utils"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#55b632bb7496586eb5fb7986cd65e1cb3204a0b1"
+source = "git+https://github.com/succinctlabs/network?branch=ernesto%2Fartifact-timeout#1312eab36c8034397f63f5881a38950985877e5f"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",

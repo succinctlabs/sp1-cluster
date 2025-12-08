@@ -35,10 +35,11 @@ sp1-recursion-compiler = { version = "5.2.1" }
 sp1-recursion-core = { version = "5.2.1" }
 sp1-sdk = { version = "5.2.1" }
 sp1-stark = { version = "5.2.1" }
+# TODO: replace "ernesto/artifact-timeout" with "main"
 spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "ernesto/artifact-timeout" }
-spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
-spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
-spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "ernesto/artifact-timeout" }
+spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "ernesto/artifact-timeout", features = ["network"] }
+spn-utils = { git = "https://github.com/succinctlabs/network", branch = "ernesto/artifact-timeout" }
 
 # Misc
 alloy = { version = "0.14.0", default-features = false, features = ["serde"] }
