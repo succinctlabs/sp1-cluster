@@ -318,12 +318,12 @@ pub async fn try_unclaim_proof<W: WorkerService>(
     proof_id: String,
     task_id: Option<String>,
 ) {
-    log::info!("Unclaiming proof {}", proof_id);
+    log::info!("Unclaiming proof {proof_id}");
 
     if let Err(err) = cluster_client
         .complete_proof(proof_id, task_id, ProofRequestStatus::Failed)
         .await
     {
-        log::error!("while unclaiming proof: {:?}", err);
+        log::error!("while unclaiming proof: {err:?}");
     }
 }

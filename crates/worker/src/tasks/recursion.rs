@@ -63,7 +63,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         if let Some(keys) = read.get(&shape) {
             keys.clone()
         } else {
-            log::error!("missing keys for shape: {:?}", shape);
+            log::error!("missing keys for shape: {shape:?}");
             drop(read);
             let keys = self.prover.compress_prover.setup(&program);
             // Arc::new(keys)
@@ -425,15 +425,14 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             ) {
                 tracing::error!("failed to verify deferred batch result: {}", err);
                 Err(TaskError::Retryable(anyhow!(
-                    "failed to verify deferred batch result: {}",
-                    err
+                    "failed to verify deferred batch result: {err}"
                 )))
             } else {
                 tracing::debug!("deferred batch result verified");
                 Ok(())
             }
         })
-        .map_err(|e| anyhow!("failed to verify deferred batch result: {}", e));
+        .map_err(|e| anyhow!("failed to verify deferred batch result: {e}"));
 
         let upload_promise = self.artifact_client.upload(&data.outputs[0], reduce_proof);
 
@@ -484,17 +483,17 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                     } = proof;
                     let pv: &RecursionPublicValues<BabyBear> =
                         shard_proof.public_values.as_slice().borrow();
-                    log::debug!("Reduce proof shard {} pv: {:?}", i, pv);
+                    log::debug!("Reduce proof shard {i} pv: {pv:?}");
                     let mut challenger = config.challenger();
                     let machine_proof = MachineProof {
                         shard_proofs: vec![shard_proof.clone()],
                     };
                     match machine.verify(vk, &machine_proof, &mut challenger) {
                         Ok(_) => {
-                            log::debug!("Reduce shard proof {} verification succeeded", i);
+                            log::debug!("Reduce shard proof {i} verification succeeded");
                         }
                         Err(e) => {
-                            log::error!("Reduce shard proof {} verification failed: {:?}", i, e);
+                            log::error!("Reduce shard proof {i} verification failed: {e:?}");
                         }
                     }
                 }
@@ -560,8 +559,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             ) {
                 tracing::error!("failed to verify reduce batch result: {}", err);
                 Err(TaskError::Retryable(anyhow!(
-                    "failed to verify reduce batch result: {}",
-                    err
+                    "failed to verify reduce batch result: {err}"
                 )))
             } else {
                 tracing::debug!("reduce batch result verified");
@@ -569,14 +567,13 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 if !prover_clone.recursion_vk_map.contains_key(&vkey_hash) {
                     tracing::error!("vkey {:?} not found in map", vkey_hash);
                     return Err(TaskError::Retryable(anyhow!(
-                        "vkey {:?} not found in map",
-                        vkey_hash
+                        "vkey {vkey_hash:?} not found in map"
                     )));
                 }
                 Ok(())
             }
         })
-        .map_err(|e| anyhow!("failed to verify reduce batch result: {}", e));
+        .map_err(|e| anyhow!("failed to verify reduce batch result: {e}"));
 
         let upload_future = self
             .artifact_client

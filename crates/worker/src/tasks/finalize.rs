@@ -67,7 +67,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             }
         })
         .await
-        .map_err(|e| TaskError::Fatal(anyhow!("failed to prove: {}", e)))?;
+        .map_err(|e| TaskError::Fatal(anyhow!("failed to prove: {e}")))?;
 
         // Create the final proof with public values
         let result = ProofFromNetwork {

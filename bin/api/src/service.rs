@@ -242,7 +242,7 @@ impl ClusterService for ClusterServiceImpl {
         )
         .fetch_one(&*self.db_pool)
         .await
-        .map_err(|e| Status::internal(format!("Failed to get proof request: {}", e)))?;
+        .map_err(|e| Status::internal(format!("Failed to get proof request: {e}")))?;
 
         let response = ProofRequestGetResponse {
             proof_request: Some(proof_request.into_proto()),
@@ -296,7 +296,7 @@ impl ClusterService for ClusterServiceImpl {
             .build_query_as::<DbProofRequest>()
             .fetch_all(&*self.db_pool)
             .await
-            .map_err(|e| Status::internal(format!("Failed to list proof requests: {:?}", e)))?;
+            .map_err(|e| Status::internal(format!("Failed to list proof requests: {e:?}")))?;
 
         let response = ProofRequestListResponse {
             proof_requests: proof_requests

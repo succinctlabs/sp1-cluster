@@ -81,7 +81,7 @@ impl RedisArtifactClient {
 
         // Check if it's a hash (chunked) or regular key
         let total_chunks: usize = conn
-            .hlen(format!("{}:chunks", key))
+            .hlen(format!("{key}:chunks"))
             .await
             .map_err(|e| backoff::Error::transient(e.into()))?;
 
@@ -106,7 +106,7 @@ impl RedisArtifactClient {
             let id_clone = key.to_string();
             let mut conn = self.get_redis_connection(&id_clone).await?;
             join_set.spawn(async move {
-                let chunk: Vec<u8> = conn.hget(format!("{}:chunks", key), chunk_idx).await?;
+                let chunk: Vec<u8> = conn.hget(format!("{key}:chunks"), chunk_idx).await?;
                 Ok::<(usize, Vec<u8>), anyhow::Error>((chunk_idx, chunk))
             });
         }
@@ -182,7 +182,7 @@ impl RedisArtifactClient {
                     }
 
                     let _: usize = conn
-                        .hset_ex(format!("{}:chunks", key), &options, &[(chunk_idx, chunk)])
+                        .hset_ex(format!("{key}:chunks"), &options, &[(chunk_idx, chunk)])
                         .await?;
                     Ok::<(), anyhow::Error>(())
                 });
@@ -239,7 +239,7 @@ impl ArtifactClient for RedisArtifactClient {
         let mut conn2 = conn.clone();
         let key = artifact.id();
         let (res, chunks) =
-            tokio::try_join!(conn.exists(key), conn2.exists(format!("{}:chunks", key)))?;
+            tokio::try_join!(conn.exists(key), conn2.exists(format!("{key}:chunks")))?;
         Ok(res || chunks)
     }
 
@@ -251,7 +251,7 @@ impl ArtifactClient for RedisArtifactClient {
         let mut conn2 = conn.clone();
         let key = artifact.id();
         let _: (u64, u64) =
-            tokio::try_join!(conn.unlink(key), conn2.unlink(format!("{}:chunks", key)))?;
+            tokio::try_join!(conn.unlink(key), conn2.unlink(format!("{key}:chunks")))?;
         Ok(())
     }
 
@@ -293,7 +293,7 @@ impl ArtifactClient for RedisArtifactClient {
     /// Add task reference for an artifact
     async fn add_ref(&self, artifact: &impl ArtifactId, key: &str) -> Result<()> {
         let id = artifact.id();
-        let redis_key = format!("refs:{}", id);
+        let redis_key = format!("refs:{id}");
 
         backoff_retry(self.backoff.clone(), || async {
             let mut conn = self.get_redis_connection(id).await?;
@@ -327,7 +327,7 @@ impl ArtifactClient for RedisArtifactClient {
         let should_delete = backoff_retry(self.backoff.clone(), || async {
             let mut conn = self.get_redis_connection(artifact_id).await?;
 
-            let redis_key = format!("refs:{}", artifact_id);
+            let redis_key = format!("refs:{artifact_id}");
 
             // Remove task_id from the set
             let _: () = conn

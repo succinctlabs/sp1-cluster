@@ -488,9 +488,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                         *pv = state;
                         let debug_info = artifacts
                             .iter()
-                            .map(|(artifact, start, end)| {
-                                format!("{:?} {} {}", artifact, start, end)
-                            })
+                            .map(|(artifact, start, end)| format!("{artifact:?} {start} {end}"))
                             .collect::<Vec<_>>();
                         log::info!(
                             "[pv] precompile_remote {} {} {:?}",
@@ -660,15 +658,10 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             }
             if !completed_tasks.is_empty() {
                 log::error!(
-                    "completed tasks is not empty (this should never happen): {:?}",
-                    completed_tasks
+                    "completed tasks is not empty (this should never happen): {completed_tasks:?}"
                 );
             }
-            log::info!(
-                "received {} checkpoints, {} completed",
-                received,
-                current_checkpoint
-            );
+            log::info!("received {received} checkpoints, {current_checkpoint} completed");
         }
 
         join_set.join_all().await;
@@ -701,8 +694,8 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 Some(res) = conditional_future(final_receiver.as_mut()) => {
                     async {
                         if let Err(e) = &res {
-                            log::error!("final record error: {:?}", e);
-                            return Err(TaskError::Fatal(anyhow!("final record error: {}", e)));
+                            log::error!("final record error: {e:?}");
+                            return Err(TaskError::Fatal(anyhow!("final record error: {e}")));
                         }
                         let record = res.unwrap();
 
@@ -956,7 +949,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                                 running_map.insert(task_id, (index.0, index.1, artifact));
                             }
                             Err(e) => {
-                                panic!("Failed to create task: {:?}", e);
+                                panic!("Failed to create task: {e:?}");
                             }
                         }
                     }
@@ -966,8 +959,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                                 if status == TaskStatus::FailedFatal {
                                     fold_tx
                                         .send(Err(TaskError::Fatal(anyhow::anyhow!(
-                                            "Task failed {:?}",
-                                            task_id
+                                            "Task failed {task_id:?}"
                                         ))))
                                         .unwrap();
                                     break;
@@ -1063,8 +1055,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 {
                     if !ready_map.is_empty() {
                         log::error!(
-                            "ready map is not empty (this should never happen): {:?}",
-                            ready_map
+                            "ready map is not empty (this should never happen): {ready_map:?}"
                         );
                     }
                     tracing::debug!("breaking stream loop");
@@ -1090,7 +1081,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             loop {
                 if let Some(result) = fold_rx.recv().await {
                     if let Err(e) = result {
-                        log::error!("recursion join thread panicked: {:?}", e);
+                        log::error!("recursion join thread panicked: {e:?}");
                         return Err(e);
                     }
                     fold_queue.push(result.unwrap());
@@ -1104,7 +1095,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                     if let Some((index, prev_task_id, prev_artifact)) = &current_fold {
                         // Wait for previous fold task to complete.
                         if let Some(task_id) = prev_task_id {
-                            worker_client.wait_tasks(proof_id_clone.clone(), &[task_id.clone()]).await?;
+                            worker_client.wait_tasks(proof_id_clone.clone(), std::slice::from_ref(task_id)).await?;
                         }
 
                         // Create a task to fold the two proofs.
@@ -1135,9 +1126,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 if fold_rx.is_closed() && fold_rx.is_empty() {
                     if !fold_queue.is_empty() {
                         log::error!(
-                            "fold queue is not contiguous (this should never happen): {:?} {}",
-                            fold_queue,
-                            next_index
+                            "fold queue is not contiguous (this should never happen): {fold_queue:?} {next_index}"
                         );
                     }
                     if current_fold.is_none() {
@@ -1151,7 +1140,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             // Wait for last task to complete.
             let (_, task_id, artifact) = current_fold.unwrap();
             if let Some(task_id) = task_id {
-                worker_client.wait_tasks(proof_id_clone, &[task_id.clone()]).await?;
+                worker_client.wait_tasks(proof_id_clone, std::slice::from_ref(&task_id)).await?;
             }
 
             anyhow::Result::<_, TaskError>::Ok(artifact)

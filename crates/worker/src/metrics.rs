@@ -143,14 +143,14 @@ pub async fn initialize_metrics() -> Result<(
     let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
     let metrics_server_handle = Some(tokio::spawn(async move {
         if let Err(e) = metrics_server.serve(shutdown_rx).await {
-            log::error!("metrics server error: {:?}", e);
+            log::error!("metrics server error: {e:?}");
         }
     }));
 
     // Wait for metrics server to be ready
     match ready_rx.await {
         Ok(_) => log::info!("metrics server is ready"),
-        Err(e) => log::warn!("failed to receive metrics server ready signal: {}", e),
+        Err(e) => log::warn!("failed to receive metrics server ready signal: {e}"),
     }
 
     // Initialize metrics after server is ready

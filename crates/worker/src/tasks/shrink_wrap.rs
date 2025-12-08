@@ -57,8 +57,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             let vkey_hash = shrink_proof.vk.hash_babybear();
             if !prover.recursion_vk_map.contains_key(&vkey_hash) {
                 return Err(TaskError::Retryable(anyhow!(
-                    "shrink vkey {:?} not found in map",
-                    vkey_hash
+                    "shrink vkey {vkey_hash:?} not found in map"
                 )));
             }
 
@@ -71,8 +70,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                     },
                 ) {
                     return Err(TaskError::Retryable(anyhow!(
-                        "verify shrink proof failed: {:?}",
-                        e
+                        "verify shrink proof failed: {e:?}"
                     )));
                 }
             }

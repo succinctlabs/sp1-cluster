@@ -156,7 +156,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                             worker_client
                                 .wait_tasks(proof_id, &[setup_task])
                                 .await
-                                .unwrap_or_else(|e| panic!("failed to wait for task: {:?}", e));
+                                .unwrap_or_else(|e| panic!("failed to wait for task: {e:?}"));
 
                             if start_time.elapsed() > Duration::from_secs(10) {
                                 log::warn!(
@@ -392,7 +392,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                     tokio::select! {
                         Some(result) = join_set.join_next() => {
                             // Join set will auto abort on drop.
-                            result.map_err(|e| TaskError::Fatal(anyhow!("Thread error: {}", e)))??;
+                            result.map_err(|e| TaskError::Fatal(anyhow!("Thread error: {e}")))??;
                         }
                         result = final_rx.recv() => {
                             final_result = Some(result.expect("final channel closed")?);
@@ -402,7 +402,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                         }
                         Some(result) = conditional_future(execute_handle.as_mut()) => {
                             execute_handle = None;
-                            pv = Some(result.map_err(|e| TaskError::Fatal(anyhow!("Thread error: {}", e)))??);
+                            pv = Some(result.map_err(|e| TaskError::Fatal(anyhow!("Thread error: {e}")))??);
                             if final_result.is_some() {
                                 break;
                             }
@@ -481,10 +481,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 if let Err(e) =
                     prover_clone.verify_compressed(&proof_clone, &SP1VerifyingKey { vk })
                 {
-                    return Err(TaskError::Fatal(anyhow!(
-                        "verify_compressed failed: {:?}",
-                        e
-                    )));
+                    return Err(TaskError::Fatal(anyhow!("verify_compressed failed: {e:?}")));
                 }
                 Ok(())
             }))

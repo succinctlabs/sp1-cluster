@@ -139,7 +139,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 handled: Some(false),
                 ..Default::default()
             })
-            .map_err(|e| anyhow!("failed to get requests: {}", e))
+            .map_err(|e| anyhow!("failed to get requests: {e}"))
             .await?;
         debug!("got requests: {:?}", requests);
 
@@ -167,7 +167,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
 
                         // Fail the request if the verification key does not match the one
                         // expected for the program.
-                        let err_text = format!("{:?}", e);
+                        let err_text = format!("{e:?}");
                         if VK_MISMATCH_STRINGS.iter().any(|s| err_text.contains(s)) {
                             match self_clone
                                 .fail_request(
@@ -230,7 +230,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                     handled: Some(true),
                     ..Default::default()
                 })
-                .map_err(|e| anyhow!("failed to update proof request status: {}", e))
+                .map_err(|e| anyhow!("failed to update proof request status: {e}"))
                 .await?;
             return Ok(());
         };
@@ -256,7 +256,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 handled: Some(true),
                 ..Default::default()
             })
-            .map_err(|e| anyhow!("failed to update proof request status: {}", e))
+            .map_err(|e| anyhow!("failed to update proof request status: {e}"))
             .await?;
 
         // Clean up the proof artifact since it's no longer needed
@@ -279,7 +279,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 handled: Some(false),
                 ..Default::default()
             })
-            .map_err(|e| anyhow!("failed to get requests: {}", e))
+            .map_err(|e| anyhow!("failed to get requests: {e}"))
             .await?;
         self.metrics.failable_requests.set(requests.len() as f64);
 
@@ -354,7 +354,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 handled: Some(true),
                 ..Default::default()
             })
-            .map_err(|e| anyhow!("failed to update proof request status: {}", e))
+            .map_err(|e| anyhow!("failed to update proof request status: {e}"))
             .await?;
 
         Ok(())
@@ -461,7 +461,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
             .cancel_proof_request(ProofRequestCancelRequest {
                 proof_id: request_id.to_string(),
             })
-            .map_err(|e| anyhow!("failed to update proof request status: {}", e))
+            .map_err(|e| anyhow!("failed to update proof request status: {e}"))
             .await?;
 
         Ok(())
@@ -561,7 +561,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 minimum_deadline: Some(time_now()),
                 ..Default::default()
             })
-            .map_err(|e| anyhow!("failed to get requests: {}", e))
+            .map_err(|e| anyhow!("failed to get requests: {e}"))
             .await?;
         debug!("cluster_requests_resp: {:?}", cluster_requests_resp);
 
@@ -645,9 +645,11 @@ impl<A: ArtifactClient> Fulfiller<A> {
                     uri,
                     "us-east-2",
                     network_artifact_type,
-                    std::env::var("FULFILLER_S3_CONCURRENCY")
-                        .map(|s| s.parse().unwrap_or(32))
-                        .unwrap_or(32),
+                    Some(
+                        std::env::var("FULFILLER_S3_CONCURRENCY")
+                            .map(|s| s.parse().unwrap_or(32))
+                            .unwrap_or(32),
+                    ),
                 )
                 .await?;
             self.cluster_artifact_client
@@ -695,7 +697,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 cycle_limit: request.cycle_limit,
                 gas_limit: request.gas_limit,
             })
-            .map_err(|e| anyhow!("failed to create proof request: {}", e))
+            .map_err(|e| anyhow!("failed to create proof request: {e}"))
             .await?;
 
         Ok(())

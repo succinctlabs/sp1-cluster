@@ -112,16 +112,16 @@ impl S3ArtifactClient {
     pub fn get_s3_url_from_id(&self, artifact_type: ArtifactType, id: &str) -> String {
         let url_base = format!("https://{}.s3.{}.amazonaws.com", self.bucket, self.region);
         match artifact_type {
-            ArtifactType::Groth16Circuit => format!("{}/{}-groth16.tar.gz", url_base, id),
-            ArtifactType::PlonkCircuit => format!("{}/{}-plonk.tar.gz", url_base, id),
+            ArtifactType::Groth16Circuit => format!("{url_base}/{id}-groth16.tar.gz"),
+            ArtifactType::PlonkCircuit => format!("{url_base}/{id}-plonk.tar.gz"),
             _ => format!("{}/{}/{}", url_base, Self::get_s3_prefix(artifact_type), id),
         }
     }
 
     pub fn get_s3_key_from_id(artifact_type: ArtifactType, id: &str) -> String {
         match artifact_type {
-            ArtifactType::Groth16Circuit => format!("{}-groth16.tar.gz", id),
-            ArtifactType::PlonkCircuit => format!("{}-plonk.tar.gz", id),
+            ArtifactType::Groth16Circuit => format!("{id}-groth16.tar.gz"),
+            ArtifactType::PlonkCircuit => format!("{id}-plonk.tar.gz"),
             _ => format!("{}/{}", Self::get_s3_prefix(artifact_type), id),
         }
     }
@@ -220,11 +220,11 @@ impl S3ArtifactClient {
                 Ok(inner) => match inner {
                     Ok(_) => {}
                     Err(e) => {
-                        panic!("artifact download thread panicked: {:?}", e);
+                        panic!("artifact download thread panicked: {e:?}");
                     }
                 },
                 Err(e) => {
-                    panic!("artifact download thread panicked: {:?}", e);
+                    panic!("artifact download thread panicked: {e:?}");
                 }
             }
         }

@@ -17,7 +17,7 @@ static INIT: Once = Once::new();
 
 fn build_env_filter(base: Option<EnvFilter>) -> EnvFilter {
     base.unwrap_or(EnvFilter::try_from_default_env().unwrap_or_else(|e| {
-        println!("failed to setup env filter: {:?}", e);
+        println!("failed to setup env filter: {e:?}");
         EnvFilter::new("info")
     }))
     .add_directive("p3_keccak_air=off".parse().unwrap())
@@ -108,6 +108,6 @@ pub fn init(resource: Resource) {
             .init();
 
         log::info!("logging initialized");
-        log::debug!("OTLP endpoint configured: {}", otlp_endpoint);
+        log::debug!("OTLP endpoint configured: {otlp_endpoint}");
     });
 }
