@@ -76,9 +76,9 @@ impl std::error::Error for TaskError {
 impl std::fmt::Display for TaskError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            TaskError::Retryable(err) => write!(f, "Retryable: {}", err),
-            TaskError::Fatal(err) => write!(f, "Fatal: {}", err),
-            TaskError::Execution(err) => write!(f, "Execution: {}", err),
+            TaskError::Retryable(err) => write!(f, "Retryable: {err}"),
+            TaskError::Fatal(err) => write!(f, "Fatal: {err}"),
+            TaskError::Execution(err) => write!(f, "Execution: {err}"),
         }
     }
 }

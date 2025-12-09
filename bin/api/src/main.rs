@@ -25,7 +25,7 @@ struct Request {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load environment variables
     if let Err(e) = dotenv::dotenv() {
-        eprintln!("not loading .env file: {}", e);
+        eprintln!("not loading .env file: {e}");
     }
     logger::init(Resource::empty());
     info!("Loaded environment variables");

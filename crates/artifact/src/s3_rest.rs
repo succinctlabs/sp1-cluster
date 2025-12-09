@@ -6,7 +6,7 @@ pub struct S3RestClient {
 }
 
 fn get_s3_url_from_id(bucket: &str, region: &str, key: &str) -> String {
-    format!("https://{}.s3.{}.amazonaws.com/{}", bucket, region, key)
+    format!("https://{bucket}.s3.{region}.amazonaws.com/{key}")
 }
 
 impl S3RestClient {
@@ -25,8 +25,7 @@ impl S3RestClient {
             Ok(res) => match res.content_length() {
                 Some(len) => Ok(len as i64),
                 None => Err(anyhow::Error::msg(format!(
-                    "failed to get content size of {}",
-                    obj_url
+                    "failed to get content size of {obj_url}"
                 ))),
             },
             Err(e) => Err(anyhow::Error::new(e)),
@@ -43,7 +42,7 @@ impl S3RestClient {
 
         let mut builder = self.client.get(obj_url);
         if let Some((start, end)) = range {
-            let range_header = format!("bytes={}-{}", start, end);
+            let range_header = format!("bytes={start}-{end}");
             builder = builder.header("Range", range_header);
         }
 

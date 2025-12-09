@@ -21,7 +21,7 @@ use tracing::{error, info, warn};
 #[tokio::main]
 async fn main() -> Result<()> {
     if let Err(e) = dotenv() {
-        eprintln!("not loading .env file: {}", e);
+        eprintln!("not loading .env file: {e}");
     }
     rustls::crypto::ring::default_provider()
         .install_default()

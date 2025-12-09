@@ -118,7 +118,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
             let span = tracing::info_span!("compile recursion program");
             Some(tokio::task::spawn_blocking(move || {
                 span.in_scope(|| {
-                    log::debug!("threaded shape {}: {:?}", shard_number, proof_shape);
+                    log::debug!("threaded shape {shard_number}: {proof_shape:?}");
                     let compress_shape = SP1CompressProgramShape::Recursion(SP1RecursionShape {
                         proof_shapes: vec![proof_shape],
                         is_complete: false,
@@ -227,7 +227,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                     log::debug!("Core shard proof verification succeeded");
                 }
                 Err(e) => {
-                    log::error!("Core shard proof verification failed: {:?}", e);
+                    log::error!("Core shard proof verification failed: {e:?}");
                 }
             }
             let mut expected_global_cumulative_sum = shard_proof_clone.global_cumulative_sum();
@@ -236,10 +236,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                     .chain(once(vk_clone.initial_global_cumulative_sum))
                     .sum();
             }
-            log::info!(
-                "Expected cumulative sum from core: {:?}",
-                expected_global_cumulative_sum
-            );
+            log::info!("Expected cumulative sum from core: {expected_global_cumulative_sum:?}");
             result.map(|_| expected_global_cumulative_sum)
         });
 
@@ -293,7 +290,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                 };
                 let pv: &RecursionPublicValues<BabyBear> =
                     shard_proof.public_values.as_slice().borrow();
-                log::info!("Reduce proof shard pv: {:?}", pv);
+                log::info!("Reduce proof shard pv: {pv:?}");
                 let result = machine.verify(&vk, &machine_proof, &mut challenger);
                 match &result {
                     Ok(_) => {
@@ -305,7 +302,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                         }
                     }
                     Err(e) => {
-                        log::error!("Reduce leaf proof verification failed: {:?}", e);
+                        log::error!("Reduce leaf proof verification failed: {e:?}");
                     }
                 }
                 result.map(|_| pv.global_cumulative_sum)
@@ -335,17 +332,16 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
         let expected_global_cumulative_sum = verify_future
             .await
             .unwrap()
-            .map_err(|e| TaskError::Retryable(anyhow!("failed to verify shard proof: {}", e)))?;
+            .map_err(|e| TaskError::Retryable(anyhow!("failed to verify shard proof: {e}")))?;
 
         if let Some(verify_future) = reduce_verify_future {
-            let final_sum = verify_future.await.unwrap().map_err(|e| {
-                TaskError::Retryable(anyhow!("failed to verify reduce proof: {}", e))
-            })?;
+            let final_sum = verify_future
+                .await
+                .unwrap()
+                .map_err(|e| TaskError::Retryable(anyhow!("failed to verify reduce proof: {e}")))?;
             if expected_global_cumulative_sum != final_sum {
                 return Err(TaskError::Retryable(anyhow!(
-                    "expected global cumulative sum {:?} != final sum {:?}",
-                    expected_global_cumulative_sum,
-                    final_sum
+                    "expected global cumulative sum {expected_global_cumulative_sum:?} != final sum {final_sum:?}"
                 )));
             }
         }
@@ -365,7 +361,7 @@ impl<W: WorkerService, A: ArtifactClient> SP1Worker<W, A> {
                     .remove_ref(
                         &artifact,
                         ArtifactType::UnspecifiedArtifactType,
-                        &format!("{}_{}", start, end),
+                        &format!("{start}_{end}"),
                     )
                     .await;
             }

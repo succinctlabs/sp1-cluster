@@ -57,13 +57,13 @@ jobs:
             ~/.cargo/git/db/
             target/
             ~/.rustup/
-          key: rust-nightly-2025-03-12-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: rust-nightly-2025-03-12-
+          key: rust-nightly-2025-06-24-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: rust-nightly-2025-06-24-
 
       - name: Setup Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly-2025-03-12
+          toolchain: nightly-2025-06-24
           profile: minimal
           override: true
           components: rustfmt, clippy

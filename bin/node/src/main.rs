@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
     match dotenv::dotenv() {
         std::result::Result::Ok(_) => {}
         Err(e) => {
-            println!("failed to load .env file: {:?}", e);
+            println!("failed to load .env file: {e:?}");
         }
     }
 
@@ -118,7 +118,7 @@ fn install_circuit_artifacts(artifact_type: &str, artifact_client: S3ArtifactCli
     let final_dir = match artifact_type {
         "groth16" => sp1_sdk::install::groth16_circuit_artifacts_dir(),
         "plonk" => sp1_sdk::install::plonk_circuit_artifacts_dir(),
-        _ => panic!("invalid artifact type: {}", artifact_type),
+        _ => panic!("invalid artifact type: {artifact_type}"),
     };
     if final_dir.exists() {
         // Clear the directory every time, since contents may not be valid.
@@ -145,7 +145,7 @@ fn install_circuit_artifacts(artifact_type: &str, artifact_client: S3ArtifactCli
         let artifact_type_enum = match artifact_type {
             "groth16" => ArtifactType::Groth16Circuit,
             "plonk" => ArtifactType::PlonkCircuit,
-            _ => panic!("invalid artifact type: {}", artifact_type),
+            _ => panic!("invalid artifact type: {artifact_type}"),
         };
 
         // Download tar.gz bytes using chunked parallel download.
@@ -449,7 +449,7 @@ async fn run_worker<A: ArtifactClient>(
                                             current_weight,
                                         };
                                         if let Err(e) = client.heartbeat(request).await  {
-                                            eprintln!("Failed to send heartbeat: {}", e);
+                                            eprintln!("Failed to send heartbeat: {e}");
                                             if e.code() == tonic::Code::NotFound {
                                                 tracing::warn!("Worker not found, reconnecting...");
                                                 match client.open().await {

@@ -451,10 +451,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .await;
         track_latency!("worker.complete_task", {
             let Some(proof) = state.proofs.get_mut(&proof_id) else {
-                return Err(Status::not_found(format!("proof {} not found", proof_id)));
+                return Err(Status::not_found(format!("proof {proof_id} not found")));
             };
             let Some(task) = proof.tasks.get_mut(&task_id) else {
-                return Err(Status::not_found(format!("task {} not found", task_id)));
+                return Err(Status::not_found(format!("task {task_id} not found")));
             };
             tracing::debug!(
                 "[tasks] completing task {} {} {:?} {} {}",
@@ -575,7 +575,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         let worker = state
             .workers
             .get_mut(worker_id)
-            .ok_or_else(|| Status::not_found(format!("worker {} not found", worker_id)))?;
+            .ok_or_else(|| Status::not_found(format!("worker {worker_id} not found")))?;
         let mut worker_set = HashSet::new();
 
         worker.last_heartbeat = SystemTime::now()
@@ -795,7 +795,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire_write"))
             .await;
         let Some(worker) = state.workers.get_mut(&worker_id) else {
-            return Err(Status::not_found(format!("worker {} not found", worker_id)));
+            return Err(Status::not_found(format!("worker {worker_id} not found")));
         };
         // Set worker to closed
         worker.closed = true;
@@ -840,19 +840,18 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 .contains(&(proof_id.clone(), task_id.clone()))
             {
                 return Err(Status::failed_precondition(format!(
-                    "worker {} is not working on task {}",
-                    worker_id, task_id
+                    "worker {worker_id} is not working on task {task_id}"
                 )));
             }
         } else {
-            return Err(Status::not_found(format!("worker {} not found", worker_id)));
+            return Err(Status::not_found(format!("worker {worker_id} not found")));
         };
 
         let Some(proof) = state.proofs.get_mut(&proof_id) else {
-            return Err(Status::not_found(format!("proof {} not found", proof_id)));
+            return Err(Status::not_found(format!("proof {proof_id} not found")));
         };
         let Some(task) = proof.tasks.get_mut(&task_id) else {
-            return Err(Status::not_found(format!("task {} not found", task_id)));
+            return Err(Status::not_found(format!("task {task_id} not found")));
         };
 
         // If it's a controller task and we won't retry it, we want to manually fail the proof as
@@ -972,10 +971,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire"))
             .await;
         let Some(proof) = state.proofs.get(&proof_id) else {
-            return Err(Status::not_found(format!("proof {} not found", proof_id)));
+            return Err(Status::not_found(format!("proof {proof_id} not found")));
         };
         let Some(task) = proof.tasks.get(&task_id) else {
-            return Err(Status::not_found(format!("task {} not found", task_id)));
+            return Err(Status::not_found(format!("task {task_id} not found")));
         };
         Ok(task.status)
     }
@@ -992,10 +991,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire"))
             .await;
         let Some(proof) = state.proofs.get(&proof_id) else {
-            return Err(Status::not_found(format!("proof {} not found", proof_id)));
+            return Err(Status::not_found(format!("proof {proof_id} not found")));
         };
         let Some(task) = proof.tasks.get(&task_id) else {
-            return Err(Status::not_found(format!("task {} not found", task_id)));
+            return Err(Status::not_found(format!("task {task_id} not found")));
         };
         Ok(task.clone())
     }
@@ -1013,12 +1012,12 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire"))
             .await;
         let Some(proof) = state.proofs.get(&proof_id) else {
-            return Err(Status::not_found(format!("proof {} not found", proof_id)));
+            return Err(Status::not_found(format!("proof {proof_id} not found")));
         };
         let mut statuses: HashMap<TaskStatus, Vec<String>> = HashMap::new();
         for task_id in task_ids {
             let Some(task) = proof.tasks.get(&task_id) else {
-                return Err(Status::not_found(format!("task {} not found", task_id)));
+                return Err(Status::not_found(format!("task {task_id} not found")));
             };
             statuses.entry(task.status).or_default().push(task_id);
         }
@@ -1036,7 +1035,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         let sender = state.proofs_tx.clone();
         let Some(proof) = state.proofs.get(&proof_id) else {
             tracing::error!("Proof {} not found", proof_id);
-            return Err(Status::not_found(format!("Proof {} not found", proof_id)));
+            return Err(Status::not_found(format!("Proof {proof_id} not found")));
         };
         let metadata = P::get_proof_result_metadata(proof);
         drop(state);
@@ -1101,8 +1100,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                     );
                     state.proofs.insert(proof_id.clone(), proof);
                     return Err(Status::not_found(format!(
-                        "task {} not found in proof {}",
-                        task_id, proof_id
+                        "task {task_id} not found in proof {proof_id}"
                     )));
                 }
             }
@@ -1274,10 +1272,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         task_ids: Vec<String>,
     ) -> Result<(), Status> {
         let Some(mut sub) = self.subscribers.get_mut(&sub_id) else {
-            return Err(Status::not_found(format!(
-                "subscriber {} not found",
-                sub_id
-            )));
+            return Err(Status::not_found(format!("subscriber {sub_id} not found")));
         };
         sub.active_subscriptions.extend(task_ids.iter().cloned());
         sub.last_update = SystemTime::now();

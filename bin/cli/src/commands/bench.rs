@@ -161,7 +161,7 @@ impl BenchCommand {
         for i in 0..common.count {
             client
                 .create_proof_request(sp1_cluster_common::proto::ProofRequestCreateRequest {
-                    proof_id: format!("{}_{}", base_id, i),
+                    proof_id: format!("{base_id}_{i}"),
                     program_artifact_id: elf_id.clone(),
                     stdin_artifact_id: stdin_id.clone(),
                     options_artifact_id: Some((common.mode as i32).to_string()),
@@ -190,7 +190,7 @@ impl BenchCommand {
                 }
                 let resp = client
                     .get_proof_request(proto::ProofRequestGetRequest {
-                        proof_id: format!("{}_{}", base_id, i),
+                        proof_id: format!("{base_id}_{i}"),
                     })
                     .await?;
                 let Some(proof_request) = resp else {
