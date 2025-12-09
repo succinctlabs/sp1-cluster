@@ -1,7 +1,5 @@
 use clap::{Parser, Subcommand};
 use commands::bench::BenchCommand;
-use opentelemetry_sdk::Resource;
-use sp1_cluster_common::logger;
 
 mod commands;
 
@@ -23,7 +21,7 @@ async fn main() {
     if let Err(e) = dotenv::dotenv() {
         eprintln!("not loading .env file: {}", e);
     }
-    logger::init(Resource::empty());
+    sp1_sdk::setup_logger();
     let cli = Cli::parse();
 
     if let Err(e) = match &cli.command {

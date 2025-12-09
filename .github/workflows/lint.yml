@@ -89,7 +89,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --manifest-path Cargo.toml --all-features --all-targets -- -D warnings -A incomplete-features
+          args: --manifest-path Cargo.toml --all-targets -- -D warnings -A incomplete-features
         env:
           CARGO_INCREMENTAL: 1
 

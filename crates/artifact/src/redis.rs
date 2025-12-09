@@ -61,7 +61,7 @@ impl RedisArtifactClient {
         let idx = get_connection_idx(id, self.connection_pools.len());
         let result = self.connection_pools[idx]
             .get()
-            .instrument(tracing::debug_span!("get_redis_connection",))
+            .instrument(tracing::info_span!("get_redis_connection",))
             .await
             .map_err(|e| {
                 tracing::warn!("Failed to get redis connection: {:?}", e);
@@ -91,7 +91,7 @@ impl RedisArtifactClient {
                 .await
                 .map_err(|e| backoff::Error::transient(e.into()))?;
             let result = zstd::decode_all(result.as_slice()).unwrap();
-            tracing::debug!("download took {:?}, size: {}", now.elapsed(), result.len());
+            tracing::info!("download took {:?}, size: {}", now.elapsed(), result.len());
             return Ok(result);
         }
 
@@ -111,7 +111,7 @@ impl RedisArtifactClient {
             });
         }
 
-        tracing::debug!(
+        tracing::info!(
             "total_chunks: {}, elapsed: {:?}",
             total_chunks,
             now.elapsed()
@@ -121,7 +121,7 @@ impl RedisArtifactClient {
         let mut chunks = vec![Vec::new(); total_chunks];
         while let Some(res) = join_set.join_next().await {
             let (idx, chunk) = res.map_err(|e| backoff::Error::transient(e.into()))??;
-            tracing::debug!(
+            tracing::info!(
                 "idx: {}, chunk: {}, elapsed: {:?}",
                 idx,
                 chunk.len(),
@@ -134,10 +134,10 @@ impl RedisArtifactClient {
         result.extend(chunks.into_iter().flatten());
         let decoded = tracing::info_span!("decoding").in_scope(|| {
             let decoded = zstd::decode_all(result.as_slice()).unwrap();
-            tracing::debug!("decoded size: {}", decoded.len());
+            tracing::info!("decoded size: {}", decoded.len());
             decoded
         });
-        tracing::debug!("download took {:?}, size: {}", now.elapsed(), decoded.len());
+        tracing::info!("download took {:?}, size: {}", now.elapsed(), decoded.len());
         Ok(decoded)
     }
 
@@ -187,16 +187,16 @@ impl RedisArtifactClient {
                     Ok::<(), anyhow::Error>(())
                 });
             }
-            tracing::debug!("spawned all chunks, elapsed: {:?}", now.elapsed());
+            tracing::info!("spawned all chunks, elapsed: {:?}", now.elapsed());
 
             // Wait for all uploads to complete
             while let Some(res) = join_set.join_next().await {
                 res.map_err(|e| backoff::Error::transient(e.into()))??;
-                tracing::debug!("joined chunk, elapsed: {:?}", now.elapsed());
+                tracing::info!("joined chunk, elapsed: {:?}", now.elapsed());
             }
         }
 
-        tracing::debug!("upload took {:?}, size: {}", now.elapsed(), size);
+        tracing::info!("upload took {:?}, size: {}", now.elapsed(), size);
         Ok(())
     }
 }

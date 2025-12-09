@@ -20,9 +20,9 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
             .prover_engine()
             .submit_setup(task_id, elf_artifact, output_artifact)
             .await
-            .expect("failed to submit setup")
+            .map_err(|e| TaskError::Fatal(anyhow::anyhow!("failed to submit setup: {}", e)))?
             .await
-            .expect("failed to wait for setup")?;
+            .map_err(|e| TaskError::Fatal(anyhow::anyhow!("failed to wait for setup: {}", e)))??;
         Ok(metadata)
     }
 }

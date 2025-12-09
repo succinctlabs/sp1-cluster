@@ -200,12 +200,12 @@ pub async fn run_benchmark_with_config(
 ) -> Result<BenchmarkResults> {
     match &config.artifact_store {
         ArtifactStoreConfig::Redis { nodes } => {
-            tracing::debug!("using redis artifact store");
+            tracing::info!("using redis artifact store");
             let artifact_client = RedisArtifactClient::new(nodes.clone(), 16);
             run_benchmark(artifact_client, elf, stdin, config, cycles_estimate).await
         }
         ArtifactStoreConfig::S3 { bucket, region } => {
-            tracing::debug!("using s3 artifact store");
+            tracing::info!("using s3 artifact store");
             let artifact_client = S3ArtifactClient::new(
                 region.clone(),
                 bucket.clone(),
@@ -218,4 +218,49 @@ pub async fn run_benchmark_with_config(
             run_benchmark(artifact_client, elf, stdin, config, cycles_estimate).await
         }
     }
+}
+
+/// Get the benchmark config from env
+pub fn benchmark_config_from_env(proof_mode: ProofMode, timeout_hours: u64) -> BenchmarkConfig {
+    let cluster_rpc = std::env::var("CLI_CLUSTER_RPC").unwrap();
+
+    let redis_nodes = std::env::var("CLI_REDIS_NODES");
+    let s3_bucket = std::env::var("CLI_S3_BUCKET");
+    let s3_region = std::env::var("CLI_S3_REGION");
+
+    let artifact_store_config = match (redis_nodes, s3_bucket) {
+        (Ok(redis_nodes), Err(_)) => ArtifactStoreConfig::Redis {
+            nodes: redis_nodes
+                .clone()
+                .split(',')
+                .map(|s| s.to_string())
+                .collect(),
+        },
+        (Err(_), Ok(s3_bucket)) => ArtifactStoreConfig::S3 {
+            bucket: s3_bucket.clone(),
+            region: s3_region.unwrap().clone(),
+        },
+        _ => {
+            panic!("Exactly one of Redis nodes or S3 bucket must be specified");
+        }
+    };
+
+    BenchmarkConfig {
+        cluster_rpc,
+        count: 1,
+        mode: proof_mode,
+        timeout_hours: timeout_hours,
+        artifact_store: artifact_store_config,
+    }
+}
+
+pub async fn run_benchmark_from_env(
+    mode: ProofMode,
+    timeout_hours: u64,
+    elf: ClusterElf,
+    stdin: SP1Stdin,
+    cycles_estimate: Option<u64>,
+) -> Result<BenchmarkResults> {
+    let config = benchmark_config_from_env(mode, timeout_hours);
+    run_benchmark_with_config(elf, stdin, &config, cycles_estimate).await
 }

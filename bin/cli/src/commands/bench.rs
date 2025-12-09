@@ -2,9 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use eyre::Result;
-use sp1_cluster_bench_utils::{
-    run_benchmark_with_config, ArtifactStoreConfig, BenchmarkConfig, BenchmarkResults, ClusterElf,
-};
+use sp1_cluster_bench_utils::{run_benchmark_from_env, BenchmarkResults, ClusterElf};
 use sp1_sdk::{network::proto::types::ProofMode, SP1Stdin};
 use sp1_sdk::{CpuProver, Prover, ProvingKey};
 use std::fs::OpenOptions;
@@ -148,34 +146,6 @@ impl BenchCommand {
         common: &CommonArgs,
         cycles_estimate: Option<u64>,
     ) -> Result<Vec<String>> {
-        let artifact_store = if let Some(redis_nodes) = &common.redis_nodes {
-            ArtifactStoreConfig::Redis {
-                nodes: redis_nodes
-                    .clone()
-                    .split(',')
-                    .map(|s| s.to_string())
-                    .collect(),
-            }
-        } else {
-            if common.s3_bucket.is_none() || common.s3_region.is_none() {
-                return Err(eyre::eyre!(
-                    "S3 bucket and region or Redis nodes must be specified"
-                ));
-            }
-            ArtifactStoreConfig::S3 {
-                bucket: common.s3_bucket.clone().unwrap(),
-                region: common.s3_region.clone().unwrap(),
-            }
-        };
-
-        let config = BenchmarkConfig {
-            cluster_rpc: common.cluster_rpc.clone(),
-            count: common.count,
-            mode: common.mode,
-            timeout_hours: 4,
-            artifact_store,
-        };
-
         let client = CpuProver::new_experimental().await;
 
         let elf_arc = sp1_sdk::Elf::from(elf.clone());
@@ -184,7 +154,7 @@ impl BenchCommand {
         let cluster_elf = ClusterElf::NewElf(elf);
 
         let BenchmarkResults { proof_ids, proofs } =
-            run_benchmark_with_config(cluster_elf, stdin, &config, cycles_estimate).await?;
+            run_benchmark_from_env(common.mode, 4, cluster_elf, stdin, cycles_estimate).await?;
 
         // Write all proofs to CSV
         for proof in proofs {
