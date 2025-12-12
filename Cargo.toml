@@ -43,23 +43,23 @@ spn-network-types = { git = "https://github.com/succinctlabs/network", branch = 
 spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
 
 # SP1
-sp1-core-executor = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
-sp1-core-machine = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6", features = [
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1-wip", branch = "erabinov/vk_task" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1-wip", branch = "erabinov/vk_task", features = [
     "bigint-rug",
 ] }
-sp1-hypercube = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
-sp1-prover = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
-sp1-prover-types = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
-sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
-sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
-sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1-wip", branch = "erabinov/vk_task" }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1-wip", branch = "erabinov/vk_task" }
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1-wip", branch = "erabinov/vk_task" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1-wip", branch = "erabinov/vk_task" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1-wip", branch = "erabinov/vk_task" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1-wip", branch = "erabinov/vk_task" }
 sp1-sdk = { git = "https://github.com/succinctlabs/sp1-wip", features = [
     "network",
-], branch = "multilinear_v6" }
+], branch = "erabinov/vk_task" }
 
 # cuslop
-csl-cuda = { git = "https://github.com/succinctlabs/cuslop", branch = "main" }
-csl-prover = { git = "https://github.com/succinctlabs/cuslop", branch = "main" }
+csl-cuda = { git = "https://github.com/succinctlabs/cuslop", branch = "erabinov/vk_gen_script" }
+csl-prover = { git = "https://github.com/succinctlabs/cuslop", branch = "erabinov/vk_gen_script" }
 
 # # SP1 local
 # sp1-core-executor = { path = "../sp1-wip/crates/core/executor" }

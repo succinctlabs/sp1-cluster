@@ -4,3 +4,4 @@ mod prove_shard;
 mod recursion;
 mod setup;
 mod shrink_wrap;
+mod vk_gen;

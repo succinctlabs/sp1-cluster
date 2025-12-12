@@ -16,6 +16,7 @@ pub fn task_weight(task_type: TaskType) -> usize {
         TaskType::MarkerDeferredRecord => 0,
         TaskType::PlonkWrap => *PLONK_WRAP_WEIGHT,
         TaskType::Groth16Wrap => *GROTH16_WRAP_WEIGHT,
+        _ => todo!(),
     }
 }
 

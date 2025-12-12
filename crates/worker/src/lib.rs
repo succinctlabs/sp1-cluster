@@ -164,6 +164,10 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
                 TaskType::SetupVkey => self.process_sp1_setup_vkey(task).await,
                 TaskType::PlonkWrap => self.process_sp1_finalize(task, ProofMode::Plonk).await,
                 TaskType::Groth16Wrap => self.process_sp1_finalize(task, ProofMode::Groth16).await,
+                TaskType::UtilVkeyMapController => {
+                    self.process_sp1_generate_vk_controller(context, task).await
+                }
+                TaskType::UtilVkeyMapChunk => self.process_sp1_generate_vk_chunk(task).await,
                 TaskType::MarkerDeferredRecord => {
                     log::error!("MarkerDeferredRecord is only a marker task");
                     Ok(TaskMetadata::default())
