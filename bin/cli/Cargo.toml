@@ -10,7 +10,7 @@ dotenv.workspace = true
 eyre.workspace = true
 opentelemetry_sdk.workspace = true
 sp1-cluster-artifact = { workspace = true }
-sp1-cluster-bench-utils = { workspace = true }
+sp1-cluster-utils = { workspace = true }
 sp1-cluster-common = { workspace = true }
 sp1-core-executor = { workspace = true }
 sp1-sdk = { workspace = true, features = ["experimental", "native-gnark"] }

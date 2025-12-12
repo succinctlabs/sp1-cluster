@@ -1,5 +1,5 @@
 [package]
-name = "sp1-cluster-bench-utils"
+name = "sp1-cluster-utils"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true

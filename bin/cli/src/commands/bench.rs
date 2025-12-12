@@ -1,10 +1,11 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Args, Subcommand};
 use eyre::Result;
-use sp1_cluster_bench_utils::{run_benchmark_from_env, BenchmarkResults, ClusterElf};
+use sp1_cluster_utils::{request_proof_from_env, ClusterElf, ProofRequestResults};
 use sp1_sdk::{network::proto::types::ProofMode, SP1Stdin};
-use sp1_sdk::{CpuProver, Prover, ProvingKey};
+use sp1_sdk::{CpuProver, Elf, Prover, ProvingKey};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -86,13 +87,7 @@ impl BenchCommand {
                 stdin.write(&(mcycles * 83333));
 
                 let elf = include_bytes!("../../../../artifacts/fibonacci.bin");
-                Self::run_benchmark(
-                    elf.to_vec(),
-                    stdin.clone(),
-                    common,
-                    Some(*mcycles as u64 * 1_000_000),
-                )
-                .await?;
+                Self::run_benchmark(elf.to_vec(), stdin.clone(), common).await?;
             }
             BenchCommand::Input {
                 elf_file,
@@ -107,13 +102,15 @@ impl BenchCommand {
                 );
                 let elf = std::fs::read(elf_file)?;
                 let stdin = bincode::deserialize::<SP1Stdin>(&std::fs::read(stdin_file)?)?;
-                let proof_ids = Self::run_benchmark(elf.to_vec(), stdin, common, None).await?;
+                let proof_ids = Self::run_benchmark(elf.to_vec(), stdin, common).await?;
 
                 let elf_name = elf_file.file_name().unwrap().to_str().unwrap();
                 let workload_name = stdin_file.file_name().unwrap().to_str().unwrap();
                 // Write all proof IDs to CSV
-                for proof_id in proof_ids {
-                    if let Err(e) = Self::append_to_csv(&proof_id, elf_name, Some(workload_name)) {
+                for (proof_id, duration) in proof_ids {
+                    if let Err(e) =
+                        Self::append_to_csv(&proof_id, elf_name, Some(workload_name), duration)
+                    {
                         tracing::warn!("Failed to write to CSV: {}", e);
                     }
                 }
@@ -127,11 +124,13 @@ impl BenchCommand {
                 tracing::info!("Downloading program from s3://{}/{}...", bucket, s3_path);
                 let (elf, stdin) = Self::download_from_s3(bucket, s3_path, &param).await?;
                 tracing::info!("Running S3 program {:?} benchmark...", s3_path);
-                let proof_ids = Self::run_benchmark(elf, stdin, common, None).await?;
+                let proof_ids = Self::run_benchmark(elf, stdin, common).await?;
 
                 // Write all proof IDs to CSV
-                for proof_id in proof_ids {
-                    if let Err(e) = Self::append_to_csv(&proof_id, s3_path, Some(param.as_str())) {
+                for (proof_id, duration) in proof_ids {
+                    if let Err(e) =
+                        Self::append_to_csv(&proof_id, s3_path, Some(param.as_str()), duration)
+                    {
                         tracing::warn!("Failed to write to CSV: {}", e);
                     }
                 }
@@ -140,29 +139,38 @@ impl BenchCommand {
         Ok(())
     }
 
+    /// Runs a benchmark for a given elf and stdin, returning the proof ids and elapsed times.
+    ///
+    /// TODO: Expensive clone + reuploading of elf and stdin for when running for multiple repetitions.
     async fn run_benchmark(
         elf: Vec<u8>,
         stdin: SP1Stdin,
         common: &CommonArgs,
-        cycles_estimate: Option<u64>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Vec<(String, Duration)>> {
         let client = CpuProver::new_experimental().await;
 
-        let elf_arc = sp1_sdk::Elf::from(elf.clone());
+        let elf_arc = Elf::from(elf.clone());
         let pk = client.setup(elf_arc).await.expect("failed to setup elf");
 
-        let cluster_elf = ClusterElf::NewElf(elf);
+        let mut proof_ids = Vec::with_capacity(common.count as usize);
+        for _ in 0..common.count {
+            let cluster_elf = ClusterElf::NewElf(elf.clone());
 
-        let BenchmarkResults { proof_ids, proofs } =
-            run_benchmark_from_env(common.mode, 4, cluster_elf, stdin, cycles_estimate).await?;
+            let ProofRequestResults {
+                proof_id,
+                proof,
+                elapsed,
+            } = request_proof_from_env(common.mode, 4, cluster_elf, stdin.clone()).await?;
 
-        // Write all proofs to CSV
-        for proof in proofs {
+            // Verify proof to CSV
             client
                 .verify(&proof.into(), pk.verifying_key(), None)
                 .expect("failed to verify proof");
-        }
 
+            tracing::info!("Proof completed in {:?}", elapsed);
+
+            proof_ids.push((proof_id, elapsed));
+        }
         Ok(proof_ids)
     }
 
@@ -228,7 +236,12 @@ impl BenchCommand {
         Ok((program, stdin))
     }
 
-    fn append_to_csv(proof_id: &str, s3_path: &str, param: Option<&str>) -> Result<()> {
+    fn append_to_csv(
+        proof_id: &str,
+        s3_path: &str,
+        param: Option<&str>,
+        duration: Duration,
+    ) -> Result<()> {
         let csv_path = "data/bench_results.csv";
 
         // Create data directory if it doesn't exist
@@ -245,11 +258,18 @@ impl BenchCommand {
 
         // Write header if file is new
         if !file_exists {
-            writeln!(file, "proof_id,s3_path,param")?;
+            writeln!(file, "proof_id,s3_path,param,duration_ms")?;
         }
 
         // Write data row
-        writeln!(file, "{},{},{}", proof_id, s3_path, param.unwrap_or(""))?;
+        writeln!(
+            file,
+            "{},{},{},{}",
+            proof_id,
+            s3_path,
+            param.unwrap_or(""),
+            duration.as_millis()
+        )?;
 
         Ok(())
     }

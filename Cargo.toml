@@ -8,10 +8,10 @@ members = [
     "bin/coordinator",
     "bin/fulfiller",
     "bin/node",
-    # "bin/sp1-redis-test",
     "crates/artifact",
     "crates/common",
     "crates/worker",
+    "crates/utils",
 ]
 [workspace.package]
 version = "1.0.0"
@@ -26,7 +26,7 @@ categories = []
 sp1-cluster-artifact = { path = "crates/artifact" }
 sp1-cluster-common = { path = "crates/common" }
 sp1-cluster-worker = { path = "crates/worker" }
-sp1-cluster-bench-utils = { path = "crates/bench-utils" }
+sp1-cluster-utils = { path = "crates/utils" }
 
 # P3
 p3-baby-bear = "=0.2.3-succinct"
