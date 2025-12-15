@@ -14,8 +14,8 @@ use sp1_prover::worker::{
     ProofId, TaskError, TaskId, VkeyMapControllerInput, VkeyMapControllerOutput, WorkerClient,
 };
 use sp1_prover_types::{
-    ArtifactId, CreateDummyProofRequest, CreateTaskRequest, GetTaskStatusesRequest, TaskData,
-    TaskStatus, TaskType,
+    cluster, ArtifactId, CreateDummyProofRequest, CreateTaskRequest, GetTaskStatusesRequest,
+    TaskData, TaskStatus, TaskType,
 };
 use sp1_sdk::network::proto::types::ProofMode;
 
@@ -87,19 +87,27 @@ impl BuildVkeys {
             node_id.push_str(&format!("{:02x}", rng.gen::<u8>()));
         }
 
-        let mut cluster_client =
-            WorkerServiceClient::new("http://localhost:50053".to_string(), node_id.clone())
-                .await
-                .unwrap();
+        let cluster_rpc = std::env::var("CLI_CLUSTER_RPC").unwrap();
+
+        let mut cluster_client = WorkerServiceClient::new(cluster_rpc, node_id.clone())
+            .await
+            .unwrap();
         // TODO: Fix
 
         let request_config = request_config_from_env(ProofMode::Core, 24);
 
-        let redis_config = match &request_config.artifact_store {
-            ArtifactStoreConfig::Redis { nodes } => Some(nodes.clone()),
+        let (bucket, region) = match &request_config.artifact_store {
+            ArtifactStoreConfig::S3 { bucket, region } => Some((bucket.clone(), region.clone())),
             _ => None,
-        };
-        let artifact_client = RedisArtifactClient::new(redis_config.unwrap_or_default(), 16);
+        }
+        .unwrap();
+        let artifact_client = S3ArtifactClient::new(
+            region.clone(),
+            bucket,
+            32,
+            S3DownloadMode::AwsSDK(S3ArtifactClient::create_s3_sdk_download_client(region).await),
+        )
+        .await;
 
         let input_artifact = artifact_client
             .create_artifact()
@@ -121,6 +129,8 @@ impl BuildVkeys {
                 .as_secs()
         );
 
+        tracing::info!("Creating dummy proof for proof id: {}", proof_id);
+
         cluster_client
             .client
             .create_dummy_proof(CreateDummyProofRequest {
@@ -135,6 +145,10 @@ impl BuildVkeys {
                 requester: "cli".to_string(),
             })
             .await
+            .map_err(|e| {
+                tracing::warn!("Failed to create dummy proof: {:?}", e);
+                e
+            })
             .unwrap();
 
         //         TaskType::Sp1UtilVkeyMapController,
