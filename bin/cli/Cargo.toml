@@ -22,3 +22,4 @@ tracing.workspace = true
 
 either = { version = "1.15.0", features = ["serde"]}
 rand = "0.8"
+serde_json = { workspace = true }

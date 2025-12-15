@@ -1,15 +1,21 @@
 use std::time::{Duration, SystemTime};
 
-use clap::{Args, Parser};
+use clap::{Args, Parser, Subcommand};
 use either::Either;
 use eyre::Result;
 use rand::Rng;
+use sp1_cluster_artifact::redis::RedisArtifactClient;
 use sp1_cluster_artifact::s3::{S3ArtifactClient, S3DownloadMode};
 use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_utils::{request_config_from_env, ArtifactStoreConfig};
 use sp1_cluster_worker::client::WorkerServiceClient;
-use sp1_prover::worker::{VkeyMapControllerInput, VkeyMapControllerOutput};
+use sp1_cluster_worker::utils::{current_context, task_metadata};
+use sp1_prover::worker::{
+    ProofId, TaskError, TaskId, VkeyMapControllerInput, VkeyMapControllerOutput, WorkerClient,
+};
 use sp1_prover_types::{
-    ArtifactId, CreateTaskRequest, GetTaskStatusesRequest, TaskData, TaskStatus, TaskType,
+    ArtifactId, CreateDummyProofRequest, CreateTaskRequest, GetTaskStatusesRequest, TaskData,
+    TaskStatus, TaskType,
 };
 use sp1_sdk::network::proto::types::ProofMode;
 
@@ -47,24 +53,31 @@ pub fn parse_proof_mode(s: &str) -> Result<ProofMode> {
         .ok_or_else(|| eyre::eyre!("Invalid proof mode"))
 }
 
-#[derive(Parser)]
-pub struct BuildVkeys {
-    #[clap(long)]
-    pub limit: Option<usize>,
+#[derive(Subcommand)]
+pub enum BuildVkeys {
+    BuildVkeys {
+        #[clap(long, default_value = "10")]
+        limit: Option<usize>,
 
-    #[clap(long, default_value = "1000")]
-    pub chunk_size: usize,
+        #[clap(long, default_value = "1000")]
+        chunk_size: usize,
 
-    #[clap(long, default_value = "4")]
-    pub reduce_batch_size: usize,
+        #[clap(long, default_value = "4")]
+        reduce_batch_size: usize,
+    },
 }
 
 impl BuildVkeys {
     pub async fn run(&self) -> Result<()> {
+        let BuildVkeys::BuildVkeys {
+            limit,
+            chunk_size,
+            reduce_batch_size,
+        } = self;
         let input = VkeyMapControllerInput {
-            range_or_limit: self.limit.map(Either::Right),
-            chunk_size: self.chunk_size,
-            reduce_batch_size: self.reduce_batch_size,
+            range_or_limit: limit.map(Either::Right),
+            chunk_size: *chunk_size,
+            reduce_batch_size: *reduce_batch_size,
         };
 
         // Random hex string
@@ -75,27 +88,30 @@ impl BuildVkeys {
         }
 
         let mut cluster_client =
-            WorkerServiceClient::new(std::env::var("CLUSTER_V2_RPC").unwrap(), node_id.clone())
+            WorkerServiceClient::new("http://localhost:50053".to_string(), node_id.clone())
                 .await
                 .unwrap();
         // TODO: Fix
-        let s3_client = S3ArtifactClient::new(
-            "us-east-2".to_string(),
-            std::env::var("S3_BUCKET").unwrap(),
-            16,
-            S3DownloadMode::AwsSDK(
-                S3ArtifactClient::create_s3_sdk_download_client("us-east-2".to_string()).await,
-            ),
-        )
-        .await;
 
-        let input_artifact = s3_client.create_artifact().map_err(|e| eyre::eyre!(e))?;
-        s3_client
+        let request_config = request_config_from_env(ProofMode::Core, 24);
+
+        let redis_config = match &request_config.artifact_store {
+            ArtifactStoreConfig::Redis { nodes } => Some(nodes.clone()),
+            _ => None,
+        };
+        let artifact_client = RedisArtifactClient::new(redis_config.unwrap_or_default(), 16);
+
+        let input_artifact = artifact_client
+            .create_artifact()
+            .map_err(|e| eyre::eyre!(e))?;
+        artifact_client
             .upload(&input_artifact, input)
             .await
             .map_err(|e| eyre::eyre!(e))?;
 
-        let output_artifact = s3_client.create_artifact().map_err(|e| eyre::eyre!(e))?;
+        let output_artifact = artifact_client
+            .create_artifact()
+            .map_err(|e| eyre::eyre!(e))?;
 
         let proof_id = format!(
             "build-vkeys-{}",
@@ -105,6 +121,22 @@ impl BuildVkeys {
                 .as_secs()
         );
 
+        cluster_client
+            .client
+            .create_dummy_proof(CreateDummyProofRequest {
+                worker_id: "cli".to_string(),
+                proof_id: proof_id.clone(),
+                expires_at: SystemTime::now()
+                    .checked_add(Duration::from_secs(60 * 60 * 4))
+                    .unwrap()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64,
+                requester: "cli".to_string(),
+            })
+            .await
+            .unwrap();
+
         //         TaskType::Sp1UtilVkeyMapController,
         // &[input_artifact.id.clone()],
         // &[output_artifact.id.clone()],
@@ -113,11 +145,14 @@ impl BuildVkeys {
         // None,
         // "cli".to_string(),
 
+        let context = current_context();
+        let metadata = serde_json::to_string(&task_metadata(&context))?;
+
         let task_data: TaskData = TaskData {
             task_type: TaskType::UtilVkeyMapController as i32,
             inputs: vec![input_artifact.id().to_string()],
             outputs: vec![output_artifact.id().to_string()],
-            metadata: "".to_string(),
+            metadata: metadata,
             proof_id: proof_id.clone(),
             parent_id: None,
             weight: 0,
@@ -131,53 +166,22 @@ impl BuildVkeys {
 
         let task = cluster_client.client.create_task(task_request).await?;
 
-        println!("created task: {:?}", task);
-        loop {
-            let task_status = cluster_client
-                .client
-                .get_task_statuses(GetTaskStatusesRequest {
-                    task_ids: vec![task.get_ref().task_id.clone()],
-                    worker_id: node_id.clone(),
-                    proof_id: proof_id.clone(),
-                })
-                .await?;
+        tracing::info!("created task: {:?}", task);
 
-            match task_status.get_ref().statuses[0].key() {
-                TaskStatus::Succeeded => {
-                    tracing::info!(
-                        "Vk generation completed for task {}",
-                        task.get_ref().task_id
-                    );
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let subscriber = cluster_client
+            .subscriber(ProofId::new(proof_id.clone()))
+            .await
+            .map_err(|e| TaskError::Fatal(e.into()))?
+            .per_task();
+        let status = subscriber
+            .wait_task(TaskId::new(task.get_ref().task_id.clone()))
+            .await
+            .map_err(|e| TaskError::Fatal(e.into()))?;
 
-                    let output = s3_client
-                        .download::<VkeyMapControllerOutput>(&output_artifact)
-                        .await
-                        .expect("failed to download proof");
+        tracing::warn!("Task Status: {:?}", status);
 
-                    println!("got {} vkeys", output.vk_map.len());
-                    println!("got {} panic indices", output.panic_indices.len());
-
-                    // Save vk map to file
-                    let vk_map_path = format!("vk_map_{}.bin", output.vk_map.len());
-                    let vk_map_file = std::fs::File::create(vk_map_path.clone())?;
-                    let output = (output.vk_map, output.panic_indices);
-                    bincode::serialize_into(vk_map_file, &output)?;
-
-                    println!("saved vk map to file: {}", vk_map_path);
-
-                    break;
-                }
-                TaskStatus::FailedFatal | TaskStatus::FailedRetryable => {
-                    return Err(eyre::eyre!(
-                        "Vk generation failed for task {}",
-                        task.get_ref().task_id
-                    ));
-                }
-                _ => {}
-            }
-
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        assert!(matches!(status, TaskStatus::Succeeded));
 
         Ok(())
     }

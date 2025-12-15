@@ -1,7 +1,7 @@
 #
 # Build Stage
 #
-FROM --platform=linux/amd64 nvidia/cuda:13.0.1-devel-ubuntu22.04 AS build
+FROM --platform=linux/amd64 nvidia/cuda:12.6.3-devel-ubuntu22.04 AS build
 
 # Install dependencies
 RUN apt-get update -y && \
@@ -79,7 +79,7 @@ RUN \
   cp target/$BUILD_PROFILE/sp1-cluster-node /sp1-cluster-node
 
 # Runtime stage
-FROM --platform=linux/amd64 nvidia/cuda:13.0.1-runtime-ubuntu22.04 AS runtime
+FROM --platform=linux/amd64 nvidia/cuda:12.6.3-runtime-ubuntu22.04 AS runtime
 
 RUN \
   apt-get update -y && \
