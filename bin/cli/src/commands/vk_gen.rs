@@ -56,7 +56,7 @@ pub fn parse_proof_mode(s: &str) -> Result<ProofMode> {
 #[derive(Subcommand)]
 pub enum BuildVkeys {
     BuildVkeys {
-        #[clap(long, default_value = "10")]
+        #[clap(long)]
         limit: Option<usize>,
 
         #[clap(long, default_value = "1000")]
@@ -196,6 +196,18 @@ impl BuildVkeys {
         tracing::warn!("Task Status: {:?}", status);
 
         assert!(matches!(status, TaskStatus::Succeeded));
+
+        let result = artifact_client
+            .download::<VkeyMapControllerOutput>(&output_artifact)
+            .await
+            .map_err(|e| eyre::eyre!(e))?;
+
+        assert_eq!(result.vk_map.len(), limit.unwrap_or(10));
+        assert_eq!(result.panic_indices.len(), 0);
+
+        let mut file = std::fs::File::create("vk_map.bin")?;
+
+        bincode::serialize_into(&mut file, &result.vk_map)?;
 
         Ok(())
     }
