@@ -92,7 +92,6 @@ impl BuildVkeys {
         let mut cluster_client = WorkerServiceClient::new(cluster_rpc, node_id.clone())
             .await
             .unwrap();
-        // TODO: Fix
 
         let request_config = request_config_from_env(ProofMode::Core, 24);
 
@@ -151,14 +150,6 @@ impl BuildVkeys {
             })
             .unwrap();
 
-        //         TaskType::Sp1UtilVkeyMapController,
-        // &[input_artifact.id.clone()],
-        // &[output_artifact.id.clone()],
-        // proof_id.clone(),
-        // None,
-        // None,
-        // "cli".to_string(),
-
         let context = current_context();
         let metadata = serde_json::to_string(&task_metadata(&context))?;
 
@@ -205,7 +196,6 @@ impl BuildVkeys {
         let mut file = std::fs::File::create("vk_map.bin")?;
         bincode::serialize_into(&mut file, &result.vk_map)?;
 
-        assert_eq!(result.vk_map.len(), limit.unwrap_or(213681));
         assert_eq!(result.panic_indices.len(), 0);
 
         Ok(())

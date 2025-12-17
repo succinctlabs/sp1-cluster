@@ -33,16 +33,6 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
             .run_sp1_util_vkey_map_controller(raw_task_request)
             .await?;
 
-        // // Mark proof as completed.
-        // self.worker
-        //     .worker_client()
-        //     .complete_proof(
-        //         ProofId::new(data.proof_id.clone()),
-        //         Some(TaskId::new(task.task_id.clone())),
-        //         ProofRequestStatus::Completed,
-        //     )
-        //     .await?;
-
         Ok(TaskMetadata { gpu_time: None })
     }
 }
