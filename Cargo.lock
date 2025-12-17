@@ -2597,7 +2597,7 @@ dependencies = [
 [[package]]
 name = "csl-air"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "itertools 0.14.0",
  "lazy_static",
@@ -2616,7 +2616,7 @@ dependencies = [
 [[package]]
 name = "csl-basefold"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-challenger",
  "csl-cuda",
@@ -2646,7 +2646,7 @@ dependencies = [
 [[package]]
 name = "csl-challenger"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "slop-algebra",
@@ -2658,7 +2658,7 @@ dependencies = [
 [[package]]
 name = "csl-cuda"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "crossbeam",
  "csl-sys",
@@ -2686,7 +2686,7 @@ dependencies = [
 [[package]]
 name = "csl-dft"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "slop-algebra",
@@ -2699,7 +2699,7 @@ dependencies = [
 [[package]]
 name = "csl-jagged"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-basefold",
  "csl-challenger",
@@ -2726,7 +2726,7 @@ dependencies = [
 [[package]]
 name = "csl-logup-gkr"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "futures",
@@ -2747,7 +2747,7 @@ dependencies = [
 [[package]]
 name = "csl-merkle-tree"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "slop-algebra",
@@ -2767,7 +2767,7 @@ dependencies = [
 [[package]]
 name = "csl-prover"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "clap",
  "csl-air",
@@ -2801,7 +2801,7 @@ dependencies = [
 [[package]]
 name = "csl-sys"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "cbindgen",
  "cc",
@@ -2818,7 +2818,7 @@ dependencies = [
 [[package]]
 name = "csl-tracegen"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "futures",
@@ -2842,7 +2842,7 @@ dependencies = [
 [[package]]
 name = "csl-tracing"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "tracing",
@@ -2852,7 +2852,7 @@ dependencies = [
 [[package]]
 name = "csl-zerocheck"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-air",
  "csl-cuda",
@@ -2869,7 +2869,7 @@ dependencies = [
 [[package]]
 name = "cslpc-basefold"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-challenger",
  "csl-cuda",
@@ -2899,7 +2899,7 @@ dependencies = [
 [[package]]
 name = "cslpc-commit"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "csl-jagged",
@@ -2925,7 +2925,7 @@ dependencies = [
 [[package]]
 name = "cslpc-jagged-sumcheck"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "cslpc-utils",
@@ -2947,7 +2947,7 @@ dependencies = [
 [[package]]
 name = "cslpc-logup-gkr"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "cslpc-tracegen",
@@ -2982,7 +2982,7 @@ dependencies = [
 [[package]]
 name = "cslpc-merkle-tree"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "csl-merkle-tree",
@@ -3007,7 +3007,7 @@ dependencies = [
 [[package]]
 name = "cslpc-prover"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-air",
  "csl-basefold",
@@ -3041,7 +3041,7 @@ dependencies = [
 [[package]]
 name = "cslpc-tracegen"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "csl-tracegen",
@@ -3069,7 +3069,7 @@ dependencies = [
 [[package]]
 name = "cslpc-utils"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-cuda",
  "slop-algebra",
@@ -3081,7 +3081,7 @@ dependencies = [
 [[package]]
 name = "cslpc-zerocheck"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#afa2f0c2f56c42fbd7959673f96fb96343d7ab89"
+source = "git+https://github.com/succinctlabs/cuslop?branch=erabinov%2Fvk_gen_script#83246c60703b7ef258497e7bd73cc3775b1dfab5"
 dependencies = [
  "csl-air",
  "csl-cuda",
