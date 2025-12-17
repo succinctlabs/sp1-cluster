@@ -1,10 +1,9 @@
 use std::time::{Duration, SystemTime};
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Subcommand};
 use either::Either;
 use eyre::Result;
 use rand::Rng;
-use sp1_cluster_artifact::redis::RedisArtifactClient;
 use sp1_cluster_artifact::s3::{S3ArtifactClient, S3DownloadMode};
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_utils::{request_config_from_env, ArtifactStoreConfig};
@@ -14,10 +13,11 @@ use sp1_prover::worker::{
     ProofId, TaskError, TaskId, VkeyMapControllerInput, VkeyMapControllerOutput, WorkerClient,
 };
 use sp1_prover_types::{
-    cluster, ArtifactId, CreateDummyProofRequest, CreateTaskRequest, GetTaskStatusesRequest,
-    TaskData, TaskStatus, TaskType,
+    ArtifactId, CreateDummyProofRequest, CreateTaskRequest, TaskData, TaskStatus, TaskType,
 };
 use sp1_sdk::network::proto::types::ProofMode;
+
+pub const VK_GEN_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 4);
 
 #[derive(Debug, Args)]
 pub struct CommonArgs {
@@ -87,12 +87,15 @@ impl BuildVkeys {
             node_id.push_str(&format!("{:02x}", rng.gen::<u8>()));
         }
 
-        let cluster_rpc = std::env::var("CLI_CLUSTER_RPC").unwrap();
+        // This environment variable should address the cluster coordinator.
+        let cluster_rpc = std::env::var("CLI_COORDINATOR_RPC").unwrap();
 
         let mut cluster_client = WorkerServiceClient::new(cluster_rpc, node_id.clone())
             .await
             .unwrap();
 
+        // NOTE: Only run this script using the AWS cluster (not local cluster with Redicis artifact store).
+        // We throw out most of the config, but we want to just extract the
         let request_config = request_config_from_env(ProofMode::Core, 24);
 
         let (bucket, region) = match &request_config.artifact_store {
@@ -100,6 +103,7 @@ impl BuildVkeys {
             _ => None,
         }
         .unwrap();
+
         let artifact_client = S3ArtifactClient::new(
             region.clone(),
             bucket,
@@ -136,7 +140,7 @@ impl BuildVkeys {
                 worker_id: "cli".to_string(),
                 proof_id: proof_id.clone(),
                 expires_at: SystemTime::now()
-                    .checked_add(Duration::from_secs(60 * 60 * 4))
+                    .checked_add(VK_GEN_TIMEOUT)
                     .unwrap()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap()

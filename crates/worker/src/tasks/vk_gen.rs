@@ -16,15 +16,12 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
         parent: Context,
         task: &WorkerTask,
     ) -> Result<TaskMetadata, TaskError> {
-        let mut data = task.data()?.clone();
+        let data = task.data()?.clone();
 
         if data.inputs.is_empty() {
             log::info!("no inputs for task");
             return Err(TaskError::Fatal(anyhow::anyhow!("no inputs for task")));
         }
-
-        // Truncate the cycle limit and TODO thing for now.
-        data.inputs = data.inputs.into_iter().take(3).collect();
 
         let raw_task_request = worker_task_to_raw_task_request(&data, Some(parent));
 
@@ -38,7 +35,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
 }
 
 impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
-    /// Prove a single shard.
+    /// Generate a single chunk of vks.
     pub async fn process_sp1_generate_vk_chunk(
         self: &Arc<Self>,
         task: &WorkerTask,
