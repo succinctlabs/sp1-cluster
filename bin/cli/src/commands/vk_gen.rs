@@ -202,12 +202,11 @@ impl BuildVkeys {
             .await
             .map_err(|e| eyre::eyre!(e))?;
 
-        assert_eq!(result.vk_map.len(), limit.unwrap_or(10));
-        assert_eq!(result.panic_indices.len(), 0);
-
         let mut file = std::fs::File::create("vk_map.bin")?;
-
         bincode::serialize_into(&mut file, &result.vk_map)?;
+
+        assert_eq!(result.vk_map.len(), limit.unwrap_or(213681));
+        assert_eq!(result.panic_indices.len(), 0);
 
         Ok(())
     }
