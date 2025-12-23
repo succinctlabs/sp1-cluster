@@ -135,7 +135,11 @@ pub async fn check_proof_status<A: ArtifactClient>(
 
     match proof_request.proof_status() {
         ProofRequestStatus::Completed => {
-            tracing::info!("Proof request completed after {:?}", start_time.elapsed());
+            tracing::info!(
+                "Proof request for proof id {} completed after {:?}",
+                proof_id,
+                start_time.elapsed()
+            );
 
             let completed_proof = artifact_client
                 .download_with_type(&proof_output_id, ArtifactType::Proof)
