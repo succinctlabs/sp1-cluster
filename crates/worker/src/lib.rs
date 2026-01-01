@@ -50,7 +50,7 @@ pub type ClusterProverComponents = csl_prover::SP1CudaProverComponents;
 // #[cfg(feature = "gpu")]
 // pub type ClusterProverComponents = csl_prover::CudaSP1ProverComponents;
 #[cfg(not(feature = "gpu"))]
-pub type ClusterProverComponents = sp1_prover::components::CpuSP1ProverComponents;
+pub type ClusterProverComponents = sp1_prover::CpuSP1ProverComponents;
 
 pub const VERGEN_GIT_SHA: &str = env!("VERGEN_GIT_SHA");
 pub const VERGEN_BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
