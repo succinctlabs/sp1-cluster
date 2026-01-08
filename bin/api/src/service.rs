@@ -33,6 +33,7 @@ struct DbProofRequest {
     metadata: String,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
+    extra_data: Option<String>,
 }
 
 impl DbProofRequest {
@@ -206,7 +207,6 @@ impl ClusterService for ClusterServiceImpl {
         query.push(" WHERE id = ");
         query.push_bind(&req.proof_id);
 
-        info!("query: {}", query.sql());
         let result = query.build().execute(&*self.db_pool).await;
 
         match result {

@@ -226,11 +226,8 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
         track_latency!("worker.complete_proof", {
             tokio::spawn({
                 let coordinator = self.coordinator.clone();
-                async move {
-                    coordinator
-                        .complete_proof(request.into_inner().proof_id)
-                        .await
-                }
+                let request = request.into_inner();
+                async move { coordinator.complete_proof(request.proof_id).await }
             })
             .await
             .unwrap()?;
@@ -533,6 +530,11 @@ pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Syn
     let api_client = Arc::new(ClusterServiceClient::new(api_rpc).await?);
 
     service.coordinator.set_proofs_tx(completed_tx).await;
+    service
+        .coordinator
+        .set_execute_only_mode(config.execute_only_mode)
+        .await;
+    tracing::info!("execute_only_mode={}", config.execute_only_mode);
 
     if !config.disable_proof_status_update {
         spawn_proof_status_task(api_client.clone(), task_map.clone(), completed_rx);

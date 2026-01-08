@@ -47,6 +47,7 @@ pub fn estimate_duration(task_type: TaskType) -> u128 {
         TaskType::MarkerDeferredRecord => 0,
         TaskType::UnspecifiedTaskType => 0,
         TaskType::UtilVkeyMapChunk | TaskType::UtilVkeyMapController => 0,
+        TaskType::ExecuteOnly => 200,
     }
 }
 
@@ -54,7 +55,7 @@ pub fn estimate_duration(task_type: TaskType) -> u128 {
 fn enable_proof_fail(task_type: TaskType) -> bool {
     matches!(
         task_type,
-        TaskType::Controller | TaskType::Groth16Wrap | TaskType::PlonkWrap
+        TaskType::Controller | TaskType::Groth16Wrap | TaskType::PlonkWrap | TaskType::ExecuteOnly
     )
 }
 
@@ -117,6 +118,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 proofs_tx: None,
                 shutting_down: false,
                 policy: P::default(),
+                execute_only_mode: false,
             })),
             subscribers: DashMap::new(),
             metrics: None,
@@ -180,6 +182,10 @@ pub struct CoordinatorState<P: AssignmentPolicy> {
 
     /// The assignment policy which tracks queued tasks and has assignment logic.
     pub policy: P,
+
+    /// Whether coordinator is an execute-only cluster. If so all proof requests only trigger
+    /// EXECUTE_ONLY tasks instead of the default CONTROLLER task.
+    pub execute_only_mode: bool,
 }
 
 #[derive(Clone)]
@@ -312,11 +318,17 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             Proof::new(request.proof_id.clone(), expires_at, proof_extra),
         );
 
+        let task_type = if state.execute_only_mode {
+            TaskType::ExecuteOnly
+        } else {
+            TaskType::Controller
+        };
+
         let id = self
             .create_task_internal(
                 state,
                 TaskData {
-                    task_type: TaskType::Controller as i32,
+                    task_type: task_type as i32,
                     inputs: request.inputs,
                     outputs: request.outputs,
                     metadata: "{}".to_string(),
@@ -372,6 +384,15 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire_write"))
             .await
             .proofs_tx = Some(tx);
+    }
+
+    /// Set execute only mode
+    pub async fn set_execute_only_mode(&self, execute_only_mode: bool) {
+        self.state
+            .write()
+            .instrument(tracing::debug_span!("acquire_write"))
+            .await
+            .execute_only_mode = execute_only_mode;
     }
 
     /// Place a task in the queue.

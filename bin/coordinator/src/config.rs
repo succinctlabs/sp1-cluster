@@ -9,6 +9,8 @@ pub struct Settings {
     pub addr: String,
     #[serde(default)]
     pub disable_proof_status_update: bool,
+    #[serde(default)]
+    pub execute_only_mode: bool,
 }
 
 // Server

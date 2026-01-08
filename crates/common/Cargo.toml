@@ -22,7 +22,7 @@ opentelemetry_sdk = { workspace = true, features = [
     "rt-tokio",
 ] }
 prost.workspace = true
-rustls.workspace = true
+rustls = { workspace = true, features = ["ring"] }
 serde.workspace = true
 sp1-prover-types = { workspace = true }
 tokio-blocked = { workspace = true, optional = true }

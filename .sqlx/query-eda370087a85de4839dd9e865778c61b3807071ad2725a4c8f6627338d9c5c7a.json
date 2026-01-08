@@ -97,6 +97,11 @@
         "ordinal": 18,
         "name": "updated_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 19,
+        "name": "extra_data",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -123,7 +128,8 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
   "hash": "eda370087a85de4839dd9e865778c61b3807071ad2725a4c8f6627338d9c5c7a"

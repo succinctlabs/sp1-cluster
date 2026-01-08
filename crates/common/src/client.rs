@@ -26,7 +26,7 @@ pub async fn reconnect_with_backoff(addr: &str) -> Result<Channel> {
             .http2_keep_alive_interval(Duration::from_secs(15))
             .keep_alive_timeout(Duration::from_secs(60));
 
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = rustls::crypto::ring::default_provider().install_default();
 
         use tonic::transport::ClientTlsConfig;
         if addr.starts_with("https://") {

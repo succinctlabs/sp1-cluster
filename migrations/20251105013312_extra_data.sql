@@ -1,0 +1,1 @@
+ALTER TABLE proof_requests ADD COLUMN extra_data TEXT;

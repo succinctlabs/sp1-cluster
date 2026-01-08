@@ -16,6 +16,7 @@ sp1-cluster-artifact.workspace = true
 sp1-cluster-common.workspace = true
 sp1-cluster-worker.workspace = true
 sp1-hypercube.workspace = true
+sp1-cluster-fulfillment.workspace = true
 
 sp1-prover.workspace = true
 sp1-sdk.workspace = true
