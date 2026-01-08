@@ -94,12 +94,12 @@ gpu-node:
       # Each GPU pod should have at least 16GB RAM and as many cores as possible.
       # Also, only certain GPUs with >=24GB RAM are supported.
       nvidia.com/gpu: 1
-      cpu: 32.0
-      memory: 24Gi
+      # cpu: 32.0
+      # memory: 24Gi
     limits:
       nvidia.com/gpu: 1
-      cpu: 32.0
-      memory: 24Gi
+      # cpu: 32.0
+      # memory: 24Gi
   image:
     tag: "node-gpu-v1.0.4"
   imagePullSecrets:
@@ -144,6 +144,8 @@ coordinator:
 postgresql:
   enabled: true
   fullnameOverride: postgresql
+  image:
+    repository: bitnamilegacy/redis
   auth:
     # Change this to a secure password.
     postgresPassword: postgrespassword

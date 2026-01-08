@@ -201,7 +201,7 @@ impl RedisArtifactClient {
     }
 }
 
-const TRANSFER_TIMEOUT: Duration = Duration::from_secs(1);
+const TRANSFER_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl ArtifactClient for RedisArtifactClient {
     #[instrument(name = "upload", level = "debug", fields(id = artifact.id()), skip(self, artifact, data))]
@@ -256,7 +256,7 @@ impl ArtifactClient for RedisArtifactClient {
         artifact_type: ArtifactType,
     ) -> Result<Vec<u8>> {
         let artifact_id = artifact.id();
-        let timeout_duration = Duration::from_secs(1);
+        let timeout_duration = Duration::from_secs(60);
 
         backoff_retry(self.backoff.clone(), || async {
             match tokio::time::timeout(

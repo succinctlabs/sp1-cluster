@@ -79,18 +79,13 @@ services:
       - api
 
   # CPU Node (local to management node)
-
-  # 0, 1, 3
-  # NODE_REDIS_NODES=redis://:redispassword@redis:6379/0,redis://:redispassword@10.10.100.98:6379/0,redis://:redispassword@10.10.100.88:6379/0
-  # 0, 1, 2
-  # NODE_REDIS_NODES=redis://:redispassword@redis:6379/0,redis://:redispassword@10.10.100.98:6379/0,redis://:redispassword@10.10.100.99:6379/0
   cpu-node:
     image: ghcr.io/succinctlabs/sp1-cluster-wip:base-db1c2f7
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=32
       - NODE_ARTIFACT_STORE=redis
-      - NODE_REDIS_NODES=redis://:redispassword@10.10.100.88:6379/0
+      - NODE_REDIS_NODES=redis://:redispassword@localhost:6379/0
       - WORKER_TYPE=CPU
       - TRACING_ENABLED=true
       - SP1_WORKER_NUM_SPLICING_WORKERS=12

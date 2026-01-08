@@ -25,6 +25,7 @@ prost.workspace = true
 rustls.workspace = true
 serde.workspace = true
 sp1-prover-types = { workspace = true }
+tokio-blocked = { workspace = true, optional = true }
 tonic.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
@@ -33,3 +34,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 [build-dependencies]
 chrono.workspace = true
 tonic-build.workspace = true
+
+[features]
+default = ["tokio-blocked"]
+tokio-blocked = ["dep:tokio-blocked"]

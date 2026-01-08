@@ -161,7 +161,9 @@ impl S3ArtifactClient {
                 }
             })
             .await?;
-            return Ok(bytes.to_vec());
+            let decoded = zstd::decode_all(bytes.as_slice())
+                .map_err(|e| anyhow!("Failed to decompress artifact: {}", e))?;
+            return Ok(decoded);
         }
 
         let starts = (0..size)
@@ -230,7 +232,9 @@ impl S3ArtifactClient {
             }
         }
 
-        Ok(result)
+        let decoded = zstd::decode_all(result.as_slice())
+            .map_err(|e| anyhow!("Failed to decompress artifact: {}", e))?;
+        Ok(decoded)
     }
 
     async fn par_upload_file(
@@ -241,18 +245,22 @@ impl S3ArtifactClient {
     ) -> Result<()> {
         let key = Self::get_s3_key_from_id(artifact_type, id);
 
+        // Compress data before uploading
+        let compressed = zstd::encode_all(data.as_slice(), 0)
+            .map_err(|e| anyhow!("Failed to compress artifact: {}", e))?;
+
         // If the file is smaller than the chunk size, just upload it.
-        if data.len() <= CHUNK_SIZE {
+        if compressed.len() <= CHUNK_SIZE {
             self.sdk_client
                 .put_object()
                 .bucket(&self.bucket)
                 .key(key)
-                .body(data.clone().into())
+                .body(compressed.into())
                 .send()
                 .await?;
             return Ok(());
         }
-        let data = Arc::new(data);
+        let data = Arc::new(compressed);
 
         let create_multipart_upload = self
             .sdk_client
@@ -387,19 +395,38 @@ impl ArtifactClient for S3ArtifactClient {
         }
     }
 
-    async fn delete(
-        &self,
-        _artifact: &impl ArtifactId,
-        _artifact_type: ArtifactType,
-    ) -> Result<()> {
+    async fn delete(&self, artifact: &impl ArtifactId, artifact_type: ArtifactType) -> Result<()> {
+        let key = Self::get_s3_key_from_id(artifact_type, artifact.id());
+        self.sdk_client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await?;
         Ok(())
     }
 
     async fn delete_batch(
         &self,
-        _artifacts: &[impl ArtifactId],
-        _artifact_type: ArtifactType,
+        artifacts: &[impl ArtifactId],
+        artifact_type: ArtifactType,
     ) -> Result<()> {
+        let mut join_set = JoinSet::new();
+        for artifact in artifacts {
+            let key = Self::get_s3_key_from_id(artifact_type, artifact.id());
+            join_set.spawn(
+                self.sdk_client
+                    .delete_object()
+                    .bucket(&self.bucket)
+                    .key(key)
+                    .send(),
+            );
+        }
+
+        while let Some(res) = join_set.join_next().await {
+            res.map_err(|e| anyhow!(e))??;
+        }
+
         Ok(())
     }
 }

@@ -21,6 +21,8 @@ spec:
     
     # Pod
     spec:
+      strategy:
+        {{- toYaml .Values.strategy | nindent 8 }}
       nodeSelector:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       tolerations:

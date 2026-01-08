@@ -7,6 +7,13 @@ image:
   pullPolicy: IfNotPresent
   tag: server-0b17a2b
 
+spec:
+  strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: "100%"
+
 # Expose metrics server to cluster and API server as a NodePort.
 # A NodePort allows access from outside the cluster.
 services:

@@ -68,7 +68,7 @@ RUN \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     echo "Building with profile: $BUILD_PROFILE | features: $FEATURES | rustflags: $RUSTFLAGS" && \
-    cargo build --profile $BUILD_PROFILE --features "$FEATURES" \
+    RUSTFLAGS="--cfg tokio_unstable" cargo build --profile $BUILD_PROFILE --features "$FEATURES" \
     --bin sp1-cluster-api \
     --bin sp1-cluster-bidder \
     --bin sp1-cluster-cli \

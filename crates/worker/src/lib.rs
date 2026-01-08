@@ -47,18 +47,12 @@ lazy_static! {
 
 #[cfg(feature = "gpu")]
 pub type ClusterProverComponents = csl_prover::SP1CudaProverComponents;
-// #[cfg(feature = "gpu")]
-// pub type ClusterProverComponents = csl_prover::CudaSP1ProverComponents;
+
 #[cfg(not(feature = "gpu"))]
 pub type ClusterProverComponents = sp1_prover::CpuSP1ProverComponents;
 
 pub const VERGEN_GIT_SHA: &str = env!("VERGEN_GIT_SHA");
 pub const VERGEN_BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
-
-// pub type CachedKeys = Arc<(
-//     DeviceProvingKey<ClusterProverComponents>,
-//     StarkVerifyingKey<InnerSC>,
-// )>;
 
 pub struct SP1ClusterWorker<W: WorkerClient, A: ArtifactClient> {
     pub worker: Arc<SP1Worker<A, W, ClusterProverComponents>>,
@@ -186,11 +180,12 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
             m.record_task_processing_duration(
                 task_type.as_str_name().to_string(),
                 start_time.elapsed().as_millis() as f64,
-            )
+            );
+            m.increment_tasks_processed(task_type.as_str_name().to_string());
+            if let Ok(Some(busy_time)) = result.as_ref().map(|r| r.gpu_time) {
+                m.gpu_busy_time.increment(busy_time);
+            }
         });
-        self.metrics
-            .as_ref()
-            .map(|m| m.increment_tasks_processed(task_type.as_str_name().to_string()));
 
         let status = if let Err(err) = &result {
             // Determine the failed status

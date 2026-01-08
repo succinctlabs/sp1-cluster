@@ -8,6 +8,13 @@ image:
   pullPolicy: IfNotPresent
   tag: client-gpu-a00f4c4
 
+spec:
+  strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: "100%"
+
 # Expose metrics server to cluster
 services:
   - name: metrics

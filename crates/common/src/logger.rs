@@ -193,10 +193,29 @@ pub fn init(resource: Resource) {
             None
         };
 
+        let tokio_blocked_layer = {
+            #[cfg(feature = "tokio-blocked")]
+            {
+                if let Ok(busy_ms) = std::env::var("TOKIO_BLOCKED_BUSY_MS") {
+                    let busy_ms = busy_ms.parse().unwrap();
+                    Some(
+                        tokio_blocked::TokioBlockedLayer::new().with_warn_busy_single_poll(Some(
+                            std::time::Duration::from_micros(busy_ms),
+                        )),
+                    )
+                } else {
+                    None
+                }
+            }
+
+            #[cfg(not(feature = "tokio-blocked"))]
+            None::<tracing_subscriber::layer::Identity>
+        };
         Registry::default()
             .with(telemetry)
             .with(log_export_layer)
             .with(fmt_layer)
+            .with(tokio_blocked_layer)
             .init();
 
         log::info!("logging initialized");

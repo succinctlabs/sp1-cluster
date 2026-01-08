@@ -28,12 +28,6 @@ sp1-cluster-common = { path = "crates/common" }
 sp1-cluster-worker = { path = "crates/worker" }
 sp1-cluster-utils = { path = "crates/utils" }
 
-# P3
-p3-baby-bear = "=0.2.3-succinct"
-p3-challenger = "=0.2.3-succinct"
-p3-field = "=0.2.3-succinct"
-p3-matrix = "=0.2.3-succinct"
-
 # SPN
 spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
@@ -57,26 +51,8 @@ sp1-sdk = { git = "https://github.com/succinctlabs/sp1-wip", features = [
     "network",
 ], branch = "multilinear_v6" }
 
-# cuslop
 csl-cuda = { git = "https://github.com/succinctlabs/cuslop", branch = "main" }
 csl-prover = { git = "https://github.com/succinctlabs/cuslop", branch = "main" }
-
-# # SP1 local
-# sp1-core-executor = { path = "../sp1-wip/crates/core/executor" }
-# sp1-core-machine = { path = "../sp1-wip/crates/core/machine", features = [
-#     "bigint-rug",
-# ] }
-# sp1-prover = { path = "../sp1-wip/crates/prover" }
-# sp1-prover-types = { path = "../sp1-wip/crates/prover-types" }
-# sp1-hypercube = { path = "../sp1-wip/crates/hypercube" }
-# sp1-recursion-circuit = { path = "../sp1-wip/crates/recursion/circuit" }
-# sp1-recursion-compiler = { path = "../sp1-wip/crates/recursion/compiler" }
-# sp1-recursion-executor = { path = "../sp1-wip/crates/recursion/executor" }
-# sp1-sdk = { path = "../sp1-wip/crates/sdk", features = ["network"] }
-
-# # cuslop local
-# csl-prover = { path = "../cuslop/crates/prover" }
-# csl-cuda = { path = "../cuslop/crates/cuda" }
 
 # Misc
 alloy = { version = "0.14.0", default-features = false, features = ["serde"] }
@@ -137,7 +113,8 @@ sys-info = "0.9.1"
 sysinfo = "0.33.1"
 tar = "0.4.44"
 time = { version = "0.3.41", features = ["serde"] }
-tokio = { version = "1.45.0", features = ["full"] }
+tokio = { version = "1.45.0", features = ["full", "tracing"] }
+tokio-blocked = "0.1.0"
 tokio-stream = "0.1"
 tonic = { version = "0.12.3", features = ["tls"] }
 tonic-build = "0.12.3"

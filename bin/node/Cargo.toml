@@ -38,3 +38,5 @@ tar.workspace = true
 tokio.workspace = true
 tonic.workspace = true
 tracing.workspace = true
+pyroscope = "0.5.8"
+pyroscope_pprofrs = "0.2.10"

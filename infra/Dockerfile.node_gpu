@@ -10,7 +10,6 @@ RUN apt-get update -y && \
   openssl \
   libssl-dev \
   pkg-config \
-  cmake \
   # General build tools for native dependencies
   build-essential \
   libclang-dev \
@@ -18,6 +17,8 @@ RUN apt-get update -y && \
   gcc \
   m4 \
   make \
+  # CUDA NVTX library (required for csl-sys/cuslop)
+  libnvtoolsext1 \
   # Utilities
   wget \
   tar \
@@ -33,7 +34,7 @@ RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 COPY rust-toolchain.toml rust-toolchain.toml
 RUN rustup show
-ENV RUSTFLAGS='-C debuginfo=2' RUST_BACKTRACE=full
+ENV RUST_BACKTRACE=full
 
 # Install golang
 ENV GO_VERSION=1.22.1
@@ -53,6 +54,27 @@ RUN curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v29.4
   unzip -o $PROTOC_ZIP -d /usr/local 'include/*' && \
   rm -f $PROTOC_ZIP
 
+# Install CMake
+RUN CMAKE_VERSION=3.31.4 && \
+    wget -q https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh && \
+    chmod +x cmake-${CMAKE_VERSION}-linux-x86_64.sh && \
+    ./cmake-${CMAKE_VERSION}-linux-x86_64.sh --skip-license --prefix=/usr/local && \
+    rm cmake-${CMAKE_VERSION}-linux-x86_64.sh && \
+    cmake --version
+
+# Default to SSH, but use HTTPS if GITHUB_TOKEN is present. Note this leaves the token in the image
+# history, so the images should not be pushed to a public registry.
+ARG GITHUB_TOKEN
+ENV GITHUB_TOKEN=${GITHUB_TOKEN}
+RUN if [ -n "$GITHUB_TOKEN" ] ; then \
+  git config --global --replace-all url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"; \
+  git config --global --add url."https://${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:"; \
+  echo "Using HTTPS + GITHUB_TOKEN for git" >&2; \
+  else \
+  git config --global url."git@github.com:".insteadOf https://github.com/; \
+  echo "Using SSH for git" >&2; \
+  fi; mkdir -p -m 0700 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
+
 # Application source code
 WORKDIR /app
 COPY . .
@@ -70,12 +92,12 @@ ENV FEATURES=$FEATURES
 ARG VERGEN_GIT_SHA
 ENV VERGEN_GIT_SHA=$VERGEN_GIT_SHA
 
-RUN \
-  --mount=type=cache,target=/root/.cargo/git \    
+RUN --mount=type=ssh \
+  --mount=type=cache,target=/root/.cargo/git \
   --mount=type=cache,target=/root/.cargo/registry \
   --mount=type=cache,target=/app/target \
   echo "Building with profile: $BUILD_PROFILE | features: $FEATURES | rustflags: $RUSTFLAGS" && \
-  cargo build --profile=$BUILD_PROFILE --features=$FEATURES --bin sp1-cluster-node && \
+  RUSTFLAGS="--cfg tokio_unstable" cargo build --profile=$BUILD_PROFILE --features=$FEATURES --bin sp1-cluster-node && \
   cp target/$BUILD_PROFILE/sp1-cluster-node /sp1-cluster-node
 
 # Runtime stage

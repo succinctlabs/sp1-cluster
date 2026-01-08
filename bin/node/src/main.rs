@@ -3,6 +3,9 @@ use dashmap::DashMap;
 use eyre::Result;
 use jemallocator::Jemalloc;
 use opentelemetry::KeyValue;
+use pyroscope::pyroscope::PyroscopeAgentRunning;
+use pyroscope::PyroscopeAgent;
+use pyroscope_pprofrs::{pprof_backend, PprofConfig};
 use rand::Rng;
 use sp1_cluster_artifact::redis::RedisArtifactClient;
 use sp1_cluster_artifact::s3::S3ArtifactClient;
@@ -399,6 +402,8 @@ async fn run_worker<A: ArtifactClient>(
         // Create worker.
         let worker = Arc::new(SP1ClusterWorker::new(prover.clone(), metrics));
 
+        let agent = start_profiling();
+
         let mut channel = worker_client.open().await?;
 
         // Spawn task to handle messages from the coordinator.
@@ -642,8 +647,39 @@ async fn run_worker<A: ArtifactClient>(
             },
         }
 
+        if let Some(agent) = agent {
+            agent.stop().unwrap();
+        }
+
         tracing::info!("Shutdown complete");
     }
 
     Ok(())
+}
+
+fn start_profiling() -> Option<PyroscopeAgent<PyroscopeAgentRunning>> {
+    let user = std::env::var("PYROSCOPE_USER");
+    if let Ok(user) = user {
+        let password = std::env::var("PYROSCOPE_PASSWORD").unwrap();
+        let url = std::env::var("PYROSCOPE_URL").unwrap();
+        let samplerate = std::env::var("PYROSCOPE_SAMPLE_RATE")
+            .unwrap()
+            .to_string()
+            .parse()
+            .unwrap();
+        let application_name = "sp1-cluster";
+
+        let worker_type = std::env::var("WORKER_TYPE").unwrap();
+
+        let agent = PyroscopeAgent::builder(url, application_name.to_string())
+            .basic_auth(user, password)
+            .backend(pprof_backend(PprofConfig::new().sample_rate(samplerate)))
+            .tags([("env", "chris-k8s"), ("worker_type", &worker_type)].to_vec())
+            .build()
+            .unwrap();
+
+        Some(agent.start().unwrap())
+    } else {
+        None
+    }
 }

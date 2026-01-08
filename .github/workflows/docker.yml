@@ -149,6 +149,20 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install CMake 3.31
+        shell: bash
+        run: |
+          # Need CMake 3.30+ for CUDA C++20 support
+          CMAKE_VERSION=3.31.4
+          if ! cmake --version 2>/dev/null | grep -q "$CMAKE_VERSION"; then
+            echo "Installing CMake $CMAKE_VERSION..."
+            wget -q https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh
+            chmod +x cmake-${CMAKE_VERSION}-linux-x86_64.sh
+            sudo ./cmake-${CMAKE_VERSION}-linux-x86_64.sh --skip-license --prefix=/usr/local
+            rm cmake-${CMAKE_VERSION}-linux-x86_64.sh
+          fi
+          cmake --version
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1
         with:

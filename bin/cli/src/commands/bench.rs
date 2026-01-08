@@ -4,8 +4,8 @@ use std::time::Duration;
 use clap::{Args, Subcommand};
 use eyre::Result;
 use sp1_cluster_utils::{request_proof_from_env, ClusterElf, ProofRequestResults};
+use sp1_prover::worker::SP1LightNode;
 use sp1_sdk::{network::proto::types::ProofMode, SP1Stdin};
-use sp1_sdk::{CpuProver, Elf, Prover, ProvingKey};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -147,10 +147,9 @@ impl BenchCommand {
         stdin: SP1Stdin,
         common: &CommonArgs,
     ) -> Result<Vec<(String, Duration)>> {
-        let client = CpuProver::new_experimental().await;
+        let client = SP1LightNode::new().await;
 
-        let elf_arc = Elf::from(elf.clone());
-        let pk = client.setup(elf_arc).await.expect("failed to setup elf");
+        let vk = client.setup(&elf).await.expect("failed to setup elf");
 
         let mut proof_ids = Vec::with_capacity(common.count as usize);
         for _ in 0..common.count {
@@ -164,7 +163,7 @@ impl BenchCommand {
 
             // Verify proof to CSV
             client
-                .verify(&proof.into(), pk.verifying_key(), None)
+                .verify(&vk, &proof.proof)
                 .expect("failed to verify proof");
 
             tracing::info!("Proof completed in {:?}", elapsed);
