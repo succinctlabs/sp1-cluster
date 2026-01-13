@@ -62,18 +62,8 @@ RUN CMAKE_VERSION=3.31.4 && \
     rm cmake-${CMAKE_VERSION}-linux-x86_64.sh && \
     cmake --version
 
-# Default to SSH, but use HTTPS if GITHUB_TOKEN is present. Note this leaves the token in the image
-# history, so the images should not be pushed to a public registry.
-ARG GITHUB_TOKEN
-ENV GITHUB_TOKEN=${GITHUB_TOKEN}
-RUN if [ -n "$GITHUB_TOKEN" ] ; then \
-  git config --global --replace-all url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"; \
-  git config --global --add url."https://${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:"; \
-  echo "Using HTTPS + GITHUB_TOKEN for git" >&2; \
-  else \
-  git config --global url."git@github.com:".insteadOf https://github.com/; \
-  echo "Using SSH for git" >&2; \
-  fi; mkdir -p -m 0700 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
+# Setup SSH known hosts (actual auth configured during build)
+RUN mkdir -p -m 0700 ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts || true
 
 # Application source code
 WORKDIR /app
@@ -92,13 +82,29 @@ ENV FEATURES=$FEATURES
 ARG VERGEN_GIT_SHA
 ENV VERGEN_GIT_SHA=$VERGEN_GIT_SHA
 
+# Build the application
+# Uses BuildKit secrets mount to securely pass private token without exposing it in image layers
 RUN --mount=type=ssh \
+  --mount=type=secret,id=private_pull_token,required=false \
   --mount=type=cache,target=/root/.cargo/git \
   --mount=type=cache,target=/root/.cargo/registry \
   --mount=type=cache,target=/app/target \
+  if [ -f /run/secrets/private_pull_token ]; then \
+    PRIVATE_TOKEN=$(cat /run/secrets/private_pull_token); \
+    GIT_URL_BASE="https://${PRIVATE_TOKEN}@github.com/"; \
+    git config --global --replace-all url."${GIT_URL_BASE}".insteadOf "https://github.com/"; \
+    echo "Using HTTPS + token for git (private cargo deps enabled)" >&2; \
+  else \
+    GIT_URL_BASE="git@github.com:"; \
+    git config --global --replace-all url."${GIT_URL_BASE}".insteadOf "https://github.com/"; \
+    echo "Using SSH fallback for git (public build)" >&2; \
+  fi && \
   echo "Building with profile: $BUILD_PROFILE | features: $FEATURES | rustflags: $RUSTFLAGS" && \
-  RUSTFLAGS="--cfg tokio_unstable" cargo build --profile=$BUILD_PROFILE --features=$FEATURES --bin sp1-cluster-node && \
-  cp target/$BUILD_PROFILE/sp1-cluster-node /sp1-cluster-node
+  RUSTFLAGS="--cfg tokio_unstable $RUSTFLAGS" cargo build --profile=$BUILD_PROFILE --features=$FEATURES --bin sp1-cluster-node && \
+  cp target/$BUILD_PROFILE/sp1-cluster-node /sp1-cluster-node && \
+  # Clean up any git credentials that might have been cached
+  git config --global --unset-all url."${GIT_URL_BASE}".insteadOf || true && \
+  unset PRIVATE_TOKEN GIT_URL_BASE || true
 
 # Runtime stage
 FROM --platform=linux/amd64 nvidia/cuda:13.0.1-runtime-ubuntu22.04 AS runtime

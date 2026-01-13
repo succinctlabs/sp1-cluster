@@ -26,10 +26,10 @@ pub struct FulfillerSettings {
 }
 
 impl FulfillerSettings {
-    pub fn new() -> Result<Self, ConfigError> {
+    pub fn new(prefix: &str) -> Result<Self, ConfigError> {
         let settings: Self = Config::builder()
             .add_source(
-                Environment::with_prefix("FULFILLER")
+                Environment::with_prefix(prefix)
                     .list_separator(",")
                     .with_list_parse_key("addresses")
                     .with_list_parse_key("cluster_redis_nodes")

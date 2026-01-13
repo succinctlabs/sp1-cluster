@@ -476,6 +476,7 @@ impl WorkerClient for WorkerServiceClient {
         proof_id: ProofId,
         task_id: Option<TaskId>,
         status: proto::ProofRequestStatus,
+        extra_data: impl Into<String> + Send,
     ) -> anyhow::Result<()> {
         let backoff = self.backoff.clone();
         match status {
@@ -483,6 +484,7 @@ impl WorkerClient for WorkerServiceClient {
                 let request = proto::CompleteProofRequest {
                     worker_id: self.worker_id.clone(),
                     proof_id: proof_id.to_string(),
+                    extra_data: extra_data.into(),
                 };
                 backoff::future::retry(backoff, || async {
                     self.client

@@ -8,6 +8,9 @@ on:
 env:
   ECR_REPOSITORY: 421253708207.dkr.ecr.us-east-1.amazonaws.com/sp1-cluster
   GHCR_REPOSITORY: ghcr.io/${{ github.repository }}
+  # Set to 'true' to enable private cargo dependencies (requires PRIVATE_PULL_TOKEN secret)
+  # Defaults to false - private deps are opt-in
+  ENABLE_PRIVATE_DEPS: ${{ vars.ENABLE_PRIVATE_DEPS == 'true' }}
 
 jobs:
   setup:
@@ -70,7 +73,7 @@ jobs:
           key: cache-base-${{ hashFiles('infra/Dockerfile') }}
           restore-keys: |
             cache-base-
-              
+
       - name: inject cache into docker
         uses: reproducible-containers/buildkit-cache-dance@v3.1.0
         with:
@@ -98,6 +101,8 @@ jobs:
             ${{ startsWith(github.ref, 'refs/tags/') && format('{0}:base-{1}', env.ECR_REPOSITORY, needs.setup.outputs.TAG_NAME) || '' }}
           build-args: |
             VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
+          secrets: |
+            private_pull_token=${{ secrets.PRIVATE_PULL_TOKEN }}
           cache-from: type=gha,scope=base
           cache-to: type=gha,mode=max,scope=base
 
@@ -120,6 +125,8 @@ jobs:
             ${{ startsWith(github.ref, 'refs/tags/') && format('{0}:base-{1}', env.GHCR_REPOSITORY, needs.setup.outputs.TAG_NAME) || '' }}
           build-args: |
             VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
+          secrets: |
+            private_pull_token=${{ secrets.PRIVATE_PULL_TOKEN }}
           cache-from: type=gha,scope=base
           cache-to: type=gha,mode=max,scope=base
 
@@ -211,6 +218,8 @@ jobs:
             ${{ startsWith(github.ref, 'refs/tags/') && format('{0}:node-gpu-{1}', env.ECR_REPOSITORY, needs.setup.outputs.TAG_NAME) || '' }}
           build-args: |
             VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
+          secrets: |
+            private_pull_token=${{ secrets.PRIVATE_PULL_TOKEN }}
           cache-from: type=gha,scope=node-gpu
           cache-to: type=gha,mode=max,scope=node-gpu
 
@@ -233,5 +242,7 @@ jobs:
             ${{ startsWith(github.ref, 'refs/tags/') && format('{0}:node-gpu-{1}', env.GHCR_REPOSITORY, needs.setup.outputs.TAG_NAME) || '' }}
           build-args: |
             VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
+          secrets: |
+            private_pull_token=${{ secrets.PRIVATE_PULL_TOKEN }}
           cache-from: type=gha,scope=node-gpu
           cache-to: type=gha,mode=max,scope=node-gpu

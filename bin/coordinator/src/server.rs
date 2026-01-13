@@ -227,7 +227,11 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
             tokio::spawn({
                 let coordinator = self.coordinator.clone();
                 let request = request.into_inner();
-                async move { coordinator.complete_proof(request.proof_id).await }
+                async move {
+                    coordinator
+                        .complete_proof(request.proof_id, request.extra_data)
+                        .await
+                }
             })
             .await
             .unwrap()?;

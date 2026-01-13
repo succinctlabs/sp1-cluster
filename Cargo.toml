@@ -30,6 +30,12 @@ sp1-cluster-fulfillment = { path = "crates/fulfillment" }
 sp1-cluster-worker = { path = "crates/worker" }
 sp1-cluster-utils = { path = "crates/utils" }
 
+# P3
+p3-baby-bear = "=0.2.3-succinct"
+p3-challenger = "=0.2.3-succinct"
+p3-field = "=0.2.3-succinct"
+p3-matrix = "=0.2.3-succinct"
+
 # SPN
 spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
@@ -52,7 +58,9 @@ sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1-wip", bran
 sp1-sdk = { git = "https://github.com/succinctlabs/sp1-wip", features = [
     "network",
 ], branch = "multilinear_v6" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
 
+# cuslop
 csl-cuda = { git = "https://github.com/succinctlabs/cuslop", branch = "main" }
 csl-prover = { git = "https://github.com/succinctlabs/cuslop", branch = "main" }
 

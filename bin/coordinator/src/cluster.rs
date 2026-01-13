@@ -22,6 +22,7 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
             id,
             success,
             metadata,
+            extra_data,
         }) = completed_rx.recv().await
         {
             let Some(mut status) = task_map.get_mut(&id) else {
@@ -48,6 +49,7 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
                     proof_id: id.clone(),
                     proof_status: Some(status_copy.into()),
                     metadata: Some(metadata_string),
+                    extra_data: Some(extra_data),
                     ..Default::default()
                 })
                 .await

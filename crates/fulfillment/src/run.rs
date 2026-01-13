@@ -17,10 +17,8 @@ use tracing::{error, info, warn};
 pub async fn run_fulfiller<A: ArtifactClient, N: FulfillmentNetwork>(
     artifact_client: A,
     network: N,
+    settings: &FulfillerSettings,
 ) -> Result<()> {
-    // Load configuration
-    let settings = FulfillerSettings::new()?;
-
     // Initialize logging
     spn_utils::init_logger(settings.log_format);
 
@@ -89,10 +87,10 @@ pub async fn run_fulfiller<A: ArtifactClient, N: FulfillmentNetwork>(
         network,
         cluster,
         artifact_client,
-        settings.version,
+        settings.version.clone(),
         settings.domain,
         metrics,
-        settings.addresses,
+        settings.addresses.clone(),
         signer,
         true,
     );

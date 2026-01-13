@@ -66,7 +66,6 @@ pub struct TaskResult {
 }
 
 impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         worker: Arc<SP1Worker<A, W, ClusterProverComponents>>,
         metrics: Option<Arc<WorkerMetrics>>,
@@ -263,7 +262,7 @@ pub async fn try_unclaim_proof<W: WorkerClient>(
     log::info!("Unclaiming proof {proof_id}");
 
     if let Err(err) = cluster_client
-        .complete_proof(proof_id, task_id, ProofRequestStatus::Failed)
+        .complete_proof(proof_id, task_id, ProofRequestStatus::Failed, "")
         .await
     {
         log::error!("while unclaiming proof: {err:?}");

@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
         .unwrap();
 
     // Load configuration
-    let settings = FulfillerSettings::new()?;
+    let settings = FulfillerSettings::new("FULFILLER")?;
 
     // Initialize the dependencies.
     println!("connecting to rpc: {}", settings.rpc_grpc_addr);
@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
             eprintln!("using s3 artifact store");
             let region = settings
                 .cluster_s3_region
+                .clone()
                 .expect("FULFILLER_CLUSTER_S3_REGION is not set");
             run_fulfiller(
                 S3ArtifactClient::new(
@@ -53,6 +54,7 @@ async fn main() -> Result<()> {
                 )
                 .await,
                 network,
+                &settings,
             )
             .await
         }
@@ -62,10 +64,12 @@ async fn main() -> Result<()> {
                 RedisArtifactClient::new(
                     settings
                         .cluster_redis_nodes
+                        .clone()
                         .expect("FULFILLER_CLUSTER_REDIS_NODES is not set"),
                     settings.cluster_redis_pool_max_size.unwrap_or(16),
                 ),
                 network,
+                &settings,
             )
             .await
         }

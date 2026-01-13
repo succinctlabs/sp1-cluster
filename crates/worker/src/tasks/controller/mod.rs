@@ -40,6 +40,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
                 ProofId::new(data.proof_id.clone()),
                 Some(TaskId::new(task.task_id.clone())),
                 ProofRequestStatus::Completed,
+                "",
             )
             .await?;
 

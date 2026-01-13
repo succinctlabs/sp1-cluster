@@ -10,7 +10,7 @@ categories = { workspace = true }
 [dependencies]
 sp1-cluster-artifact = { workspace = true }
 sp1-cluster-common = { workspace = true }
-sp1-sdk = { workspace = true }
+sp1-sdk = { workspace = true, features = ["network"] }
 
 spn-artifacts = { workspace = true }
 spn-metrics = { workspace = true }

@@ -60,6 +60,7 @@ impl DbProofRequest {
             metadata: self.metadata,
             created_at: self.created_at.unix_timestamp() as u64,
             updated_at: self.updated_at.unix_timestamp() as u64,
+            extra_data: self.extra_data,
         }
     }
 }
@@ -202,6 +203,11 @@ impl ClusterService for ClusterServiceImpl {
         if let Some(metadata) = req.metadata {
             separated.push("metadata = ");
             separated.push_bind_unseparated(metadata);
+        }
+
+        if let Some(extra_data) = req.extra_data {
+            separated.push("extra_data = ");
+            separated.push_bind_unseparated(extra_data);
         }
 
         query.push(" WHERE id = ");

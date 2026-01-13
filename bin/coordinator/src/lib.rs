@@ -159,6 +159,7 @@ pub struct ProofResult<P: AssignmentPolicy> {
     pub id: String,
     pub success: bool,
     pub metadata: Option<P::ProofResultMetadata>,
+    pub extra_data: String,
 }
 
 /// The current state of the coordinator.
@@ -1048,7 +1049,11 @@ impl<P: AssignmentPolicy> Coordinator<P> {
 
     /// Mark a proof as completed.
     #[instrument(skip(self))]
-    pub async fn complete_proof(self: &Arc<Self>, proof_id: String) -> Result<(), Status> {
+    pub async fn complete_proof(
+        self: &Arc<Self>,
+        proof_id: String,
+        extra_data: String,
+    ) -> Result<(), Status> {
         let state = self
             .state
             .read()
@@ -1067,6 +1072,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 id: proof_id.clone(),
                 success: true,
                 metadata: Some(metadata),
+                extra_data,
             }) {
                 tracing::error!("Failed to send completed proof: {}", e);
             }
@@ -1182,6 +1188,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                         id: proof_id.clone(),
                         success: false,
                         metadata: None,
+                        extra_data: "".to_string(),
                     }) {
                         tracing::error!("Failed to send failed proof: {}", e);
                     }
