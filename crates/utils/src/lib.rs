@@ -73,7 +73,7 @@ pub async fn create_request<A: ArtifactClient>(
     );
 
     let deadline = SystemTime::now() + Duration::from_secs(config.timeout_hours * 60 * 60);
-    let proof_id = format!("{}", base_id);
+    let proof_id = base_id.to_string();
 
     // Create the proof request.
     client
@@ -278,7 +278,7 @@ pub fn request_config_from_env(proof_mode: ProofMode, timeout_hours: u64) -> Pro
     ProofRequestConfig {
         cluster_rpc,
         mode: proof_mode,
-        timeout_hours: timeout_hours,
+        timeout_hours,
         artifact_store: artifact_store_config,
     }
 }

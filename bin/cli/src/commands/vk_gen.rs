@@ -161,7 +161,7 @@ impl BuildVkeys {
             task_type: TaskType::UtilVkeyMapController as i32,
             inputs: vec![input_artifact.id().to_string()],
             outputs: vec![output_artifact.id().to_string()],
-            metadata: metadata,
+            metadata,
             proof_id: proof_id.clone(),
             parent_id: None,
             weight: 0,
@@ -181,7 +181,7 @@ impl BuildVkeys {
         let subscriber = cluster_client
             .subscriber(ProofId::new(proof_id.clone()))
             .await
-            .map_err(|e| TaskError::Fatal(e.into()))?
+            .map_err(TaskError::Fatal)?
             .per_task();
         let status = subscriber
             .wait_task(TaskId::new(task.get_ref().task_id.clone()))

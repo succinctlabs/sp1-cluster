@@ -5,9 +5,9 @@ env:
 
 on:
   push:
-    branches: [main, staging]
+    branches: [main, staging, multilinear_v6]
   pull_request:
-    branches: [main, staging]
+    branches: [main, staging, multilinear_v6]
   workflow_dispatch:
 
 jobs:
@@ -58,13 +58,13 @@ jobs:
             ~/.cargo/git/db/
             target/
             ~/.rustup/
-          key: rust-nightly-2025-04-15-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: rust-nightly-2025-04-15-
+          key: rust-nightly-2025-10-15-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: rust-nightly-2025-10-15-
 
       - name: Setup Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly-2025-04-15
+          toolchain: nightly-2025-10-15
           profile: minimal
           override: true
           components: rustfmt, clippy

@@ -18,10 +18,10 @@ sp1-cluster-common = { workspace = true }
 sp1-core-executor = { workspace = true }
 sp1-core-machine = { workspace = true, features = ["bigint-rug"] }
 sp1-hypercube = { workspace = true }
+sp1-primitives = { workspace = true }
 sp1-prover = { workspace = true }
 sp1-prover-types = { workspace = true }
 sp1-sdk = { workspace = true }
-sp1-primitives = { workspace = true }
 
 csl-cuda = { workspace = true, optional = true }
 csl-prover = { workspace = true, optional = true }

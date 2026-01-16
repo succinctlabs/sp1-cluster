@@ -15,7 +15,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
         task: &WorkerTask,
     ) -> Result<TaskMetadata, TaskError> {
         let data = task.data()?;
-        let raw_task_request = worker_task_to_raw_task_request(&data, None);
+        let raw_task_request = worker_task_to_raw_task_request(data, None);
         self.worker
             .prover_engine()
             .run_shrink_wrap(raw_task_request)

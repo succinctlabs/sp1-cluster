@@ -7,12 +7,11 @@ use sp1_cluster_common::proto::{
     ExecutionFailureCause, ExecutionResult, ExecutionStatus, ProofRequestStatus, WorkerTask,
 };
 use sp1_core_executor::{ExecutionError, Program, SP1CoreOpts};
-use sp1_core_machine::executor::MachineExecutor;
-use sp1_primitives::SP1Field;
-use sp1_prover::worker::{ProofId, TaskId, TaskMetadata, WorkerClient};
+use sp1_prover::worker::{
+    execute_with_options, ProofId, SP1ExecutorConfig, TaskId, TaskMetadata, WorkerClient,
+};
 use sp1_sdk::network::proto::types::ExecuteFailureCause;
 use sp1_sdk::{SP1Context, SP1Stdin};
-use sysinfo::System;
 
 impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
     /// Does execution only - used for the execution oracle.
@@ -41,28 +40,24 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
 
         let proof_id = data.proof_id.clone();
 
-        // Create executor per-task so memory is freed after task completes.
-        let executor = Arc::new(create_executor());
-
         // Execute the program.
         let mut context = SP1Context::default();
         // Stop execution if the cycle limit is reached, + 1 to account for >= executor max_cycles check:
-        // https://github.com/succinctlabs/sp1-wip/blob/7a3e3b25298f665a31a7aea0901e1739b4574324/crates/core/executor/src/executor.rs#L1786-L1791
         if let Some(cycle_limit) = cycle_limit {
             if cycle_limit != 0 {
                 context.max_cycles = Some(cycle_limit + 1);
             }
         }
 
-        let execution_result = tokio::task::spawn_blocking(move || {
-            let program = Arc::new(Program::from(&elf).unwrap());
-            let (public_values, filler, report) = executor
-                .execute_sync(program, stdin, context)
-                .map_err(|e| ExecutionError::Other(e.to_string()))?;
-            Ok((public_values, filler, report))
-        })
+        let execution_result = execute_with_options(
+            Arc::new(Program::from(&elf).unwrap()),
+            stdin,
+            context,
+            SP1CoreOpts::default(),
+            SP1ExecutorConfig::default(),
+        )
         .await
-        .map_err(|e| TaskError::Fatal(anyhow::anyhow!(e)))?;
+        .map_err(|e| ExecutionError::Other(e.to_string()));
 
         let result_obj = match execution_result {
             Ok((pv, _, execution_report)) => ExecutionResult {
@@ -130,33 +125,4 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
 
         Ok(Default::default())
     }
-}
-
-/// Creates a new MachineExecutor sized based on available system memory.
-///
-/// Uses half of free memory for the records buffer to balance between
-/// execution performance and leaving headroom for other operations.
-fn create_executor() -> MachineExecutor<SP1Field> {
-    let sysinfo = System::new_all();
-    let total_memory = sysinfo.total_memory();
-    let used_memory = sysinfo.used_memory();
-    let free_memory = total_memory.saturating_sub(used_memory);
-
-    let records_buffer_size = (free_memory / 2) as usize;
-    let num_record_workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1);
-
-    tracing::info!(
-        free_memory_bytes = free_memory,
-        records_buffer_size,
-        num_record_workers,
-        "Creating executor"
-    );
-
-    MachineExecutor::new(
-        records_buffer_size,
-        num_record_workers,
-        SP1CoreOpts::default(),
-    )
 }

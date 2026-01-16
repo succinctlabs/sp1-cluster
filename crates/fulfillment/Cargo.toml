@@ -20,6 +20,7 @@ spn-utils = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy-signer-local = { workspace = true }
 anyhow = { workspace = true }
+async-trait.workspace = true
 config = { workspace = true }
 dotenv = { workspace = true }
 futures = { workspace = true }
@@ -29,4 +30,3 @@ serde = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
-async-trait.workspace = true

@@ -10,14 +10,15 @@ dotenv.workspace = true
 eyre.workspace = true
 opentelemetry_sdk.workspace = true
 sp1-cluster-artifact = { workspace = true }
-sp1-cluster-utils = { workspace = true }
 sp1-cluster-common = { workspace = true }
+sp1-cluster-utils = { workspace = true }
 sp1-cluster-worker = { workspace = true }
 sp1-core-executor = { workspace = true }
-sp1-sdk = { workspace = true, features = ["native-gnark"] }
 sp1-prover = { workspace = true }
 sp1-prover-types = { workspace = true }
+sp1-sdk = { workspace = true, features = ["native-gnark"] }
 tokio.workspace = true
+tokio-stream.workspace = true
 tracing.workspace = true
 
 either = { version = "1.15.0", features = ["serde"] }

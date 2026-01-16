@@ -6,6 +6,10 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = ["tokio-blocked"]
+tokio-blocked = ["dep:tokio-blocked"]
+
 [dependencies]
 backoff = { workspace = true, features = ["futures", "tokio"] }
 eyre.workspace = true
@@ -34,7 +38,3 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 [build-dependencies]
 chrono.workspace = true
 tonic-build.workspace = true
-
-[features]
-default = ["tokio-blocked"]
-tokio-blocked = ["dep:tokio-blocked"]

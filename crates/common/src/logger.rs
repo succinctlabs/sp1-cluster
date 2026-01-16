@@ -28,8 +28,7 @@ fn build_env_filter(base: Option<EnvFilter>) -> EnvFilter {
 
     let filter = with_sp1_debug(filter);
     let filter = with_cuslop_debug(filter);
-    let filter = with_slop_debug(filter);
-    filter
+    with_slop_debug(filter)
 }
 
 fn with_sp1_debug(env_filter: EnvFilter) -> EnvFilter {
@@ -57,33 +56,26 @@ fn with_sp1_debug(env_filter: EnvFilter) -> EnvFilter {
 
 fn with_cuslop_debug(env_filter: EnvFilter) -> EnvFilter {
     env_filter
-        // csl-* crates
         .add_directive("csl_air=debug".parse().unwrap())
         .add_directive("csl_basefold=debug".parse().unwrap())
         .add_directive("csl_challenger=debug".parse().unwrap())
+        .add_directive("csl_commit=debug".parse().unwrap())
         .add_directive("csl_cuda=debug".parse().unwrap())
-        .add_directive("csl_dft=debug".parse().unwrap())
-        .add_directive("csl_jagged=debug".parse().unwrap())
+        .add_directive("csl_experimental=debug".parse().unwrap())
+        .add_directive("csl_jagged_assist=debug".parse().unwrap())
+        .add_directive("csl_jagged_sumcheck=debug".parse().unwrap())
+        .add_directive("csl_jagged_tracegen=debug".parse().unwrap())
         .add_directive("csl_logup_gkr=debug".parse().unwrap())
         .add_directive("csl_merkle_tree=debug".parse().unwrap())
         .add_directive("csl_perf=debug".parse().unwrap())
         .add_directive("csl_prover=debug".parse().unwrap())
         .add_directive("csl_server=debug".parse().unwrap())
+        .add_directive("csl_shard_prover=debug".parse().unwrap())
         .add_directive("csl_sys=debug".parse().unwrap())
         .add_directive("csl_tracegen=debug".parse().unwrap())
         .add_directive("csl_tracing=debug".parse().unwrap())
+        .add_directive("csl_utils=debug".parse().unwrap())
         .add_directive("csl_zerocheck=debug".parse().unwrap())
-        // cslpc-* crates
-        .add_directive("cslpc_basefold=debug".parse().unwrap())
-        .add_directive("cslpc_commit=debug".parse().unwrap())
-        .add_directive("cslpc_experimental=debug".parse().unwrap())
-        .add_directive("cslpc_jagged_sumcheck=debug".parse().unwrap())
-        .add_directive("cslpc_logup_gkr=debug".parse().unwrap())
-        .add_directive("cslpc_merkle_tree=debug".parse().unwrap())
-        .add_directive("cslpc_prover=debug".parse().unwrap())
-        .add_directive("cslpc_tracegen=debug".parse().unwrap())
-        .add_directive("cslpc_utils=debug".parse().unwrap())
-        .add_directive("cslpc_zerocheck=debug".parse().unwrap())
 }
 
 fn with_slop_debug(env_filter: EnvFilter) -> EnvFilter {

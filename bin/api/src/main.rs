@@ -14,6 +14,7 @@ use tonic::transport::Server;
 use tracing::{info, warn};
 
 #[derive(Serialize, Deserialize, FromRow)]
+#[allow(dead_code)]
 struct Request {
     id: Bytes,
     // Note: Ensure these fields exist in your database schema

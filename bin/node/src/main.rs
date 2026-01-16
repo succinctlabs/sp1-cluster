@@ -84,11 +84,10 @@ type ActiveTask = (TaskData, JoinHandle<()>, Instant);
 /// killed after running for 6 hours.
 const TASK_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     std::env::set_var("PROVER_CORE_CACHE_SIZE", "1");
     std::env::set_var("PROVER_COMPRESS_CACHE_SIZE", "1");
-    std::env::set_var("SP1_ALLOW_DEPRECATED_HOOKS", "true");
 
     // Initialize the enviroment variables.
     match dotenv::dotenv() {

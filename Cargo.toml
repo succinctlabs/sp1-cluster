@@ -11,8 +11,8 @@ members = [
     "crates/artifact",
     "crates/common",
     "crates/fulfillment",
-    "crates/worker",
     "crates/utils",
+    "crates/worker",
 ]
 [workspace.package]
 version = "1.0.0"
@@ -27,8 +27,8 @@ categories = []
 sp1-cluster-artifact = { path = "crates/artifact" }
 sp1-cluster-common = { path = "crates/common" }
 sp1-cluster-fulfillment = { path = "crates/fulfillment" }
-sp1-cluster-worker = { path = "crates/worker" }
 sp1-cluster-utils = { path = "crates/utils" }
+sp1-cluster-worker = { path = "crates/worker" }
 
 # P3
 p3-baby-bear = "=0.2.3-succinct"
@@ -50,6 +50,7 @@ sp1-core-machine = { git = "https://github.com/succinctlabs/sp1-wip", branch = "
     "bigint-rug",
 ] }
 sp1-hypercube = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
 sp1-prover = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
 sp1-prover-types = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
 sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
@@ -58,7 +59,6 @@ sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1-wip", bran
 sp1-sdk = { git = "https://github.com/succinctlabs/sp1-wip", features = [
     "network",
 ], branch = "multilinear_v6" }
-sp1-primitives = { git = "https://github.com/succinctlabs/sp1-wip", branch = "multilinear_v6" }
 
 # cuslop
 csl-cuda = { git = "https://github.com/succinctlabs/cuslop", branch = "main" }
@@ -123,7 +123,11 @@ sys-info = "0.9.1"
 sysinfo = "0.33.1"
 tar = "0.4.44"
 time = { version = "0.3.41", features = ["serde"] }
-tokio = { version = "1.45.0", features = ["full", "tracing"] }
+tokio = { version = "1.45.0", features = [
+    "full",
+    "tracing",
+    "rt-multi-thread",
+] }
 tokio-blocked = "0.1.0"
 tokio-stream = "0.1"
 tonic = { version = "0.12.3", features = ["tls"] }

@@ -8434,6 +8434,7 @@ dependencies = [
  "sp1-prover-types",
  "sp1-sdk",
  "tokio",
+ "tokio-stream",
  "tracing",
 ]
 
@@ -8563,6 +8564,7 @@ dependencies = [
  "eyre",
  "flate2",
  "jemallocator",
+ "num_cpus",
  "opentelemetry",
  "opentelemetry_sdk",
  "pyroscope",
