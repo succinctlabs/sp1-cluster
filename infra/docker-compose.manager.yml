@@ -48,7 +48,7 @@ services:
 
   # API Service (exposed for external access and GPU workers)
   api:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-6a92c21
+    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-8ddc0ef
     environment:
       - API_GRPC_ADDR=0.0.0.0:50051
       - API_HTTP_ADDR=0.0.0.0:3000
@@ -65,7 +65,7 @@ services:
 
   # Coordinator Service (exposed for GPU workers)
   coordinator:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-6a92c21
+    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-8ddc0ef
     environment:
       - COORDINATOR_CLUSTER_RPC=http://api:50051
       - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
@@ -80,12 +80,12 @@ services:
 
   # CPU Node (local to management node)
   cpu-node:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-db1c2f7
+    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-8ddc0ef
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=32
       - NODE_ARTIFACT_STORE=redis
-      - NODE_REDIS_NODES=redis://:redispassword@localhost:6379/0
+      - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=CPU
       - TRACING_ENABLED=true
       - SP1_WORKER_NUM_SPLICING_WORKERS=12
@@ -107,7 +107,6 @@ services:
           memory: 80G
         reservations:
           memory: 80G
-    cpuset: "0-63"  # First half of NUMA node 0
 
     depends_on:
       - coordinator

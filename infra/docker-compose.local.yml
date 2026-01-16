@@ -16,7 +16,7 @@ services:
     extends:
       file: docker-compose.yml
       service: redis
-      environment:
+    environment:
       - REDIS_PASSWORD=redispassword
       - REDIS_AOF_ENABLED=no
       - REDIS_MAXMEMORY=25gb
@@ -26,10 +26,10 @@ services:
     extends:
       file: docker-compose.yml
       service: postgresql
-      environment:
-        - POSTGRES_PASSWORD=postgrespassword
-        - POSTGRES_USER=postgres
-        - POSTGRES_DB=postgres
+    environment:
+      - POSTGRES_PASSWORD=postgrespassword
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
 
   api:
     extends:
@@ -46,8 +46,8 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile
-      args:
-        GITHUB_TOKEN: ${GITHUB_TOKEN}
+      secrets:
+        - private_pull_token
     command: ["/bin/sh", "-c", "/api"]
     depends_on:
       - alloy
@@ -73,8 +73,8 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile
-      args:
-        GITHUB_TOKEN: ${GITHUB_TOKEN}
+      secrets:
+        - private_pull_token
     command: ["/bin/sh", "-c", "/coordinator"]
 
   # mixed:
@@ -116,8 +116,8 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile
-      args:
-        GITHUB_TOKEN: ${GITHUB_TOKEN}
+      secrets:
+        - private_pull_token
     deploy:
       resources:
         limits:
@@ -152,8 +152,8 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.node_gpu
-      args:
-        GITHUB_TOKEN: ${GITHUB_TOKEN}
+      secrets:
+        - private_pull_token
     command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
 
   # gpu1:
@@ -216,3 +216,7 @@ services:
 volumes:
   redis_data:
   postgresql_data:
+
+secrets:
+  private_pull_token:
+    environment: GITHUB_TOKEN

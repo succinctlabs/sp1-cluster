@@ -43,9 +43,9 @@ RUN wget -q https://golang.org/dl/go$GO_VERSION.linux-amd64.tar.gz && \
   rm go$GO_VERSION.linux-amd64.tar.gz
 ENV PATH=$PATH:/usr/local/go/bin
 
-# Install sp1 toolchain
+# Install sp1 toolchain. TODO: change this for v6 once sp1up is out.
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-RUN curl -L https://sp1.succinct.xyz | bash && ~/.sp1/bin/sp1up
+RUN curl -L https://sp1.succinct.xyz | bash && ~/.sp1/bin/sp1up --version 5.2.4 
 
 # Install protoc
 ENV PROTOC_ZIP=protoc-29.4-linux-x86_64.zip
