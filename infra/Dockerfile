@@ -123,6 +123,10 @@ COPY --from=build /coordinator /coordinator
 COPY --from=build /fulfiller /fulfiller
 COPY --from=build /node /node
 
+# Create .sp1 directories with correct ownership for volume mounts
+RUN mkdir -p /home/appuser/.sp1/circuits && \
+    chown -R appuser:appgroup /home/appuser/.sp1
+
 # Set ownership to the non-root user and ensure the binary is executable
 RUN chown appuser:appgroup /api && \
     chown appuser:appgroup /bidder && \

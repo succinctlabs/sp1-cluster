@@ -32,13 +32,15 @@ use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 use tokio::task::JoinHandle;
 
 // TODO: reimplement circuit artifact installation
-// use sp1_cluster_artifact::s3_rest::S3RestClient;
 // use flate2::read::GzDecoder;
+// use sp1_cluster_artifact::s3_rest::S3RestClient;
 // use sp1_cluster_artifact::ArtifactType;
 // use sp1_sdk::SP1_CIRCUIT_VERSION;
 // use std::io::Cursor;
 // use std::path::PathBuf;
 // use tar::Archive;
+
+use sp1_sdk::install::try_install_circuit_artifacts;
 
 #[cfg(feature = "gpu")]
 use csl_cuda::TaskScope;
@@ -168,7 +170,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// /// TODO: reinstate. Install circuit artifacts using chunked parallel downloads.
+// /// Install circuit artifacts using chunked parallel downloads.
 // ///
 // /// This function downloads circuit artifacts using S3 chunked parallel downloads for better
 // /// performance, then extracts them using the same tar approach as the SDK.
@@ -310,56 +312,67 @@ async fn run_worker<A: ArtifactClient>(
         let worker_type = WorkerType::from_str_name(&worker_type_str).expect("invalid worker type");
         tracing::info!("worker type: {:?}", worker_type);
 
-        // // For CPU workers, download circuit artifacts before connecting.
-        // if worker_type != WorkerType::Gpu {
-        //     let start_time = std::time::Instant::now();
-        //     tracing::info!("Downloading circuit artifacts before connecting to server");
+        // For CPU workers, download circuit artifacts before connecting.
+        if worker_type != WorkerType::Gpu {
+            let start_time = std::time::Instant::now();
+            tracing::info!("Downloading circuit artifacts before connecting to server");
 
-        //     // Create a single S3ArtifactClient for both downloads.
-        //     let concurrency = std::env::var("S3_CONCURRENCY")
-        //         .map(|s| s.parse().unwrap_or(32))
-        //         .unwrap_or(32);
-        //     let region = "us-east-2".to_string();
-        //     let bucket = "sp1-circuits".to_string();
-        //     tracing::info!(
-        //         "Creating S3ArtifactClient - concurrency: {}, region: {}, bucket: {}",
-        //         concurrency,
-        //         region.clone(),
-        //         bucket
-        //     );
+            let (_, _) = tokio::try_join!(
+                tokio::task::spawn(async move {
+                    tracing::info!("Downloading groth16 artifacts");
+                    try_install_circuit_artifacts("groth16").await
+                }),
+                tokio::task::spawn(async move {
+                    tracing::info!("Downloading plonk artifacts");
+                    try_install_circuit_artifacts("plonk").await
+                })
+            )?;
 
-        //     let artifact_client_rest = S3ArtifactClient::new(
-        //         region.clone(),
-        //         bucket,
-        //         concurrency,
-        //         S3DownloadMode::REST(Arc::new(S3RestClient::new(region.clone()))),
-        //     )
-        //     .await;
-        //     // Download groth16 and plonk artifacts concurrently using shared client.
-        //     // these artifacts will be downloaded with public s3 obj urls.
-        //     let (_, _) = tokio::try_join!(
-        //         tokio::task::spawn_blocking({
-        //             let artifact_client = artifact_client_rest.clone();
-        //             move || {
-        //                 tracing::info!("Downloading groth16 artifacts");
-        //                 install_circuit_artifacts("groth16", artifact_client)
-        //             }
-        //         }),
-        //         tokio::task::spawn_blocking({
-        //             let artifact_client = artifact_client_rest.clone();
-        //             move || {
-        //                 tracing::info!("Downloading plonk artifacts");
-        //                 install_circuit_artifacts("plonk", artifact_client)
-        //             }
-        //         })
-        //     )?;
+            // // Create a single S3ArtifactClient for both downloads.
+            // let concurrency = std::env::var("S3_CONCURRENCY")
+            //     .map(|s| s.parse().unwrap_or(32))
+            //     .unwrap_or(32);
+            // let region = "us-east-2".to_string();
+            // let bucket = "sp1-circuits".to_string();
+            // tracing::info!(
+            //     "Creating S3ArtifactClient - concurrency: {}, region: {}, bucket: {}",
+            //     concurrency,
+            //     region.clone(),
+            //     bucket
+            // );
 
-        //     let elapsed = start_time.elapsed();
-        //     tracing::info!(
-        //         "Circuit artifacts ready after {:.1} seconds",
-        //         elapsed.as_secs_f64()
-        //     );
-        // }
+            // let artifact_client_rest = S3ArtifactClient::new(
+            //     region.clone(),
+            //     bucket,
+            //     concurrency,
+            //     S3DownloadMode::REST(Arc::new(S3RestClient::new(region.clone()))),
+            // )
+            // .await;
+            // // Download groth16 and plonk artifacts concurrently using shared client.
+            // // these artifacts will be downloaded with public s3 obj urls.
+            // let (_, _) = tokio::try_join!(
+            //     tokio::task::spawn_blocking({
+            //         let artifact_client = artifact_client_rest.clone();
+            //         move || {
+            //             tracing::info!("Downloading groth16 artifacts");
+            //             install_circuit_artifacts("groth16", artifact_client)
+            //         }
+            //     }),
+            //     tokio::task::spawn_blocking({
+            //         let artifact_client = artifact_client_rest.clone();
+            //         move || {
+            //             tracing::info!("Downloading plonk artifacts");
+            //             install_circuit_artifacts("plonk", artifact_client)
+            //         }
+            //     })
+            // )?;
+
+            let elapsed = start_time.elapsed();
+            tracing::info!(
+                "Circuit artifacts ready after {:.1} seconds",
+                elapsed.as_secs_f64()
+            );
+        }
 
         // Connect to server only after artifacts are ready.
         let worker_client = WorkerServiceClient::new(addr.clone(), worker_id.clone()).await?;

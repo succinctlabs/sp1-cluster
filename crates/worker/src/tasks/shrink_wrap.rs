@@ -14,6 +14,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
         self: &Arc<Self>,
         task: &WorkerTask,
     ) -> Result<TaskMetadata, TaskError> {
+        tracing::info!("shrinkwrap time");
         let data = task.data()?;
         let raw_task_request = worker_task_to_raw_task_request(data, None);
         self.worker

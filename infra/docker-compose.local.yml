@@ -66,7 +66,7 @@ services:
       - COORDINATOR_CLUSTER_RPC=http://api:50051
       - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
       - COORDINATOR_ADDR=0.0.0.0:50051
-      - RUST_LOG=info
+      - RUST_LOG=debug
       - OTLP_ENDPOINT=http://alloy:4317
     ports:
       - "0.0.0.0:50053:50051"
@@ -99,7 +99,6 @@ services:
     image: sp1-cluster-local:cpu-node
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
-      - WORKER_MAX_WEIGHT_OVERRIDE=32
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=CPU
@@ -109,6 +108,7 @@ services:
       - SP1_WORKER_NUMBER_OF_SEND_SPLICE_WORKERS_PER_SPLICE=4
       - SP1_WORKER_SEND_SPLICE_INPUT_BUFFER_SIZE_PER_SPLICE=4
       - MINIMAL_TRACE_CHUNK_THRESHOLD=33554432
+      - WORKER_PLONK_WRAP_WEIGHT=14
       - RUST_LOG=info
       - OTLP_ENDPOINT=http://alloy:4317
       - PROOF_DURATIONS_CSV=/data/proof_durations.csv
@@ -135,7 +135,6 @@ services:
     image: sp1-cluster-local:gpu
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
-      - WORKER_MAX_WEIGHT_OVERRIDE=24
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=GPU
