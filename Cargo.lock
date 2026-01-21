@@ -2518,7 +2518,7 @@ dependencies = [
 [[package]]
 name = "csl-air"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "itertools 0.14.0",
  "lazy_static",
@@ -2537,7 +2537,7 @@ dependencies = [
 [[package]]
 name = "csl-basefold"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-challenger",
  "csl-cuda",
@@ -2567,7 +2567,7 @@ dependencies = [
 [[package]]
 name = "csl-challenger"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-cuda",
  "slop-algebra",
@@ -2580,7 +2580,7 @@ dependencies = [
 [[package]]
 name = "csl-commit"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-basefold",
  "csl-cuda",
@@ -2607,7 +2607,7 @@ dependencies = [
 [[package]]
 name = "csl-cuda"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "crossbeam",
  "csl-sys",
@@ -2635,7 +2635,7 @@ dependencies = [
 [[package]]
 name = "csl-jagged-assist"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-challenger",
  "csl-cuda",
@@ -2661,7 +2661,7 @@ dependencies = [
 [[package]]
 name = "csl-jagged-sumcheck"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-cuda",
  "csl-utils",
@@ -2683,7 +2683,7 @@ dependencies = [
 [[package]]
 name = "csl-jagged-tracegen"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-basefold",
  "csl-cuda",
@@ -2711,7 +2711,7 @@ dependencies = [
 [[package]]
 name = "csl-logup-gkr"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-cuda",
  "csl-jagged-tracegen",
@@ -2746,7 +2746,7 @@ dependencies = [
 [[package]]
 name = "csl-merkle-tree"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-cuda",
  "csl-tracegen",
@@ -2770,7 +2770,7 @@ dependencies = [
 [[package]]
 name = "csl-prover"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "clap",
  "csl-air",
@@ -2802,7 +2802,7 @@ dependencies = [
 [[package]]
 name = "csl-shard-prover"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-air",
  "csl-basefold",
@@ -2836,7 +2836,7 @@ dependencies = [
 [[package]]
 name = "csl-sys"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "cbindgen",
  "cmake",
@@ -2851,7 +2851,7 @@ dependencies = [
 [[package]]
 name = "csl-tracegen"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-cuda",
  "futures",
@@ -2875,7 +2875,7 @@ dependencies = [
 [[package]]
 name = "csl-tracing"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-cuda",
  "tracing",
@@ -2885,7 +2885,7 @@ dependencies = [
 [[package]]
 name = "csl-utils"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-cuda",
  "slop-algebra",
@@ -2897,7 +2897,7 @@ dependencies = [
 [[package]]
 name = "csl-zerocheck"
 version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#b80803a644b7952599f3769df2d2ccd9541941b3"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#0a3b009e55b6731ef8d83be314ef598feaf008a1"
 dependencies = [
  "csl-air",
  "csl-cuda",
