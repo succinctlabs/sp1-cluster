@@ -112,12 +112,19 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
             }
         };
 
+        // Determine proof status based on execution result
+        let proof_status = if result_obj.status == ExecutionStatus::Executed as i32 {
+            ProofRequestStatus::Completed
+        } else {
+            ProofRequestStatus::Failed
+        };
+
         self.worker
             .worker_client()
             .complete_proof(
                 ProofId::new(proof_id),
                 Some(TaskId::new(task.task_id.clone())),
-                ProofRequestStatus::Completed,
+                proof_status,
                 serde_json::to_string(&result_obj)
                     .map_err(|e| TaskError::Fatal(anyhow::anyhow!(e)))?,
             )

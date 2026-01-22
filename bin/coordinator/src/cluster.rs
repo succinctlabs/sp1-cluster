@@ -44,12 +44,13 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
                 "null".to_string()
             });
             drop(status);
+
             if let Err(e) = api_client
                 .update_proof_request(ProofRequestUpdateRequest {
                     proof_id: id.clone(),
                     proof_status: Some(status_copy.into()),
                     metadata: Some(metadata_string),
-                    extra_data: Some(extra_data),
+                    extra_data,
                     ..Default::default()
                 })
                 .await
@@ -110,12 +111,13 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                                 continue;
                             };
                             // TODO: could bulk create
+                            // Note: inputs[3] is cycle_limit. inputs[4] (proof_nonce) is omitted
+                            // to let sp1-wip controller use the default value.
                             let inputs = vec![
                                 proof.program_artifact_id,
                                 proof.stdin_artifact_id,
                                 options_artifact_id,
                                 cycle_limit.to_string(),
-                                "".to_string(), // TODO
                             ];
                             let outputs = vec![proof_artifact_id];
                             tracing::info!("inputs: {:?}", inputs);
@@ -157,7 +159,9 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                             was_seen
                         });
                         for id in proofs_to_fail {
-                            if let Err(e) = coordinator.fail_proof(id.clone(), None, false).await {
+                            if let Err(e) =
+                                coordinator.fail_proof(id.clone(), None, false, None).await
+                            {
                                 tracing::error!("Failed to fail expired proof: {:?}", e);
                             }
                         }

@@ -19,15 +19,17 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
         parent: Context,
         task: &WorkerTask,
     ) -> Result<TaskMetadata, TaskError> {
-        let mut data = task.data()?.clone();
+        let data = task.data()?.clone();
 
         if data.inputs.is_empty() {
             log::info!("no inputs for task");
             return Err(TaskError::Fatal(anyhow::anyhow!("no inputs for task")));
         }
 
-        // Truncate the cycle limit and TODO thing for now.
-        data.inputs = data.inputs.into_iter().take(3).collect();
+        // Note: inputs[3] contains cycle_limit and inputs[4] is reserved.
+        // The controller passes all inputs to sp1-wip. Cycle limit enforcement
+        // is handled by the executor cluster running execute_only tasks before
+        // the prover cluster starts proving.
 
         let raw_task_request = worker_task_to_raw_task_request(&data, Some(parent));
 

@@ -249,7 +249,7 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
                 let coordinator = self.coordinator.clone();
                 async move {
                     coordinator
-                        .fail_proof(inner.proof_id, inner.task_id, true)
+                        .fail_proof(inner.proof_id, inner.task_id, true, inner.extra_data)
                         .await
                 }
             })
@@ -297,7 +297,7 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
                 let coordinator = self.coordinator.clone();
                 async move {
                     coordinator
-                        .fail_proof(request.into_inner().proof_id, None, true)
+                        .fail_proof(request.into_inner().proof_id, None, true, None)
                         .await
                 }
             })

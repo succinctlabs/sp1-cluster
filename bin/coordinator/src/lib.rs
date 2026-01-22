@@ -159,7 +159,7 @@ pub struct ProofResult<P: AssignmentPolicy> {
     pub id: String,
     pub success: bool,
     pub metadata: Option<P::ProofResultMetadata>,
-    pub extra_data: String,
+    pub extra_data: Option<String>,
 }
 
 /// The current state of the coordinator.
@@ -923,7 +923,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         // Handle manual proof failure.
         if manual_proof_fail {
             tracing::info!("Proof {} controller has no more retries, failing", proof_id);
-            self.fail_proof_internal(&mut state, proof_id.clone(), None, true)
+            self.fail_proof_internal(&mut state, proof_id.clone(), None, true, None)
                 .await?;
         }
 
@@ -1052,7 +1052,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
     pub async fn complete_proof(
         self: &Arc<Self>,
         proof_id: String,
-        extra_data: String,
+        extra_data: Option<String>,
     ) -> Result<(), Status> {
         let state = self
             .state
@@ -1102,6 +1102,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         proof_id: String,
         task_id: Option<String>,
         notify_sender: bool,
+        extra_data: Option<String>,
     ) -> Result<(), Status> {
         if state.shutting_down {
             tracing::info!(
@@ -1188,7 +1189,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                         id: proof_id.clone(),
                         success: false,
                         metadata: None,
-                        extra_data: "".to_string(),
+                        extra_data,
                     }) {
                         tracing::error!("Failed to send failed proof: {}", e);
                     }
@@ -1207,6 +1208,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         proof_id: String,
         task_id: Option<String>,
         notify_sender: bool,
+        extra_data: Option<String>,
     ) -> Result<(), Status> {
         let mut state = self
             .state
@@ -1215,7 +1217,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire"))
             .await;
 
-        self.fail_proof_internal(&mut state, proof_id, task_id, notify_sender)
+        self.fail_proof_internal(&mut state, proof_id, task_id, notify_sender, extra_data)
             .await
     }
 
@@ -1526,7 +1528,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 .instrument(tracing::debug_span!("acquire_write"))
                 .await;
             for id in proofs_to_remove {
-                if let Err(e) = self.fail_proof_internal(&mut state, id, None, false).await {
+                if let Err(e) = self
+                    .fail_proof_internal(&mut state, id, None, false, None)
+                    .await
+                {
                     tracing::error!("Failed to fail expired proof: {}", e);
                 }
             }

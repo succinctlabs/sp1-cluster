@@ -479,12 +479,18 @@ impl WorkerClient for WorkerServiceClient {
         extra_data: impl Into<String> + Send,
     ) -> anyhow::Result<()> {
         let backoff = self.backoff.clone();
+        let extra_data: String = extra_data.into();
+        let extra_data = if extra_data.is_empty() {
+            None
+        } else {
+            Some(extra_data)
+        };
         match status {
             proto::ProofRequestStatus::Completed => {
                 let request = proto::CompleteProofRequest {
                     worker_id: self.worker_id.clone(),
                     proof_id: proof_id.to_string(),
-                    extra_data: extra_data.into(),
+                    extra_data,
                 };
                 backoff::future::retry(backoff, || async {
                     self.client
@@ -500,6 +506,7 @@ impl WorkerClient for WorkerServiceClient {
                     worker_id: self.worker_id.clone(),
                     proof_id: proof_id.to_string(),
                     task_id: task_id.map(|t| t.to_string()),
+                    extra_data,
                 };
                 backoff::future::retry(backoff, || async {
                     self.client
