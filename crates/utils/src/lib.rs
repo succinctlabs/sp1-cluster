@@ -85,8 +85,8 @@ pub async fn create_request<A: ArtifactClient>(
             proof_artifact_id: Some(proof_output_id.clone().to_id()),
             requester: vec![],
             deadline: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs(),
-            cycle_limit: 0,
-            gas_limit: 0,
+            cycle_limit: u64::MAX,
+            gas_limit: u64::MAX,
         })
         .await?;
 
