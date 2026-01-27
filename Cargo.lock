@@ -2516,422 +2516,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "csl-air"
-version = "0.1.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "itertools 0.14.0",
- "lazy_static",
- "slop-air",
- "slop-algebra",
- "slop-koala-bear",
- "slop-matrix",
- "sp1-core-executor",
- "sp1-core-machine",
- "sp1-curves",
- "sp1-hypercube",
- "sp1-primitives 6.0.0",
- "sp1-recursion-machine",
-]
-
-[[package]]
-name = "csl-basefold"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-challenger",
- "csl-cuda",
- "csl-merkle-tree",
- "csl-tracegen",
- "csl-utils",
- "itertools 0.14.0",
- "rand 0.8.5",
- "serde",
- "slop-algebra",
- "slop-alloc",
- "slop-basefold",
- "slop-basefold-prover",
- "slop-bn254",
- "slop-challenger",
- "slop-commit",
- "slop-dft",
- "slop-futures",
- "slop-koala-bear",
- "slop-merkle-tree",
- "slop-multilinear",
- "slop-poseidon2",
- "slop-symmetric",
- "slop-tensor",
- "sp1-hypercube",
- "sp1-primitives 6.0.0",
- "tokio",
-]
-
-[[package]]
-name = "csl-challenger"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-cuda",
- "slop-algebra",
- "slop-alloc",
- "slop-challenger",
- "slop-koala-bear",
- "slop-poseidon2",
- "slop-symmetric",
- "sp1-primitives 6.0.0",
-]
-
-[[package]]
-name = "csl-commit"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-basefold",
- "csl-cuda",
- "csl-jagged-assist",
- "csl-jagged-tracegen",
- "csl-merkle-tree",
- "csl-tracegen",
- "csl-utils",
- "itertools 0.14.0",
- "rand 0.8.5",
- "slop-algebra",
- "slop-alloc",
- "slop-challenger",
- "slop-dft",
- "slop-jagged",
- "slop-koala-bear",
- "slop-merkle-tree",
- "slop-symmetric",
- "slop-tensor",
- "sp1-hypercube",
- "tokio",
-]
-
-[[package]]
-name = "csl-cuda"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "crossbeam",
- "csl-sys",
- "futures",
- "itertools 0.14.0",
- "pin-project",
- "slop-algebra",
- "slop-alloc",
- "slop-basefold",
- "slop-challenger",
- "slop-commit",
- "slop-futures",
- "slop-jagged",
- "slop-koala-bear",
- "slop-multilinear",
- "slop-stacked",
- "slop-sumcheck",
- "slop-tensor",
- "sp1-hypercube",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "csl-jagged-assist"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-challenger",
- "csl-cuda",
- "csl-tracing",
- "futures",
- "itertools 0.14.0",
- "serde",
- "slop-algebra",
- "slop-alloc",
- "slop-basefold",
- "slop-bn254",
- "slop-challenger",
- "slop-commit",
- "slop-jagged",
- "slop-koala-bear",
- "slop-multilinear",
- "slop-sumcheck",
- "slop-tensor",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "csl-jagged-sumcheck"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-cuda",
- "csl-utils",
- "futures",
- "itertools 0.14.0",
- "num-bigint 0.4.6",
- "rand 0.8.5",
- "rayon",
- "slop-algebra",
- "slop-alloc",
- "slop-challenger",
- "slop-jagged",
- "slop-multilinear",
- "slop-sumcheck",
- "slop-tensor",
- "tokio",
-]
-
-[[package]]
-name = "csl-jagged-tracegen"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-basefold",
- "csl-cuda",
- "csl-tracegen",
- "csl-utils",
- "futures",
- "itertools 0.14.0",
- "rand 0.8.5",
- "rayon",
- "slop-air",
- "slop-algebra",
- "slop-alloc",
- "slop-challenger",
- "slop-futures",
- "slop-jagged",
- "slop-multilinear",
- "slop-tensor",
- "sp1-core-executor",
- "sp1-core-machine",
- "sp1-hypercube",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "csl-logup-gkr"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-cuda",
- "csl-jagged-tracegen",
- "csl-utils",
- "csl-zerocheck",
- "futures",
- "itertools 0.14.0",
- "rand 0.8.5",
- "rayon",
- "serde",
- "serde_json",
- "slop-air",
- "slop-algebra",
- "slop-alloc",
- "slop-basefold-prover",
- "slop-bn254",
- "slop-challenger",
- "slop-commit",
- "slop-dft",
- "slop-futures",
- "slop-koala-bear",
- "slop-merkle-tree",
- "slop-multilinear",
- "slop-sumcheck",
- "slop-symmetric",
- "slop-tensor",
- "sp1-hypercube",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "csl-merkle-tree"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-cuda",
- "csl-tracegen",
- "csl-utils",
- "slop-algebra",
- "slop-alloc",
- "slop-bn254",
- "slop-challenger",
- "slop-commit",
- "slop-futures",
- "slop-koala-bear",
- "slop-merkle-tree",
- "slop-multilinear",
- "slop-symmetric",
- "slop-tensor",
- "sp1-hypercube",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "csl-prover"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "clap",
- "csl-air",
- "csl-basefold",
- "csl-challenger",
- "csl-cuda",
- "csl-jagged-assist",
- "csl-jagged-tracegen",
- "csl-logup-gkr",
- "csl-merkle-tree",
- "csl-shard-prover",
- "csl-tracegen",
- "serde",
- "slop-algebra",
- "slop-basefold",
- "slop-bn254",
- "slop-challenger",
- "slop-futures",
- "slop-jagged",
- "slop-koala-bear",
- "sp1-core-executor",
- "sp1-core-machine",
- "sp1-hypercube",
- "sp1-primitives 6.0.0",
- "sp1-prover",
- "sp1-prover-types",
- "sysinfo 0.31.4",
- "tracing",
-]
-
-[[package]]
-name = "csl-shard-prover"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-air",
- "csl-basefold",
- "csl-challenger",
- "csl-commit",
- "csl-cuda",
- "csl-jagged-assist",
- "csl-jagged-sumcheck",
- "csl-jagged-tracegen",
- "csl-logup-gkr",
- "csl-merkle-tree",
- "csl-tracegen",
- "csl-utils",
- "csl-zerocheck",
- "slop-algebra",
- "slop-alloc",
- "slop-basefold",
- "slop-challenger",
- "slop-commit",
- "slop-futures",
- "slop-jagged",
- "slop-multilinear",
- "slop-stacked",
- "slop-tensor",
- "sp1-hypercube",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "csl-sys"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "cbindgen",
- "cmake",
- "pathdiff",
- "slop-koala-bear",
- "sp1-core-executor",
- "sp1-core-machine",
- "sp1-recursion-executor",
- "sp1-recursion-machine",
-]
-
-[[package]]
-name = "csl-tracegen"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-cuda",
- "futures",
- "rayon",
- "slop-air",
- "slop-algebra",
- "slop-alloc",
- "slop-futures",
- "slop-koala-bear",
- "slop-multilinear",
- "slop-symmetric",
- "slop-tensor",
- "sp1-core-machine",
- "sp1-hypercube",
- "sp1-recursion-executor",
- "sp1-recursion-machine",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "csl-tracing"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-cuda",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "csl-utils"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-cuda",
- "slop-algebra",
- "slop-alloc",
- "slop-koala-bear",
- "slop-tensor",
-]
-
-[[package]]
-name = "csl-zerocheck"
-version = "1.2.0"
-source = "git+https://github.com/succinctlabs/cuslop?branch=main#0c4c9b23e0168eb8df4f3a0e29f06faffeaecf4e"
-dependencies = [
- "csl-air",
- "csl-cuda",
- "csl-tracegen",
- "csl-utils",
- "itertools 0.14.0",
- "rand 0.8.5",
- "slop-air",
- "slop-algebra",
- "slop-alloc",
- "slop-challenger",
- "slop-commit",
- "slop-futures",
- "slop-koala-bear",
- "slop-matrix",
- "slop-multilinear",
- "slop-sumcheck",
- "slop-tensor",
- "sp1-core-executor",
- "sp1-derive",
- "sp1-hypercube",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "ctrlc"
 version = "3.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8562,8 +8146,6 @@ name = "sp1-cluster-node"
 version = "0.1.0"
 dependencies = [
  "cfg-if",
- "csl-cuda",
- "csl-prover",
  "ctrlc",
  "dashmap",
  "dirs 6.0.0",
@@ -8585,6 +8167,8 @@ dependencies = [
  "sp1-cluster-worker",
  "sp1-core-executor",
  "sp1-core-machine",
+ "sp1-gpu-cudart",
+ "sp1-gpu-prover",
  "sp1-hypercube",
  "sp1-prover",
  "sp1-sdk",
@@ -8618,8 +8202,6 @@ dependencies = [
  "backoff",
  "cfg-if",
  "chrono",
- "csl-cuda",
- "csl-prover",
  "eyre",
  "futures",
  "hashbrown 0.15.5",
@@ -8636,6 +8218,8 @@ dependencies = [
  "sp1-cluster-common",
  "sp1-core-executor",
  "sp1-core-machine",
+ "sp1-gpu-cudart",
+ "sp1-gpu-prover",
  "sp1-hypercube",
  "sp1-primitives 6.0.0",
  "sp1-prover",
@@ -8787,6 +8371,422 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "sp1-gpu-air"
+version = "0.1.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "itertools 0.14.0",
+ "lazy_static",
+ "slop-air",
+ "slop-algebra",
+ "slop-koala-bear",
+ "slop-matrix",
+ "sp1-core-executor",
+ "sp1-core-machine",
+ "sp1-curves",
+ "sp1-hypercube",
+ "sp1-primitives 6.0.0",
+ "sp1-recursion-machine",
+]
+
+[[package]]
+name = "sp1-gpu-basefold"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "itertools 0.14.0",
+ "rand 0.8.5",
+ "serde",
+ "slop-algebra",
+ "slop-alloc",
+ "slop-basefold",
+ "slop-basefold-prover",
+ "slop-bn254",
+ "slop-challenger",
+ "slop-commit",
+ "slop-dft",
+ "slop-futures",
+ "slop-koala-bear",
+ "slop-merkle-tree",
+ "slop-multilinear",
+ "slop-poseidon2",
+ "slop-symmetric",
+ "slop-tensor",
+ "sp1-gpu-challenger",
+ "sp1-gpu-cudart",
+ "sp1-gpu-merkle-tree",
+ "sp1-gpu-tracegen",
+ "sp1-gpu-utils",
+ "sp1-hypercube",
+ "sp1-primitives 6.0.0",
+ "tokio",
+]
+
+[[package]]
+name = "sp1-gpu-challenger"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "slop-algebra",
+ "slop-alloc",
+ "slop-challenger",
+ "slop-koala-bear",
+ "slop-poseidon2",
+ "slop-symmetric",
+ "sp1-gpu-cudart",
+ "sp1-primitives 6.0.0",
+]
+
+[[package]]
+name = "sp1-gpu-commit"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "itertools 0.14.0",
+ "rand 0.8.5",
+ "slop-algebra",
+ "slop-alloc",
+ "slop-challenger",
+ "slop-dft",
+ "slop-jagged",
+ "slop-koala-bear",
+ "slop-merkle-tree",
+ "slop-symmetric",
+ "slop-tensor",
+ "sp1-gpu-basefold",
+ "sp1-gpu-cudart",
+ "sp1-gpu-jagged-assist",
+ "sp1-gpu-jagged-tracegen",
+ "sp1-gpu-merkle-tree",
+ "sp1-gpu-tracegen",
+ "sp1-gpu-utils",
+ "sp1-hypercube",
+ "tokio",
+]
+
+[[package]]
+name = "sp1-gpu-cudart"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "crossbeam",
+ "futures",
+ "itertools 0.14.0",
+ "pin-project",
+ "slop-algebra",
+ "slop-alloc",
+ "slop-basefold",
+ "slop-challenger",
+ "slop-commit",
+ "slop-futures",
+ "slop-jagged",
+ "slop-koala-bear",
+ "slop-multilinear",
+ "slop-stacked",
+ "slop-sumcheck",
+ "slop-tensor",
+ "sp1-gpu-sys",
+ "sp1-hypercube",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "sp1-gpu-jagged-assist"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "futures",
+ "itertools 0.14.0",
+ "serde",
+ "slop-algebra",
+ "slop-alloc",
+ "slop-basefold",
+ "slop-bn254",
+ "slop-challenger",
+ "slop-commit",
+ "slop-jagged",
+ "slop-koala-bear",
+ "slop-multilinear",
+ "slop-sumcheck",
+ "slop-tensor",
+ "sp1-gpu-challenger",
+ "sp1-gpu-cudart",
+ "sp1-gpu-tracing",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "sp1-gpu-jagged-sumcheck"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "futures",
+ "itertools 0.14.0",
+ "num-bigint 0.4.6",
+ "rand 0.8.5",
+ "rayon",
+ "slop-algebra",
+ "slop-alloc",
+ "slop-challenger",
+ "slop-jagged",
+ "slop-multilinear",
+ "slop-sumcheck",
+ "slop-tensor",
+ "sp1-gpu-cudart",
+ "sp1-gpu-utils",
+ "tokio",
+]
+
+[[package]]
+name = "sp1-gpu-jagged-tracegen"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "futures",
+ "itertools 0.14.0",
+ "rand 0.8.5",
+ "rayon",
+ "slop-air",
+ "slop-algebra",
+ "slop-alloc",
+ "slop-challenger",
+ "slop-futures",
+ "slop-jagged",
+ "slop-multilinear",
+ "slop-tensor",
+ "sp1-core-executor",
+ "sp1-core-machine",
+ "sp1-gpu-basefold",
+ "sp1-gpu-cudart",
+ "sp1-gpu-tracegen",
+ "sp1-gpu-utils",
+ "sp1-hypercube",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "sp1-gpu-logup-gkr"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "futures",
+ "itertools 0.14.0",
+ "rand 0.8.5",
+ "rayon",
+ "serde",
+ "serde_json",
+ "slop-air",
+ "slop-algebra",
+ "slop-alloc",
+ "slop-basefold-prover",
+ "slop-bn254",
+ "slop-challenger",
+ "slop-commit",
+ "slop-dft",
+ "slop-futures",
+ "slop-koala-bear",
+ "slop-merkle-tree",
+ "slop-multilinear",
+ "slop-sumcheck",
+ "slop-symmetric",
+ "slop-tensor",
+ "sp1-gpu-cudart",
+ "sp1-gpu-jagged-tracegen",
+ "sp1-gpu-utils",
+ "sp1-gpu-zerocheck",
+ "sp1-hypercube",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "sp1-gpu-merkle-tree"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "slop-algebra",
+ "slop-alloc",
+ "slop-bn254",
+ "slop-challenger",
+ "slop-commit",
+ "slop-futures",
+ "slop-koala-bear",
+ "slop-merkle-tree",
+ "slop-multilinear",
+ "slop-symmetric",
+ "slop-tensor",
+ "sp1-gpu-cudart",
+ "sp1-gpu-tracegen",
+ "sp1-gpu-utils",
+ "sp1-hypercube",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "sp1-gpu-prover"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "clap",
+ "serde",
+ "slop-algebra",
+ "slop-basefold",
+ "slop-bn254",
+ "slop-challenger",
+ "slop-futures",
+ "slop-jagged",
+ "slop-koala-bear",
+ "sp1-core-executor",
+ "sp1-core-machine",
+ "sp1-gpu-air",
+ "sp1-gpu-basefold",
+ "sp1-gpu-challenger",
+ "sp1-gpu-cudart",
+ "sp1-gpu-jagged-assist",
+ "sp1-gpu-jagged-tracegen",
+ "sp1-gpu-logup-gkr",
+ "sp1-gpu-merkle-tree",
+ "sp1-gpu-shard-prover",
+ "sp1-gpu-tracegen",
+ "sp1-hypercube",
+ "sp1-primitives 6.0.0",
+ "sp1-prover",
+ "sp1-prover-types",
+ "sysinfo 0.31.4",
+ "tracing",
+]
+
+[[package]]
+name = "sp1-gpu-shard-prover"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "slop-algebra",
+ "slop-alloc",
+ "slop-basefold",
+ "slop-challenger",
+ "slop-commit",
+ "slop-futures",
+ "slop-jagged",
+ "slop-multilinear",
+ "slop-stacked",
+ "slop-tensor",
+ "sp1-gpu-air",
+ "sp1-gpu-basefold",
+ "sp1-gpu-challenger",
+ "sp1-gpu-commit",
+ "sp1-gpu-cudart",
+ "sp1-gpu-jagged-assist",
+ "sp1-gpu-jagged-sumcheck",
+ "sp1-gpu-jagged-tracegen",
+ "sp1-gpu-logup-gkr",
+ "sp1-gpu-merkle-tree",
+ "sp1-gpu-tracegen",
+ "sp1-gpu-utils",
+ "sp1-gpu-zerocheck",
+ "sp1-hypercube",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "sp1-gpu-sys"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "cbindgen",
+ "cmake",
+ "pathdiff",
+ "slop-koala-bear",
+ "sp1-core-executor",
+ "sp1-core-machine",
+ "sp1-recursion-executor",
+ "sp1-recursion-machine",
+]
+
+[[package]]
+name = "sp1-gpu-tracegen"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "futures",
+ "rayon",
+ "slop-air",
+ "slop-algebra",
+ "slop-alloc",
+ "slop-futures",
+ "slop-koala-bear",
+ "slop-multilinear",
+ "slop-symmetric",
+ "slop-tensor",
+ "sp1-core-machine",
+ "sp1-gpu-cudart",
+ "sp1-hypercube",
+ "sp1-recursion-executor",
+ "sp1-recursion-machine",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "sp1-gpu-tracing"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "sp1-gpu-cudart",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "sp1-gpu-utils"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "slop-algebra",
+ "slop-alloc",
+ "slop-koala-bear",
+ "slop-tensor",
+ "sp1-gpu-cudart",
+]
+
+[[package]]
+name = "sp1-gpu-zerocheck"
+version = "1.2.0"
+source = "git+https://github.com/succinctlabs/cuslop?branch=main#e05038516e1093fe0de18b4f30cab2044a0dbd01"
+dependencies = [
+ "itertools 0.14.0",
+ "rand 0.8.5",
+ "slop-air",
+ "slop-algebra",
+ "slop-alloc",
+ "slop-challenger",
+ "slop-commit",
+ "slop-futures",
+ "slop-koala-bear",
+ "slop-matrix",
+ "slop-multilinear",
+ "slop-sumcheck",
+ "slop-tensor",
+ "sp1-core-executor",
+ "sp1-derive",
+ "sp1-gpu-air",
+ "sp1-gpu-cudart",
+ "sp1-gpu-tracegen",
+ "sp1-gpu-utils",
+ "sp1-hypercube",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

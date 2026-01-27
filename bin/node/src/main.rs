@@ -43,7 +43,7 @@ use tokio::task::JoinHandle;
 use sp1_sdk::install::try_install_circuit_artifacts;
 
 #[cfg(feature = "gpu")]
-use csl_cuda::TaskScope;
+use sp1_gpu_cudart::TaskScope;
 
 #[cfg(feature = "gpu")]
 async fn build_worker<A: ArtifactClient, W: WorkerClient>(
@@ -51,9 +51,9 @@ async fn build_worker<A: ArtifactClient, W: WorkerClient>(
     worker_client: W,
     backend: TaskScope,
 ) -> Result<SP1Worker<A, W, ClusterProverComponents>> {
-    csl_prover::cuda_worker_builder(backend)
+    sp1_gpu_prover::cuda_worker_builder(backend)
         .await
-        // csl_prover::cuda_worker_builder(backend)
+        // sp1_gpu_prover::cuda_worker_builder(backend)
         .with_config(|conf| *conf = cluster_worker_config())
         .with_artifact_client(artifact_client)
         .with_worker_client(worker_client)
@@ -135,7 +135,7 @@ async fn main() -> Result<()> {
         .await;
         cfg_if! {
             if #[cfg(feature = "gpu")] {
-                csl_cuda::spawn(move |t| async move { run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client, t.clone()).await.unwrap(); })
+                sp1_gpu_cudart::spawn(move |t| async move { run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client, t.clone()).await.unwrap(); })
                     .await
                     .unwrap();
             } else {
@@ -158,7 +158,7 @@ async fn main() -> Result<()> {
         eprintln!("redis is set up");
         cfg_if! {
             if #[cfg(feature = "gpu")] {
-                csl_cuda::spawn(move |t| async move { run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client, t.clone()).await.unwrap(); })
+                sp1_gpu_cudart::spawn(move |t| async move { run_worker(shutting_down, shutdown_rx, Some(metrics), artifact_client, t.clone()).await.unwrap(); })
                     .await
                     .unwrap();
             } else {

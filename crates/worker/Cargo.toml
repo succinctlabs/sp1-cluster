@@ -9,7 +9,7 @@ categories.workspace = true
 [features]
 default = ["native-gnark"]
 native-gnark = ["sp1-sdk/native-gnark"]
-gpu = ["dep:csl-prover", "dep:csl-cuda"]
+gpu = ["dep:sp1-gpu-prover", "dep:sp1-gpu-cudart"]
 
 [dependencies]
 sp1-cluster-artifact = { workspace = true }
@@ -23,8 +23,8 @@ sp1-prover = { workspace = true }
 sp1-prover-types = { workspace = true }
 sp1-sdk = { workspace = true }
 
-csl-cuda = { workspace = true, optional = true }
-csl-prover = { workspace = true, optional = true }
+sp1-gpu-cudart = { workspace = true, optional = true }
+sp1-gpu-prover = { workspace = true, optional = true }
 
 anyhow.workspace = true
 async-channel.workspace = true
