@@ -30,6 +30,12 @@ pub mod run;
 const REFRESH_INTERVAL_SEC: u64 = 3;
 /// The maximum number of requests to handle in a single refresh loop.
 const REQUEST_LIMIT: u32 = 1000;
+/// The error strings that should trigger a VERIFICATION_KEY_MISMATCH error.
+const VK_MISMATCH_STRINGS: &[&str] = &[
+    "InvalidPowWitness",
+    "sp1 vk hash mismatch",
+    "vk hash from syscall does not match vkey from input",
+];
 
 #[derive(Clone)]
 pub struct Fulfiller<A: ArtifactClient, N: FulfillmentNetwork> {
@@ -42,6 +48,10 @@ pub struct Fulfiller<A: ArtifactClient, N: FulfillmentNetwork> {
     addresses: Option<Vec<Address>>,
     signer: NetworkSigner,
     copy_artifacts: bool,
+    /// Disable sending fulfillment requests to the network (for testing/dry-run)
+    disable_fulfillment: bool,
+    /// Probability (0.0-1.0) of processing a request. Default is 1.0 (100%).
+    request_probability: f64,
 }
 
 impl<A: ArtifactClient, N: FulfillmentNetwork> Fulfiller<A, N> {
@@ -56,6 +66,8 @@ impl<A: ArtifactClient, N: FulfillmentNetwork> Fulfiller<A, N> {
         addresses: Option<Vec<Address>>,
         signer: NetworkSigner,
         copy_artifacts: bool,
+        disable_fulfillment: bool,
+        request_probability: f64,
     ) -> Self {
         Self {
             network,
@@ -67,6 +79,8 @@ impl<A: ArtifactClient, N: FulfillmentNetwork> Fulfiller<A, N> {
             addresses,
             signer,
             copy_artifacts,
+            disable_fulfillment,
+            request_probability,
         }
     }
 
@@ -143,6 +157,36 @@ impl<A: ArtifactClient, N: FulfillmentNetwork> Fulfiller<A, N> {
                     Err(e) => {
                         error!("failed to submit request 0x{}: {:?}", request_id, e);
                         self_clone.metrics.request_submission_failures.increment(1);
+
+                        // Fail the request if the verification key does not match the one
+                        // expected for the program.
+                        let err_text = format!("{e:?}");
+                        if VK_MISMATCH_STRINGS.iter().any(|s| err_text.contains(s)) {
+                            // ProofRequestError::VerificationKeyMismatch = 2
+                            const VK_MISMATCH_ERROR: i32 = 2;
+                            match self_clone
+                                .network
+                                .fail_request_with_error(
+                                    &request_id,
+                                    Some(VK_MISMATCH_ERROR),
+                                    self_clone.domain.as_slice(),
+                                    &self_clone.signer,
+                                )
+                                .await
+                            {
+                                Ok(_) => {
+                                    info!("failed request 0x{} due to VK mismatch", request_id);
+                                    self_clone.metrics.requests_failed.increment(1);
+                                    self_clone.metrics.total_requests_processed.increment(1);
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "failed to fail request 0x{} with VK mismatch: {:?}",
+                                        request_id, e
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             })
@@ -185,9 +229,11 @@ impl<A: ArtifactClient, N: FulfillmentNetwork> Fulfiller<A, N> {
         };
 
         // Submit the fulfill request to the network.
-        self.network
-            .submit_request(&request, proof_bytes, self.domain.as_slice(), &self.signer)
-            .await?;
+        if !self.disable_fulfillment {
+            self.network
+                .submit_request(&request, proof_bytes, self.domain.as_slice(), &self.signer)
+                .await?;
+        }
 
         // Update the status to fulfilled on the cluster.
         self.cluster
@@ -256,9 +302,11 @@ impl<A: ArtifactClient, N: FulfillmentNetwork> Fulfiller<A, N> {
 
     async fn fail_request(&self, request: ProofRequest) -> Result<()> {
         // Send the failed fulfillment to the network.
-        self.network
-            .fail_request(&request, self.domain.as_slice(), &self.signer)
-            .await?;
+        if !self.disable_fulfillment {
+            self.network
+                .fail_request(&request, self.domain.as_slice(), &self.signer)
+                .await?;
+        }
 
         // Mark the request as handled in the cluster.
         self.cluster
@@ -328,9 +376,11 @@ impl<A: ArtifactClient, N: FulfillmentNetwork> Fulfiller<A, N> {
     /// Cancels a request by failing fulfillment on the network and unclaming it on the cluster.
     async fn cancel_request(&self, request_id: &str) -> Result<()> {
         // Send the failed fulfillment to the network.
-        self.network
-            .cancel_request(request_id, &self.signer)
-            .await?;
+        if !self.disable_fulfillment {
+            self.network
+                .cancel_request(request_id, &self.signer)
+                .await?;
+        }
 
         // Update the status to cancelled on the cluster.
         self.cluster
@@ -369,6 +419,10 @@ impl<A: ArtifactClient, N: FulfillmentNetwork> Fulfiller<A, N> {
             .filter(|request| {
                 let request_id_hex = request.request_id();
 
+                // If request_probability is 1, skip the deterministic check and process all
+                // requests
+                let is_process_all = self.request_probability == 1.0;
+
                 // Note: We can't check fulfiller via NetworkRequest trait, so we skip this check
                 // The network layer should handle filtering requests with fulfillers
 
@@ -378,7 +432,26 @@ impl<A: ArtifactClient, N: FulfillmentNetwork> Fulfiller<A, N> {
                     return false;
                 }
 
-                true
+                // If processing all requests, return true immediately
+                if is_process_all {
+                    return true;
+                }
+
+                // Use a deterministic hash of the request ID to decide whether to process
+                let hash = request_id_hex
+                    .as_bytes()
+                    .iter()
+                    .fold(0u64, |acc, &b| acc.wrapping_add(b as u64));
+                let should_process = (hash % 100) < (self.request_probability * 100.0) as u64;
+
+                if !should_process {
+                    info!(
+                        "deterministically skipping request 0x{} based on hash",
+                        request_id_hex
+                    );
+                }
+
+                should_process
             })
             .collect();
         self.metrics.schedulable_requests.set(requests.len() as f64);

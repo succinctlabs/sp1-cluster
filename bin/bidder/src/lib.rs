@@ -53,6 +53,10 @@ pub struct Bidder {
     groth16_enabled: bool,
     /// Whether to bid on Plonk proofs
     plonk_enabled: bool,
+    /// Aggressive mode: bid on all requests without capacity/time checks
+    aggressive_mode: bool,
+    /// Minimum deadline in seconds to bid on (optional safety check, even in aggressive mode)
+    min_deadline_secs: Option<u64>,
 }
 
 impl Bidder {
@@ -71,6 +75,8 @@ impl Bidder {
         plonk_buffer_sec: u64,
         groth16_enabled: bool,
         plonk_enabled: bool,
+        aggressive_mode: bool,
+        min_deadline_secs: Option<u64>,
     ) -> Self {
         Self {
             network,
@@ -86,6 +92,8 @@ impl Bidder {
             plonk_buffer_sec,
             groth16_enabled,
             plonk_enabled,
+            aggressive_mode,
+            min_deadline_secs,
         }
     }
 
@@ -231,14 +239,30 @@ impl Bidder {
             let request_id = hex::encode(request.request_id);
 
             let request_duration = request.deadline.saturating_sub(time_now());
-            if !self.can_fulfill_proof(active_proofs, request.gas_limit, request_duration, mode) {
-                info!(
-                    "Cannot fulfill request 0x{} with gas limit {} and deadline in {}s",
-                    request_id, request.gas_limit, request_duration
-                );
-                continue;
+
+            // In aggressive mode, skip capacity/time checks but optionally enforce min deadline.
+            if self.aggressive_mode {
+                if let Some(min_deadline) = self.min_deadline_secs {
+                    if request_duration < min_deadline {
+                        info!(
+                            "Skipping request 0x{} with deadline in {}s (below minimum {}s)",
+                            request_id, request_duration, min_deadline
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                // Normal mode: check capacity and time constraints.
+                if !self.can_fulfill_proof(active_proofs, request.gas_limit, request_duration, mode)
+                {
+                    info!(
+                        "Cannot fulfill request 0x{} with gas limit {} and deadline in {}s",
+                        request_id, request.gas_limit, request_duration
+                    );
+                    continue;
+                }
+                active_proofs += 1;
             }
-            active_proofs += 1;
             failure_tasks.push(tokio::spawn(async move {
                 match self_clone.bid_request(prover, &request_id).await {
                     Ok(_) => {

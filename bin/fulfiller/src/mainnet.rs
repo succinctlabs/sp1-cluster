@@ -93,6 +93,17 @@ impl FulfillmentNetwork for MainnetFulfiller {
     }
 
     async fn cancel_request(&self, request_id: &str, signer: &NetworkSigner) -> Result<()> {
+        self.fail_request_with_error(request_id, None, &[], signer)
+            .await
+    }
+
+    async fn fail_request_with_error(
+        &self,
+        request_id: &str,
+        error: Option<i32>,
+        _domain: &[u8],
+        signer: &NetworkSigner,
+    ) -> Result<()> {
         let nonce = self
             .network
             .clone()
@@ -109,7 +120,7 @@ impl FulfillmentNetwork for MainnetFulfiller {
         let body = spn_network_types::FailFulfillmentRequestBody {
             nonce,
             request_id: request_id_bytes,
-            error: None,
+            error,
         };
 
         let fail_request = spn_network_types::FailFulfillmentRequest {

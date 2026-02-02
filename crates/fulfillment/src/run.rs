@@ -93,6 +93,8 @@ pub async fn run_fulfiller<A: ArtifactClient, N: FulfillmentNetwork>(
         settings.addresses.clone(),
         signer,
         true,
+        settings.disable_fulfillment,
+        settings.request_probability,
     );
     let fulfiller = Arc::new(fulfiller);
 

@@ -50,6 +50,15 @@ pub trait FulfillmentNetwork: Send + Sync + 'static {
         signer: &NetworkSigner,
     ) -> Result<()>;
 
+    /// Fail a fulfillment request with a specific error code (e.g., VK mismatch).
+    async fn fail_request_with_error(
+        &self,
+        request_id: &str,
+        error: Option<i32>,
+        domain: &[u8],
+        signer: &NetworkSigner,
+    ) -> Result<()>;
+
     /// Cancel a fulfillment request after the network does not expect it anymore.
     async fn cancel_request(&self, request_id: &str, signer: &NetworkSigner) -> Result<()>;
 

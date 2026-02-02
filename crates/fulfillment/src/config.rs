@@ -23,6 +23,16 @@ pub struct FulfillerSettings {
     pub cluster_s3_concurrency: Option<usize>,
     pub cluster_redis_nodes: Option<Vec<String>>,
     pub cluster_redis_pool_max_size: Option<usize>,
+    /// Disable sending fulfillment requests to the network (for testing/dry-run)
+    #[serde(default)]
+    pub disable_fulfillment: bool,
+    /// Probability (0.0-1.0) of processing a request. Default is 1.0 (100%).
+    #[serde(default = "default_request_probability")]
+    pub request_probability: f64,
+}
+
+fn default_request_probability() -> f64 {
+    1.0
 }
 
 impl FulfillerSettings {
