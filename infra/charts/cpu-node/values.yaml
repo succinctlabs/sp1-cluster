@@ -4,7 +4,6 @@ replicaCount: 0
 
 image:
   repository: ghcr.io/succinctlabs/sp1-cluster
-  # repository: 421253708207.dkr.ecr.us-east-2.amazonaws.com/succinct-cluster
   pullPolicy: IfNotPresent
   tag: client-gpu-a00f4c4
 

@@ -6,7 +6,7 @@ on:
       - "migrations/**"
 
 env:
-  ECR_REPOSITORY: 421253708207.dkr.ecr.us-east-1.amazonaws.com/sp1-cluster
+  ECR_REPOSITORY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION || 'us-east-1' }}.amazonaws.com/sp1-cluster
   GHCR_REPOSITORY: ghcr.io/${{ github.repository }}
   # Set to 'true' to enable private cargo dependencies (requires PRIVATE_PULL_TOKEN secret)
   # Defaults to false - private deps are opt-in

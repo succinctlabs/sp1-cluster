@@ -47,7 +47,7 @@ services:
 
   # API Service (exposed for external access and GPU workers)
   api:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-8ddc0ef
+    image: ghcr.io/succinctlabs/sp1-cluster:latest
     environment:
       - API_GRPC_ADDR=0.0.0.0:50051
       - API_HTTP_ADDR=0.0.0.0:3000
@@ -64,7 +64,7 @@ services:
 
   # Coordinator Service (exposed for GPU workers)
   coordinator:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-8ddc0ef
+    image: ghcr.io/succinctlabs/sp1-cluster:latest
     environment:
       - COORDINATOR_CLUSTER_RPC=http://api:50051
       - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
@@ -79,7 +79,7 @@ services:
 
   # CPU Node (local to management node)
   cpu-node:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:base-8ddc0ef
+    image: ghcr.io/succinctlabs/sp1-cluster:latest
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=32

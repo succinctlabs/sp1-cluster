@@ -1,6 +1,6 @@
 # GPU Worker Node Docker Compose
-# This runs on GPU machines, connecting to management node at 10.10.100.88
-# Includes: Alloy (local) and 8 GPU nodes
+# This runs on GPU machines, connecting to management node
+# Includes: Alloy (local) and GPU nodes
 
 services:
   # Alloy observability service (local to this worker)
@@ -37,7 +37,7 @@ services:
 
   # GPU Node 0
   gpu0:
-    image: ghcr.io/succinctlabs/sp1-cluster-wip:node-gpu-8ddc0ef
+    image: ghcr.io/succinctlabs/sp1-cluster:node-gpu-latest
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:

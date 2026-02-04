@@ -5,9 +5,9 @@ env:
 
 on:
   push:
-    branches: [main, staging, multilinear_v6]
+    branches: [main, staging]
   pull_request:
-    branches: [main, staging, multilinear_v6]
+    branches: [main, staging]
   workflow_dispatch:
 
 jobs:
