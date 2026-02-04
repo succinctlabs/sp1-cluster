@@ -27,7 +27,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
         }
 
         // Note: inputs[3] contains cycle_limit and inputs[4] is reserved.
-        // The controller passes all inputs to sp1-wip. Cycle limit enforcement
+        // The controller passes all inputs to the SP1 prover. Cycle limit enforcement
         // is handled by the executor cluster running execute_only tasks before
         // the prover cluster starts proving.
 

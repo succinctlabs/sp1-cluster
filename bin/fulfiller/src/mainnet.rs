@@ -249,10 +249,12 @@ impl FulfillmentNetwork for MainnetFulfiller {
             expiry: None,
         };
         let network_artifact_type = (artifact_type as i32).try_into()?;
+        let region = std::env::var("FULFILLER_NETWORK_S3_REGION")
+            .unwrap_or_else(|_| "us-east-2".to_string());
         let bytes = artifact
             .download_raw_from_uri_par(
                 uri,
-                "us-east-2", // TODO: region
+                &region,
                 network_artifact_type,
                 Some(
                     std::env::var("FULFILLER_S3_CONCURRENCY")

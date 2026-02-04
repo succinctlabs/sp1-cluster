@@ -27,7 +27,7 @@ fn build_env_filter(base: Option<EnvFilter>) -> EnvFilter {
         .add_directive("p3_challenger=off".parse().unwrap());
 
     let filter = with_sp1_debug(filter);
-    let filter = with_cuslop_debug(filter);
+    let filter = with_sp1_gpu_debug(filter);
     with_slop_debug(filter)
 }
 
@@ -54,7 +54,7 @@ fn with_sp1_debug(env_filter: EnvFilter) -> EnvFilter {
         .add_directive("sp1_verifier=debug".parse().unwrap())
 }
 
-fn with_cuslop_debug(env_filter: EnvFilter) -> EnvFilter {
+fn with_sp1_gpu_debug(env_filter: EnvFilter) -> EnvFilter {
     env_filter
         .add_directive("sp1_gpu_air=debug".parse().unwrap())
         .add_directive("sp1_gpu_basefold=debug".parse().unwrap())

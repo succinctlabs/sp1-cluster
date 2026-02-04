@@ -285,7 +285,7 @@ async fn run_worker<A: ArtifactClient>(
 
         // Setup logging/tracing resource values.
         let params = vec![
-            KeyValue::new("service.name", "sp1-api2-client"),
+            KeyValue::new("service.name", "sp1-cluster-node"),
             KeyValue::new("node.cluster", cluster),
             KeyValue::new("node.id", worker_id.clone()),
         ];
@@ -682,11 +682,18 @@ fn start_profiling() -> Option<PyroscopeAgent<PyroscopeAgentRunning>> {
         let application_name = "sp1-cluster";
 
         let worker_type = std::env::var("WORKER_TYPE").unwrap();
+        let env_tag = std::env::var("PYROSCOPE_ENV").unwrap_or_else(|_| "default".to_string());
 
         let agent = PyroscopeAgent::builder(url, application_name.to_string())
             .basic_auth(user, password)
             .backend(pprof_backend(PprofConfig::new().sample_rate(samplerate)))
-            .tags([("env", "chris-k8s"), ("worker_type", &worker_type)].to_vec())
+            .tags(
+                [
+                    ("env", env_tag.as_str()),
+                    ("worker_type", worker_type.as_str()),
+                ]
+                .to_vec(),
+            )
             .build()
             .unwrap();
 

@@ -44,4 +44,4 @@ tokio.workspace = true
 tonic.workspace = true
 tracing.workspace = true
 
-num_cpus = { version = "*" }
+num_cpus = "1.16"
