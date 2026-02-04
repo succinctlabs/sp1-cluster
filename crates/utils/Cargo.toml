@@ -14,5 +14,3 @@ sp1-prover-types = { workspace = true }
 sp1-sdk = { workspace = true, features = ["native-gnark"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
-
-[build-dependencies]

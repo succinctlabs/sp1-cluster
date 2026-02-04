@@ -53,7 +53,6 @@ async fn build_worker<A: ArtifactClient, W: WorkerClient>(
 ) -> Result<SP1Worker<A, W, ClusterProverComponents>> {
     sp1_gpu_prover::cuda_worker_builder(backend)
         .await
-        // sp1_gpu_prover::cuda_worker_builder(backend)
         .with_config(|conf| *conf = cluster_worker_config())
         .with_artifact_client(artifact_client)
         .with_worker_client(worker_client)
