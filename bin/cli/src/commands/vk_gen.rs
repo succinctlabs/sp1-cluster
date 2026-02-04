@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime};
 
-use clap::{Args, Subcommand};
+use clap::Subcommand;
 use either::Either;
 use eyre::Result;
 use rand::Rng;
@@ -18,40 +18,6 @@ use sp1_prover_types::{
 use sp1_sdk::network::proto::types::ProofMode;
 
 pub const VK_GEN_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 4);
-
-#[derive(Debug, Args)]
-pub struct CommonArgs {
-    /// The cluster API gRPC endpoint.
-    #[arg(long, env = "CLI_CLUSTER_RPC")]
-    pub cluster_rpc: String,
-
-    /// Whether to execute the proof request before submitting it to the cluster.
-    #[arg(long, default_value_t = false)]
-    pub execute: bool,
-
-    /// The S3 bucket the cluster artifact store is using.
-    #[arg(long, env = "CLI_S3_BUCKET")]
-    pub s3_bucket: Option<String>,
-
-    /// The S3 region the cluster artifact store is using.
-    #[arg(long, env = "CLI_S3_REGION")]
-    pub s3_region: Option<String>,
-
-    /// The Redis nodes the cluster artifact store is using. If not specified, the artifact store will be S3.
-    #[arg(long, env = "CLI_REDIS_NODES")]
-    pub redis_nodes: Option<String>,
-
-    #[arg(short, long, default_value="compressed", value_parser = parse_proof_mode)]
-    pub mode: ProofMode,
-
-    #[arg(short, long, default_value_t = 1)]
-    pub count: u32,
-}
-
-pub fn parse_proof_mode(s: &str) -> Result<ProofMode> {
-    ProofMode::from_str_name(&s.to_ascii_uppercase())
-        .ok_or_else(|| eyre::eyre!("Invalid proof mode"))
-}
 
 #[derive(Subcommand)]
 pub enum BuildVkeys {
