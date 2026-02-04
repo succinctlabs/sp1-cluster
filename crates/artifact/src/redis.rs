@@ -90,7 +90,6 @@ impl RedisArtifactClient {
                 .get::<_, Vec<u8>>(key)
                 .await
                 .map_err(|e| backoff::Error::transient(e.into()))?;
-            let result = zstd::decode_all(result.as_slice()).unwrap();
             tracing::info!("download took {:?}, size: {}", now.elapsed(), result.len());
             return Ok(result);
         }
@@ -132,13 +131,8 @@ impl RedisArtifactClient {
 
         // Combine chunks
         result.extend(chunks.into_iter().flatten());
-        let decoded = tracing::info_span!("decoding").in_scope(|| {
-            let decoded = zstd::decode_all(result.as_slice()).unwrap();
-            tracing::info!("decoded size: {}", decoded.len());
-            decoded
-        });
-        tracing::info!("download took {:?}, size: {}", now.elapsed(), decoded.len());
-        Ok(decoded)
+        tracing::info!("download took {:?}, size: {}", now.elapsed(), result.len());
+        Ok(result)
     }
 
     async fn par_upload_file(
@@ -150,9 +144,6 @@ impl RedisArtifactClient {
         let mut conn = self.get_redis_connection(key).await?;
         let now = std::time::Instant::now();
         let key = key.to_string();
-        // TODO: only compress if it's larger than some threshold.
-        let serialized =
-            zstd::encode_all(serialized, 0).map_err(|e| backoff::Error::permanent(e.into()))?;
         let size = serialized.len();
 
         if serialized.len() <= CHUNK_SIZE {
@@ -203,20 +194,18 @@ impl RedisArtifactClient {
 
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(60);
 
-impl ArtifactClient for RedisArtifactClient {
-    #[instrument(name = "upload", level = "debug", fields(id = artifact.id()), skip(self, artifact, data))]
-    async fn upload_raw(
+impl RedisArtifactClient {
+    /// Shared upload helper: backoff + timeout around par_upload_file.
+    async fn upload_to_transport(
         &self,
-        artifact: &impl ArtifactId,
         artifact_type: ArtifactType,
-        data: Vec<u8>,
+        artifact_id: &str,
+        data: &[u8],
     ) -> Result<()> {
-        let artifact_id = artifact.id();
-
         backoff_retry(self.backoff.clone(), || async {
             match tokio::time::timeout(
                 TRANSFER_TIMEOUT,
-                self.par_upload_file(artifact_type, artifact_id, &data),
+                self.par_upload_file(artifact_type, artifact_id, data),
             )
             .await
             {
@@ -248,6 +237,22 @@ impl ArtifactClient for RedisArtifactClient {
             }
         })
     }
+}
+
+impl ArtifactClient for RedisArtifactClient {
+    #[instrument(name = "upload", level = "debug", fields(id = artifact.id()), skip(self, artifact, data))]
+    async fn upload_raw(
+        &self,
+        artifact: &impl ArtifactId,
+        artifact_type: ArtifactType,
+        data: Vec<u8>,
+    ) -> Result<()> {
+        // zstd level 0: fast compression for ephemeral Redis storage (4-hour TTL)
+        let compressed = zstd::encode_all(data.as_slice(), 0)
+            .map_err(|e| anyhow!("Failed to compress artifact: {}", e))?;
+        self.upload_to_transport(artifact_type, artifact.id(), &compressed)
+            .await
+    }
 
     #[instrument(name = "download", level = "debug", fields(id = artifact.id()), skip(self, artifact))]
     async fn download_raw(
@@ -258,7 +263,7 @@ impl ArtifactClient for RedisArtifactClient {
         let artifact_id = artifact.id();
         let timeout_duration = Duration::from_secs(60);
 
-        backoff_retry(self.backoff.clone(), || async {
+        let compressed = backoff_retry(self.backoff.clone(), || async {
             match tokio::time::timeout(
                 timeout_duration,
                 self.par_download_file(artifact_type, artifact_id),
@@ -291,7 +296,11 @@ impl ArtifactClient for RedisArtifactClient {
             } else {
                 anyhow!("Download failed for artifact {}: {}", artifact_id, e)
             }
-        })
+        })?;
+
+        let decoded = zstd::decode_all(compressed.as_slice())
+            .map_err(|e| anyhow!("Failed to decompress artifact: {}", e))?;
+        Ok(decoded)
     }
 
     async fn exists(&self, artifact: &impl ArtifactId, _: ArtifactType) -> Result<bool> {
@@ -423,5 +432,19 @@ impl ArtifactClient for RedisArtifactClient {
             self.try_delete(artifact, artifact_type).await?;
         }
         Ok(should_delete)
+    }
+}
+
+impl crate::CompressedUpload for RedisArtifactClient {
+    #[instrument(name = "upload_compressed", level = "debug", fields(id = artifact.id()), skip(self, artifact, data))]
+    async fn upload_raw_compressed(
+        &self,
+        artifact: &impl ArtifactId,
+        artifact_type: ArtifactType,
+        data: Vec<u8>,
+    ) -> Result<()> {
+        // Data is already zstd-compressed, write directly to transport layer
+        self.upload_to_transport(artifact_type, artifact.id(), &data)
+            .await
     }
 }

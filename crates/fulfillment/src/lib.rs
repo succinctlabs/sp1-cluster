@@ -3,7 +3,7 @@ use crate::network::{FulfillmentNetwork, NetworkRequest};
 use alloy_primitives::{Address, B256};
 use anyhow::{anyhow, Result};
 use futures::{future::join_all, TryFutureExt};
-use sp1_cluster_artifact::{ArtifactClient, ArtifactType};
+use sp1_cluster_artifact::{ArtifactClient, ArtifactType, CompressedUpload};
 use sp1_cluster_common::{
     client::ClusterServiceClient,
     proto::{
@@ -38,7 +38,7 @@ const VK_MISMATCH_STRINGS: &[&str] = &[
 ];
 
 #[derive(Clone)]
-pub struct Fulfiller<A: ArtifactClient, N: FulfillmentNetwork> {
+pub struct Fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> {
     network: N,
     cluster: ClusterServiceClient,
     cluster_artifact_client: A,
@@ -54,7 +54,7 @@ pub struct Fulfiller<A: ArtifactClient, N: FulfillmentNetwork> {
     request_probability: f64,
 }
 
-impl<A: ArtifactClient, N: FulfillmentNetwork> Fulfiller<A, N> {
+impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         network: N,
@@ -558,8 +558,9 @@ impl<A: ArtifactClient, N: FulfillmentNetwork> Fulfiller<A, N> {
                 .network
                 .download_artifact(&id, uri, artifact_type)
                 .await?;
+            // Bytes from network bucket are already zstd-compressed, bypass compression
             self.cluster_artifact_client
-                .upload_raw(&id, artifact_type, bytes)
+                .upload_raw_compressed(&id, artifact_type, bytes)
                 .await?;
         }
         Ok(())

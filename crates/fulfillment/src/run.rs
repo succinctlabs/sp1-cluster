@@ -2,7 +2,7 @@ use crate::{
     config::FulfillerSettings, metrics::FulfillerMetrics, network::FulfillmentNetwork, Fulfiller,
 };
 use anyhow::Result;
-use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_artifact::{ArtifactClient, CompressedUpload};
 use sp1_cluster_common::client::ClusterServiceClient;
 use sp1_sdk::network::signer::NetworkSigner;
 use spn_metrics::{
@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::{signal, sync::oneshot};
 use tracing::{error, info, warn};
 
-pub async fn run_fulfiller<A: ArtifactClient, N: FulfillmentNetwork>(
+pub async fn run_fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork>(
     artifact_client: A,
     network: N,
     settings: &FulfillerSettings,

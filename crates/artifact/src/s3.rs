@@ -1,4 +1,4 @@
-use crate::{s3_rest::S3RestClient, s3_sdk::S3SDKClient};
+use crate::{s3_rest::S3RestClient, s3_sdk::S3SDKClient, CompressedUpload};
 use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType};
 
 use anyhow::{anyhow, Result};
@@ -161,9 +161,7 @@ impl S3ArtifactClient {
                 }
             })
             .await?;
-            let decoded = zstd::decode_all(bytes.as_slice())
-                .map_err(|e| anyhow!("Failed to decompress artifact: {}", e))?;
-            return Ok(decoded);
+            return Ok(bytes);
         }
 
         let starts = (0..size)
@@ -232,9 +230,7 @@ impl S3ArtifactClient {
             }
         }
 
-        let decoded = zstd::decode_all(result.as_slice())
-            .map_err(|e| anyhow!("Failed to decompress artifact: {}", e))?;
-        Ok(decoded)
+        Ok(result)
     }
 
     async fn par_upload_file(
@@ -245,22 +241,18 @@ impl S3ArtifactClient {
     ) -> Result<()> {
         let key = Self::get_s3_key_from_id(artifact_type, id);
 
-        // Compress data before uploading
-        let compressed = zstd::encode_all(data.as_slice(), 0)
-            .map_err(|e| anyhow!("Failed to compress artifact: {}", e))?;
-
         // If the file is smaller than the chunk size, just upload it.
-        if compressed.len() <= CHUNK_SIZE {
+        if data.len() <= CHUNK_SIZE {
             self.sdk_client
                 .put_object()
                 .bucket(&self.bucket)
                 .key(key)
-                .body(compressed.into())
+                .body(data.into())
                 .send()
                 .await?;
             return Ok(());
         }
-        let data = Arc::new(compressed);
+        let data = Arc::new(data);
 
         let create_multipart_upload = self
             .sdk_client
@@ -357,7 +349,10 @@ impl ArtifactClient for S3ArtifactClient {
         artifact_type: ArtifactType,
         data: Vec<u8>,
     ) -> Result<()> {
-        self.par_upload_file(artifact_type, artifact.id(), data)
+        // zstd level 3: good compression ratio for persistent S3 storage
+        let compressed = zstd::encode_all(data.as_slice(), 3)
+            .map_err(|e| anyhow!("Failed to compress artifact: {}", e))?;
+        self.par_upload_file(artifact_type, artifact.id(), compressed)
             .await
     }
 
@@ -367,7 +362,10 @@ impl ArtifactClient for S3ArtifactClient {
         artifact: &impl ArtifactId,
         artifact_type: ArtifactType,
     ) -> Result<Vec<u8>> {
-        self.par_download_file(artifact_type, artifact.id()).await
+        let compressed = self.par_download_file(artifact_type, artifact.id()).await?;
+        let decoded = zstd::decode_all(compressed.as_slice())
+            .map_err(|e| anyhow!("Failed to decompress artifact: {}", e))?;
+        Ok(decoded)
     }
 
     async fn exists(
@@ -428,5 +426,19 @@ impl ArtifactClient for S3ArtifactClient {
         }
 
         Ok(())
+    }
+}
+
+impl CompressedUpload for S3ArtifactClient {
+    #[instrument(name = "upload_compressed", level = "info", fields(id = artifact.id()), skip(self, artifact, data))]
+    async fn upload_raw_compressed(
+        &self,
+        artifact: &impl ArtifactId,
+        artifact_type: ArtifactType,
+        data: Vec<u8>,
+    ) -> Result<()> {
+        // Data is already zstd-compressed, write directly to transport layer
+        self.par_upload_file(artifact_type, artifact.id(), data)
+            .await
     }
 }
