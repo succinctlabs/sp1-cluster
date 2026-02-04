@@ -77,21 +77,6 @@ services:
         - private_pull_token
     command: ["/bin/sh", "-c", "/coordinator"]
 
-  # mixed:
-  #   extends:
-  #     file: docker-compose.yml
-  #     service: mixed
-  #   image: sp1-cluster-local:mixed
-  #   pull_policy: build
-  #   env_file: .env
-  #   build:
-  #     context: ..
-  #     dockerfile: infra/Dockerfile.node_gpu
-  #     args:
-  #       GITHUB_TOKEN: ${GITHUB_TOKEN}
-  #   command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
-  #   runtime: nvidia
-
   cpu-node:
     extends:
       file: docker-compose.yml
@@ -118,12 +103,6 @@ services:
       dockerfile: infra/Dockerfile
       secrets:
         - private_pull_token
-    deploy:
-      resources:
-        limits:
-          memory: 64G
-        reservations:
-          memory: 32G
     command: ["/bin/sh", "-c", "/node"]
     volumes:
       - ~/.sp1/circuits:/home/appuser/.sp1/circuits

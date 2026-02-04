@@ -34,9 +34,9 @@ RUN wget -q https://golang.org/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
     rm go${GO_VERSION}.linux-amd64.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Install sp1 toolchain. TODO: change this for v6 once sp1up is out.
+# Install sp1 toolchain
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-RUN curl -L https://sp1.succinct.xyz | bash && ~/.sp1/bin/sp1up --version 5.2.4
+RUN curl -L https://sp1.succinct.xyz | bash && ~/.sp1/bin/sp1up --version 6.0.0-beta.1
 
 # Install protoc
 ENV PROTOC_ZIP=protoc-29.4-linux-x86_64.zip
@@ -79,7 +79,7 @@ RUN \
     echo "Using HTTPS + token for git (private cargo deps enabled)" >&2; \
     fi; \
     echo "Building with profile: $BUILD_PROFILE | features: $FEATURES | rustflags: $RUSTFLAGS" && \
-    RUSTFLAGS="--cfg tokio_unstable" cargo build --profile $BUILD_PROFILE --features "$FEATURES" \
+    cargo build --profile $BUILD_PROFILE --features "$FEATURES" \
     --bin sp1-cluster-api \
     --bin sp1-cluster-bidder \
     --bin sp1-cluster-cli \

@@ -1,5 +1,4 @@
 # Management Node Docker Compose
-# This runs on the management node at 142.214.185.21
 # Includes: API, Coordinator, CPU Node, Redis, PostgreSQL, Alloy
 
 services:

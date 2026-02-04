@@ -111,8 +111,6 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                                 continue;
                             };
                             // TODO: could bulk create
-                            // Note: inputs[3] is cycle_limit. inputs[4] (proof_nonce) is omitted
-                            // to let sp1-wip controller use the default value.
                             let inputs = vec![
                                 proof.program_artifact_id,
                                 proof.stdin_artifact_id,
