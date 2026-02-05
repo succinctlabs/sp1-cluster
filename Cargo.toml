@@ -45,24 +45,24 @@ spn-network-types = { git = "https://github.com/succinctlabs/network", branch = 
 spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
 
 # SP1
-sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
-sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1", features = [
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "14c0e5d" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "14c0e5d", features = [
     "bigint-rug",
 ] }
-sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
-sp1-primitives = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
-sp1-prover = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
-sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
-sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
-sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
-sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "14c0e5d" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "14c0e5d" }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "14c0e5d" }
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "14c0e5d" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "14c0e5d" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "14c0e5d" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "14c0e5d" }
 sp1-sdk = { git = "https://github.com/succinctlabs/sp1", features = [
     "network",
-], tag = "v6.0.0-beta.1" }
+], rev = "14c0e5d" }
 
 # SP1 GPU
-sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
-sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
+sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "14c0e5d" }
+sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "14c0e5d" }
 
 # Misc
 alloy = { version = "=1.1.3", default-features = false, features = ["serde"] }
