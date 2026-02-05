@@ -94,12 +94,12 @@ gpu-node:
       # Each GPU pod should have at least 16GB RAM and as many cores as possible.
       # Also, only certain GPUs with >=24GB RAM are supported.
       nvidia.com/gpu: 1
-      cpu: 32.0
-      memory: 24Gi
+      # cpu: 32.0
+      # memory: 24Gi
     limits:
       nvidia.com/gpu: 1
-      cpu: 32.0
-      memory: 24Gi
+      # cpu: 32.0
+      # memory: 24Gi
   image:
     tag: "node-gpu-v1.0.4"
   imagePullSecrets:
@@ -144,6 +144,8 @@ coordinator:
 postgresql:
   enabled: true
   fullnameOverride: postgresql
+  image:
+    repository: bitnami/postgresql
   auth:
     # Change this to a secure password.
     postgresPassword: postgrespassword
@@ -170,7 +172,7 @@ fulfiller:
     FULFILLER_CLUSTER_ARTIFACT_STORE: redis
     # Ensure these five env vars are set correctly.
     FULFILLER_RPC_GRPC_ADDR: https://rpc.sepolia.succinct.xyz
-    FULFILLER_VERSION: sp1-v5.0.0
+    FULFILLER_VERSION: sp1-v6.0.0
     FULFILLER_DOMAIN: SPN_SEPOLIA_V1_DOMAIN
     FULFILLER_CLUSTER_REDIS_NODES:
       valueFrom:
@@ -198,7 +200,7 @@ bidder:
     BIDDER_LOG_FORMAT: Pretty
     # Ensure these env vars are set correctly.
     BIDDER_RPC_GRPC_ADDR: https://rpc.sepolia.succinct.xyz
-    BIDDER_VERSION: sp1-v5.0.0
+    BIDDER_VERSION: sp1-v6.0.0
     BIDDER_DOMAIN: SPN_SEPOLIA_V1_DOMAIN
     BIDDER_SP1_PRIVATE_KEY:
       valueFrom:

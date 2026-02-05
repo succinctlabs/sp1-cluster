@@ -1,0 +1,116 @@
+# Management Node Docker Compose
+# Includes: API, Coordinator, CPU Node, Redis, PostgreSQL, Alloy
+
+services:
+  # Alloy observability service (local to management node)
+  alloy:
+    build:
+      context: .
+      dockerfile: Dockerfile.alloy
+    volumes:
+      - ./config.alloy:/etc/alloy/test.alloy
+    ports:
+      - "12345:12345"
+      - "4317:4317"
+      - "4318:4318"
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/test.alloy"]
+
+  # Redis service (exposed for GPU workers)
+  redis:
+    image: bitnamisecure/redis:latest
+    environment:
+      - REDIS_PASSWORD=redispassword
+      - REDIS_AOF_ENABLED=no
+      - REDIS_MAXMEMORY=25gb
+      - REDIS_MAXMEMORY_POLICY=volatile-lru
+    volumes:
+      - redis_data:/bitnami/redis/data
+    ports:
+      - "0.0.0.0:6379:6379"
+    deploy:
+      resources:
+        limits:
+          memory: 100G
+        reservations:
+          memory: 100G
+
+  # PostgreSQL database (internal only)
+  # docker compose -f docker-compose.manager.yml exec postgresql psql -U  postgres -d postgres
+  postgresql:
+    image: bitnamisecure/postgresql:latest
+    environment:
+      - POSTGRES_PASSWORD=postgrespassword
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+    volumes:
+      - postgresql_data:/bitnami/postgresql
+
+  # API Service (exposed for external access and GPU workers)
+  api:
+    image: ghcr.io/succinctlabs/sp1-cluster:latest
+    environment:
+      - API_GRPC_ADDR=0.0.0.0:50051
+      - API_HTTP_ADDR=0.0.0.0:3000
+      - API_AUTO_MIGRATE=true
+      - API_DATABASE_URL=postgresql://postgres:postgrespassword@postgresql:5432/postgres
+      - OTLP_ENDPOINT=http://alloy:4317
+      - RUST_LOG=debug,tower=info,h2=info,tonic-web=info,hyper-util=info
+    ports:
+      - "0.0.0.0:50051:50051"
+      - "0.0.0.0:3000:3000"
+    depends_on:
+      - postgresql
+      - alloy
+
+  # Coordinator Service (exposed for GPU workers)
+  coordinator:
+    image: ghcr.io/succinctlabs/sp1-cluster:latest
+    environment:
+      - COORDINATOR_CLUSTER_RPC=http://api:50051
+      - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
+      - COORDINATOR_ADDR=0.0.0.0:50051
+      - RUST_LOG=debug,tower=info,h2=info,tonic-web=info
+      - OTLP_ENDPOINT=http://alloy:4317
+    command: ["/bin/sh", "-c", "/coordinator"]
+    ports:
+      - "0.0.0.0:50053:50051"
+    depends_on:
+      - api
+
+  # CPU Node (local to management node)
+  cpu-node:
+    image: ghcr.io/succinctlabs/sp1-cluster:latest
+    environment:
+      - NODE_COORDINATOR_RPC=http://coordinator:50051
+      - WORKER_MAX_WEIGHT_OVERRIDE=32
+      - NODE_ARTIFACT_STORE=redis
+      - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
+      - WORKER_TYPE=CPU
+      - TRACING_ENABLED=true
+      - SP1_WORKER_NUM_SPLICING_WORKERS=12
+      - SP1_WORKER_SPLICING_BUFFER_SIZE=12
+      - SP1_WORKER_NUMBER_OF_SEND_SPLICE_WORKERS_PER_SPLICE=4
+      - SP1_WORKER_SEND_SPLICE_INPUT_BUFFER_SIZE_PER_SPLICE=4
+      # - SP1_WORKER_USE_FIXED_PK=true
+      - MINIMAL_TRACE_CHUNK_THRESHOLD=33554432
+      - RUST_LOG=debug,tower=info,h2=info
+      - OTLP_ENDPOINT=http://alloy:4317
+      - PROOF_DURATIONS_CSV=/data/proof_durations.csv
+    volumes:
+      - ${HOME}/.sp1/circuits:/root/.sp1/circuits
+      - ./data:/data
+    command: ["/bin/sh", "-c", "/node"]
+    deploy:
+      resources:
+        limits:
+          memory: 80G
+        reservations:
+          memory: 80G
+
+    depends_on:
+      - coordinator
+      - redis
+
+volumes:
+  redis_data:
+  postgresql_data:

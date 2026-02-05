@@ -1,11 +1,9 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
-
 use crate::metrics::FulfillerMetrics;
+use crate::network::{FulfillmentNetwork, NetworkRequest};
 use alloy_primitives::{Address, B256};
-use alloy_signer_local::PrivateKeySigner;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use futures::{future::join_all, TryFutureExt};
-use sp1_cluster_artifact::{ArtifactClient, ArtifactType};
+use sp1_cluster_artifact::{ArtifactClient, ArtifactType, CompressedUpload};
 use sp1_cluster_common::{
     client::ClusterServiceClient,
     proto::{
@@ -13,21 +11,17 @@ use sp1_cluster_common::{
         ProofRequestListRequest, ProofRequestStatus, ProofRequestUpdateRequest,
     },
 };
-use spn_artifacts::{extract_artifact_name, Artifact};
-use spn_network_types::{
-    prover_network_client::ProverNetworkClient, ExecutionStatus, FailFulfillmentRequest,
-    FailFulfillmentRequestBody, FulfillProofRequest, FulfillProofRequestBody, FulfillmentStatus,
-    GetNonceRequest, GetOwnerRequest, MessageFormat, ProofRequestError, Signable,
-    TransactionVariant,
-};
-use spn_utils::time_now;
+use sp1_sdk::network::signer::NetworkSigner;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::{task::JoinSet, time::sleep};
-use tonic::{transport::Channel, Code};
 use tracing::{debug, error, info, instrument};
 
 pub mod config;
 pub mod grpc;
 pub mod metrics;
+pub mod network;
+pub mod run;
 
 /// How long to wait between checking for requesters to start proving on and fulfilling proofs.
 ///
@@ -44,30 +38,36 @@ const VK_MISMATCH_STRINGS: &[&str] = &[
 ];
 
 #[derive(Clone)]
-pub struct Fulfiller<A: ArtifactClient> {
-    network: ProverNetworkClient<Channel>,
+pub struct Fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> {
+    network: N,
     cluster: ClusterServiceClient,
     cluster_artifact_client: A,
     version: String,
     domain: B256,
-    signer: PrivateKeySigner,
     metrics: FulfillerMetrics,
     addresses: Option<Vec<Address>>,
+    signer: NetworkSigner,
     copy_artifacts: bool,
+    /// Disable sending fulfillment requests to the network (for testing/dry-run)
+    disable_fulfillment: bool,
+    /// Probability (0.0-1.0) of processing a request. Default is 1.0 (100%).
+    request_probability: f64,
 }
 
-impl<A: ArtifactClient> Fulfiller<A> {
+impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        network: ProverNetworkClient<Channel>,
+        network: N,
         cluster: ClusterServiceClient,
         cluster_artifact_client: A,
         version: String,
         domain: B256,
-        signer: PrivateKeySigner,
         metrics: FulfillerMetrics,
         addresses: Option<Vec<Address>>,
+        signer: NetworkSigner,
         copy_artifacts: bool,
+        disable_fulfillment: bool,
+        request_probability: f64,
     ) -> Self {
         Self {
             network,
@@ -75,29 +75,22 @@ impl<A: ArtifactClient> Fulfiller<A> {
             cluster_artifact_client,
             version,
             domain,
-            signer,
             metrics,
             addresses,
+            signer,
             copy_artifacts,
+            disable_fulfillment,
+            request_probability,
         }
     }
 
     /// Runs the fulfiller loop.
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(self: Arc<Self>) -> Result<()> {
         info!("starting the fulfiller");
 
         // Get the prover.
         // TODO: Use backoff here.
-        let prover_bytes = self
-            .network
-            .clone()
-            .get_owner(GetOwnerRequest {
-                address: self.signer.address().to_vec(),
-            })
-            .await?
-            .into_inner()
-            .owner;
-        let prover = Address::from_slice(&prover_bytes);
+        let prover = self.network.init(&self.signer).await?;
         info!("prover address: {}", prover);
 
         loop {
@@ -128,7 +121,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
 
     /// Checks for submitable proofs that are in the cluster and submits them to the network.
     #[instrument(skip_all)]
-    async fn submit_requests(&self) -> Result<()> {
+    async fn submit_requests(self: &Arc<Self>) -> Result<()> {
         // Get all submitable requests from the cluster.
         let requests = self
             .cluster
@@ -139,7 +132,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 handled: Some(false),
                 ..Default::default()
             })
-            .map_err(|e| anyhow!("failed to get requests: {e}"))
+            .map_err(|e| anyhow!("failed to get requests: {}", e))
             .await?;
         debug!("got requests: {:?}", requests);
 
@@ -169,10 +162,15 @@ impl<A: ArtifactClient> Fulfiller<A> {
                         // expected for the program.
                         let err_text = format!("{e:?}");
                         if VK_MISMATCH_STRINGS.iter().any(|s| err_text.contains(s)) {
+                            // ProofRequestError::VerificationKeyMismatch = 2
+                            const VK_MISMATCH_ERROR: i32 = 2;
                             match self_clone
-                                .fail_request(
+                                .network
+                                .fail_request_with_error(
                                     &request_id,
-                                    Some(ProofRequestError::VerificationKeyMismatch as i32),
+                                    Some(VK_MISMATCH_ERROR),
+                                    self_clone.domain.as_slice(),
+                                    &self_clone.signer,
                                 )
                                 .await
                             {
@@ -201,26 +199,21 @@ impl<A: ArtifactClient> Fulfiller<A> {
 
     async fn submit_request(&self, request: ProofRequest) -> Result<()> {
         // Download the raw proof bytes from the artifact.
-        let id = request
-            .proof_artifact_id
-            .clone()
-            .ok_or(anyhow!("no proof artifact id"))?;
-        let proof_bytes = self
-            .cluster_artifact_client
-            .download_raw(&id, sp1_cluster_artifact::ArtifactType::Proof)
-            .await?;
+        let proof_bytes = if let Some(id) = request.proof_artifact_id.clone() {
+            if N::should_download_proofs() {
+                let proof_bytes = self
+                    .cluster_artifact_client
+                    .download_raw(&id, sp1_cluster_artifact::ArtifactType::Proof)
+                    .await?;
+                Some(proof_bytes)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
-        // Submit the fulfill request to the network.
-        let nonce = self
-            .network
-            .clone()
-            .get_nonce(GetNonceRequest {
-                address: self.signer.address().to_vec(),
-            })
-            .await?
-            .into_inner()
-            .nonce;
-        let Ok(request_id) = hex::decode(request.id.clone()) else {
+        let Ok(_) = hex::decode(request.id.clone()) else {
             tracing::warn!("ignoring request with invalid id {}", request.id);
 
             // Update the status to fulfilled on the cluster.
@@ -230,24 +223,17 @@ impl<A: ArtifactClient> Fulfiller<A> {
                     handled: Some(true),
                     ..Default::default()
                 })
-                .map_err(|e| anyhow!("failed to update proof request status: {e}"))
+                .map_err(|e| anyhow!("failed to update proof request status: {}", e))
                 .await?;
             return Ok(());
         };
-        let body = FulfillProofRequestBody {
-            nonce,
-            request_id,
-            proof: proof_bytes,
-            reserved_metadata: None,
-            domain: self.domain.clone().to_vec(),
-            variant: TransactionVariant::FulfillVariant.into(),
-        };
-        let fulfill_request = FulfillProofRequest {
-            format: MessageFormat::Binary.into(),
-            signature: body.sign(&self.signer).into(),
-            body: Some(body),
-        };
-        self.network.clone().fulfill_proof(fulfill_request).await?;
+
+        // Submit the fulfill request to the network.
+        if !self.disable_fulfillment {
+            self.network
+                .submit_request(&request, proof_bytes, self.domain.as_slice(), &self.signer)
+                .await?;
+        }
 
         // Update the status to fulfilled on the cluster.
         self.cluster
@@ -256,19 +242,21 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 handled: Some(true),
                 ..Default::default()
             })
-            .map_err(|e| anyhow!("failed to update proof request status: {e}"))
+            .map_err(|e| anyhow!("failed to update proof request status: {}", e))
             .await?;
 
-        // Clean up the proof artifact since it's no longer needed
-        self.cluster_artifact_client
-            .try_delete(&id, sp1_cluster_artifact::ArtifactType::Proof)
-            .await;
+        if let Some(id) = request.proof_artifact_id.clone() {
+            // Clean up the proof artifact since it's no longer needed
+            self.cluster_artifact_client
+                .try_delete(&id, sp1_cluster_artifact::ArtifactType::Proof)
+                .await?;
+        }
 
         Ok(())
     }
 
     /// Checks for requests on the cluster that have failed and fails them on the network.
-    async fn fail_requests(&self) -> Result<()> {
+    async fn fail_requests(self: &Arc<Self>) -> Result<()> {
         // Get all failed requests from the cluster.
         let requests = self
             .cluster
@@ -279,7 +267,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 handled: Some(false),
                 ..Default::default()
             })
-            .map_err(|e| anyhow!("failed to get requests: {e}"))
+            .map_err(|e| anyhow!("failed to get requests: {}", e))
             .await?;
         self.metrics.failable_requests.set(requests.len() as f64);
 
@@ -291,9 +279,9 @@ impl<A: ArtifactClient> Fulfiller<A> {
 
         let failure_tasks = requests.into_iter().map(|request| {
             let self_clone = self.clone();
-            let request_id = request.id;
             tokio::spawn(async move {
-                match self_clone.fail_request(request_id.as_str(), None).await {
+                let request_id = request.id.clone();
+                match self_clone.fail_request(request).await {
                     Ok(_) => {
                         info!("failed request 0x{}", request_id);
                         self_clone.metrics.requests_failed.increment(1);
@@ -312,49 +300,22 @@ impl<A: ArtifactClient> Fulfiller<A> {
         Ok(())
     }
 
-    async fn fail_request(&self, request_id: &str, error: Option<i32>) -> Result<()> {
+    async fn fail_request(&self, request: ProofRequest) -> Result<()> {
         // Send the failed fulfillment to the network.
-        let nonce = self
-            .network
-            .clone()
-            .get_nonce(GetNonceRequest {
-                address: self.signer.address().to_vec(),
-            })
-            .await?
-            .into_inner()
-            .nonce;
-        let body = FailFulfillmentRequestBody {
-            nonce,
-            request_id: hex::decode(request_id).context("failed to decode request_id")?,
-            error,
-        };
-        let fail_request = FailFulfillmentRequest {
-            format: MessageFormat::Binary.into(),
-            signature: body.sign(&self.signer).into(),
-            body: Some(body),
-        };
-        if let Err(e) = self.network.clone().fail_fulfillment(fail_request).await {
-            match e.code() {
-                Code::PermissionDenied
-                | Code::FailedPrecondition
-                | Code::NotFound
-                | Code::InvalidArgument => {
-                    tracing::warn!("Fail fulfillment rejected: {:?}", e);
-                }
-                _ => {
-                    return Err(e.into());
-                }
-            }
+        if !self.disable_fulfillment {
+            self.network
+                .fail_request(&request, self.domain.as_slice(), &self.signer)
+                .await?;
         }
 
         // Mark the request as handled in the cluster.
         self.cluster
             .update_proof_request(ProofRequestUpdateRequest {
-                proof_id: request_id.to_string(),
+                proof_id: request.id,
                 handled: Some(true),
                 ..Default::default()
             })
-            .map_err(|e| anyhow!("failed to update proof request status: {e}"))
+            .map_err(|e| anyhow!("failed to update proof request status: {}", e))
             .await?;
 
         Ok(())
@@ -362,45 +323,25 @@ impl<A: ArtifactClient> Fulfiller<A> {
 
     /// Checks for requests in the network that have an ExecutionStatus of UNEXECUTABLE and cancels
     /// them on the cluster.
-    async fn cancel_requests(&self, prover: Address) -> Result<()> {
+    async fn cancel_requests(self: &Arc<Self>, prover: Address) -> Result<()> {
         // Get all requested unexecutable requests from the network that are assigned to our
         // address.
-        let mut queries = vec![];
-        for address in self
+        let fulfiller_addresses = self
             .addresses
             .as_ref()
             .map(|v| v.clone().into_iter().map(|a| a.to_vec()).collect())
-            .unwrap_or(vec![prover.to_vec()])
-        {
-            queries.push(spn_network_types::GetFilteredProofRequestsRequest {
-                version: Some(self.version.clone()),
-                fulfillment_status: Some(FulfillmentStatus::Assigned.into()),
-                execution_status: Some(ExecutionStatus::Unexecutable.into()),
-                execute_fail_cause: None,
-                minimum_deadline: Some(time_now()),
-                vk_hash: None,
-                requester: None,
-                fulfiller: Some(address),
-                limit: Some(REQUEST_LIMIT),
-                page: None,
-                from: None,
-                to: None,
-                mode: None,
-                not_bid_by: None,
-                error: None,
-                settlement_status: None,
-            });
-        }
-        let responses = join_all(queries.into_iter().map(|request| {
-            let mut network = self.network.clone();
-            async move { network.get_filtered_proof_requests(request).await }
-        }))
-        .await;
-        let mut requests = Vec::new();
-        for response in responses {
-            let response = response?;
-            requests.extend(response.into_inner().requests);
-        }
+            .unwrap_or(vec![prover.to_vec()]);
+
+        let requests = self
+            .network
+            .get_cancelable_requests(
+                &self.version,
+                fulfiller_addresses,
+                time_now(),
+                REQUEST_LIMIT,
+            )
+            .await?;
+
         self.metrics.cancelable_requests.set(requests.len() as f64);
 
         if requests.is_empty() {
@@ -411,8 +352,8 @@ impl<A: ArtifactClient> Fulfiller<A> {
 
         let failure_tasks = requests.into_iter().map(|request| {
             let self_clone = self.clone();
-            let request_id = hex::encode(request.request_id);
             tokio::spawn(async move {
+                let request_id = request.request_id();
                 match self_clone.cancel_request(&request_id).await {
                     Ok(_) => {
                         info!("cancelled request 0x{}", request_id);
@@ -435,33 +376,18 @@ impl<A: ArtifactClient> Fulfiller<A> {
     /// Cancels a request by failing fulfillment on the network and unclaming it on the cluster.
     async fn cancel_request(&self, request_id: &str) -> Result<()> {
         // Send the failed fulfillment to the network.
-        let nonce = self
-            .network
-            .clone()
-            .get_nonce(GetNonceRequest {
-                address: self.signer.address().to_vec(),
-            })
-            .await?
-            .into_inner()
-            .nonce;
-        let body = FailFulfillmentRequestBody {
-            nonce,
-            request_id: hex::decode(request_id).context("failed to decode request_id")?,
-            error: None,
-        };
-        let fail_request = FailFulfillmentRequest {
-            format: MessageFormat::Binary.into(),
-            signature: body.sign(&self.signer).into(),
-            body: Some(body),
-        };
-        self.network.clone().fail_fulfillment(fail_request).await?;
+        if !self.disable_fulfillment {
+            self.network
+                .cancel_request(request_id, &self.signer)
+                .await?;
+        }
 
         // Update the status to cancelled on the cluster.
         self.cluster
             .cancel_proof_request(ProofRequestCancelRequest {
                 proof_id: request_id.to_string(),
             })
-            .map_err(|e| anyhow!("failed to update proof request status: {e}"))
+            .map_err(|e| anyhow!("failed to update proof request status: {}", e))
             .await?;
 
         Ok(())
@@ -470,32 +396,35 @@ impl<A: ArtifactClient> Fulfiller<A> {
     /// Schedules the given requests to be fulfilled by the network, accounting for any cluster
     /// requests that are already present.
     async fn schedule_given_requests(
-        &self,
-        get_request: spn_network_types::GetFilteredProofRequestsRequest,
+        self: &Arc<Self>,
+        fulfiller_address: Vec<u8>,
         cluster_requests: &HashSet<String>,
     ) -> Result<usize> {
-        let network_requests_resp = self
+        let network_requests = self
             .network
-            .clone()
-            .get_filtered_proof_requests(get_request)
-            .await?
-            .into_inner()
-            .requests;
+            .get_schedulable_requests(
+                &self.version,
+                vec![fulfiller_address],
+                time_now(),
+                REQUEST_LIMIT,
+            )
+            .await?;
 
         // Filter requested requests that are in the network but not in the cluster. Requests are
         // returned in order of oldest first, so we also reverse to schedule newest requests first
         // instead.
-        let requests: Vec<spn_network_types::ProofRequest> = network_requests_resp
+        let requests: Vec<_> = network_requests
             .into_iter()
             .rev()
             .filter(|request| {
-                let request_id_hex = hex::encode(&request.request_id);
+                let request_id_hex = request.request_id();
 
-                // Skip requests without a fulfiller
-                if request.fulfiller().is_empty() {
-                    info!("skipping request 0x{} without a fulfiller", request_id_hex);
-                    return false;
-                }
+                // If request_probability is 1, skip the deterministic check and process all
+                // requests
+                let is_process_all = self.request_probability == 1.0;
+
+                // Note: We can't check fulfiller via NetworkRequest trait, so we skip this check
+                // The network layer should handle filtering requests with fulfillers
 
                 // Check if it's already in the cluster
                 if cluster_requests.contains(&request_id_hex) {
@@ -503,7 +432,26 @@ impl<A: ArtifactClient> Fulfiller<A> {
                     return false;
                 }
 
-                true
+                // If processing all requests, return true immediately
+                if is_process_all {
+                    return true;
+                }
+
+                // Use a deterministic hash of the request ID to decide whether to process
+                let hash = request_id_hex
+                    .as_bytes()
+                    .iter()
+                    .fold(0u64, |acc, &b| acc.wrapping_add(b as u64));
+                let should_process = (hash % 100) < (self.request_probability * 100.0) as u64;
+
+                if !should_process {
+                    info!(
+                        "deterministically skipping request 0x{} based on hash",
+                        request_id_hex
+                    );
+                }
+
+                should_process
             })
             .collect();
         self.metrics.schedulable_requests.set(requests.len() as f64);
@@ -517,28 +465,21 @@ impl<A: ArtifactClient> Fulfiller<A> {
         // Schedule each request in the cluster to start proving.
         let schedule_tasks = requests.into_iter().map(|request| {
             let self_clone = self.clone();
-            let request_id = request.request_id.clone();
+            let request_id_hex = request.request_id();
             tokio::spawn(async move {
                 tracing::info!(
-                    "scheduling request 0x{} {} {:?} {:?} {:?}",
-                    hex::encode(&request_id),
-                    hex::encode(&request.requester),
-                    request.requester_name,
-                    request.fulfiller.as_ref().map(hex::encode),
-                    request.fulfiller_name,
+                    "scheduling request 0x{} {}",
+                    request_id_hex,
+                    hex::encode(request.requester()),
                 );
                 match self_clone.schedule_request(request).await {
                     Ok(_) => {
-                        info!("scheduled request 0x{}", hex::encode(&request_id));
+                        info!("scheduled request 0x{}", request_id_hex);
                         self_clone.metrics.requests_scheduled.increment(1);
                         self_clone.metrics.total_requests_processed.increment(1);
                     }
                     Err(e) => {
-                        error!(
-                            "failed to schedule request 0x{}: {:?}",
-                            hex::encode(&request_id),
-                            e
-                        );
+                        error!("failed to schedule request 0x{}: {:?}", request_id_hex, e);
                         self_clone.metrics.request_schedule_failures.increment(1);
                     }
                 }
@@ -552,7 +493,7 @@ impl<A: ArtifactClient> Fulfiller<A> {
     /// Checks for assigned requests that are in the network but not in the cluster, and schedules
     /// them in the cluster to start proving.
     #[instrument(skip_all)]
-    async fn schedule_requests(&self, prover: Address) -> Result<()> {
+    async fn schedule_requests(self: &Arc<Self>, prover: Address) -> Result<()> {
         // Get all requested requests from the cluster.
         let cluster_requests_resp = self
             .cluster
@@ -561,37 +502,16 @@ impl<A: ArtifactClient> Fulfiller<A> {
                 minimum_deadline: Some(time_now()),
                 ..Default::default()
             })
-            .map_err(|e| anyhow!("failed to get requests: {e}"))
+            .map_err(|e| anyhow!("failed to get requests: {}", e))
             .await?;
         debug!("cluster_requests_resp: {:?}", cluster_requests_resp);
 
-        // Setup a RPC request for each fulfiller, or just the prover address if the filter's unset.
-        let mut filters = vec![];
-        for address in self
+        // Setup fulfiller addresses for each fulfiller, or just the prover address if the filter's unset.
+        let fulfiller_addresses = self
             .addresses
             .as_ref()
             .map(|v| v.clone().into_iter().map(|a| a.to_vec()).collect())
-            .unwrap_or(vec![prover.to_vec()])
-        {
-            filters.push(spn_network_types::GetFilteredProofRequestsRequest {
-                version: Some(self.version.clone()),
-                fulfillment_status: Some(FulfillmentStatus::Assigned.into()),
-                execution_status: None,
-                execute_fail_cause: None,
-                minimum_deadline: Some(time_now()),
-                vk_hash: None,
-                requester: None,
-                fulfiller: Some(address),
-                limit: Some(REQUEST_LIMIT),
-                page: None,
-                from: None,
-                to: None,
-                mode: None,
-                not_bid_by: None,
-                error: None,
-                settlement_status: None,
-            });
-        }
+            .unwrap_or(vec![prover.to_vec()]);
 
         // Schedule the requests in parallel for each fulfiller.
         let mut join_set = JoinSet::new();
@@ -599,13 +519,13 @@ impl<A: ArtifactClient> Fulfiller<A> {
         let cluster_requests: HashSet<_> =
             cluster_requests_resp.into_iter().map(|r| r.id).collect();
         let cluster_requests = Arc::new(cluster_requests);
-        for request in filters {
+        for address in fulfiller_addresses {
             let self_clone = self.clone();
-            let request = request.clone();
-            let cluster_requests = cluster_requests.clone();
+            let address = address.clone();
+            let cluster_requests_clone = cluster_requests.clone();
             join_set.spawn(async move {
                 self_clone
-                    .schedule_given_requests(request, &cluster_requests)
+                    .schedule_given_requests(address, &cluster_requests_clone)
                     .await
             });
         }
@@ -634,36 +554,27 @@ impl<A: ArtifactClient> Fulfiller<A> {
             .exists(&id, artifact_type)
             .await?
         {
-            let artifact = Artifact {
-                id: id.clone(),
-                label: "".to_string(),
-                expiry: None,
-            };
-            let network_artifact_type = (artifact_type as i32).try_into()?;
-            let bytes = artifact
-                .download_raw_from_uri_par(
-                    uri,
-                    "us-east-2",
-                    network_artifact_type,
-                    Some(
-                        std::env::var("FULFILLER_S3_CONCURRENCY")
-                            .map(|s| s.parse().unwrap_or(32))
-                            .unwrap_or(32),
-                    ),
-                )
+            let bytes = self
+                .network
+                .download_artifact(&id, uri, artifact_type)
                 .await?;
+            // Bytes from network bucket are already zstd-compressed, bypass compression
             self.cluster_artifact_client
-                .upload_raw(&id, artifact_type, bytes.into())
+                .upload_raw_compressed(&id, artifact_type, bytes)
                 .await?;
         }
         Ok(())
     }
 
-    async fn schedule_request(&self, request: spn_network_types::ProofRequest) -> Result<()> {
-        let request_id = request.request_id;
-        let program_artifact_id = extract_artifact_name(&request.program_uri)?;
-        let stdin_artifact_id = extract_artifact_name(&request.stdin_uri)?;
-        let deadline = request.deadline;
+    async fn schedule_request(
+        &self,
+        request: <N as FulfillmentNetwork>::NetworkRequest,
+    ) -> Result<()> {
+        use crate::network::NetworkRequest;
+        let request_id = request.request_id();
+        let program_artifact_id = extract_artifact_name(request.program_uri())?;
+        let stdin_artifact_id = extract_artifact_name(request.stdin_uri())?;
+        let deadline = request.deadline();
 
         // Create an empty proof artifact, where the cluster will upload the proof to.
         let proof_artifact_id = self.cluster_artifact_client.create_artifact()?;
@@ -672,13 +583,13 @@ impl<A: ArtifactClient> Fulfiller<A> {
         if self.copy_artifacts {
             self.copy_artifact(
                 program_artifact_id.clone(),
-                &request.program_public_uri,
+                request.program_public_uri(),
                 ArtifactType::Program,
             )
             .await?;
             self.copy_artifact(
                 stdin_artifact_id.clone(),
-                &request.stdin_public_uri,
+                request.stdin_public_uri(),
                 ArtifactType::Stdin,
             )
             .await?;
@@ -687,19 +598,40 @@ impl<A: ArtifactClient> Fulfiller<A> {
         // Schedule the request to start proving.
         self.cluster
             .create_proof_request(ProofRequestCreateRequest {
-                proof_id: hex::encode(request_id),
+                proof_id: request_id,
                 program_artifact_id,
                 stdin_artifact_id,
-                options_artifact_id: Some(request.mode.to_string()),
+                options_artifact_id: Some(request.mode().to_string()),
                 proof_artifact_id: Some(proof_artifact_id.to_id()),
-                requester: request.requester.to_vec(),
+                requester: request.requester().to_vec(),
                 deadline,
-                cycle_limit: request.cycle_limit,
-                gas_limit: request.gas_limit,
+                cycle_limit: request.cycle_limit(),
+                gas_limit: request.gas_limit(),
             })
-            .map_err(|e| anyhow!("failed to create proof request: {e}"))
+            .map_err(|e| anyhow!("failed to create proof request: {}", e))
             .await?;
 
         Ok(())
     }
+}
+
+#[must_use]
+pub fn time_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_secs()
+}
+
+/// Given a S3 URL (e.g. <s3://prover-network-staging/artifacts/artifact_01j92x39ngfnrra5br9n8zr07x>),
+/// extract the artifact name from the URL (e.g. `artifact_01j92x39ngfnrra5br9n8zr07x`).
+///
+/// This is used because the cluster assumes a specific bucket and path already, and just operates
+/// on the artifact name.
+pub fn extract_artifact_name(s3_url: &str) -> Result<String> {
+    s3_url
+        .split('/')
+        .next_back()
+        .map(String::from)
+        .ok_or_else(|| anyhow!("Invalid S3 URL format"))
 }

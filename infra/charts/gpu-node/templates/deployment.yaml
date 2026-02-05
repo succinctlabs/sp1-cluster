@@ -21,13 +21,14 @@ spec:
     
     # Pod
     spec:
+      strategy:
+        {{- toYaml .Values.strategy | nindent 8 }}
       nodeSelector:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       tolerations:
         {{- toYaml .Values.tolerations | nindent 8 }}
       affinity:
         {{- toYaml .Values.affinity | nindent 8 }}
-      runtimeClassName: nvidia
       imagePullSecrets:
         {{- range .Values.imagePullSecrets }}
         - name: {{ .name }}

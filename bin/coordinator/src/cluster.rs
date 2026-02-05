@@ -22,6 +22,7 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
             id,
             success,
             metadata,
+            extra_data,
         }) = completed_rx.recv().await
         {
             let Some(mut status) = task_map.get_mut(&id) else {
@@ -43,11 +44,13 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
                 "null".to_string()
             });
             drop(status);
+
             if let Err(e) = api_client
                 .update_proof_request(ProofRequestUpdateRequest {
                     proof_id: id.clone(),
                     proof_status: Some(status_copy.into()),
                     metadata: Some(metadata_string),
+                    extra_data,
                     ..Default::default()
                 })
                 .await
@@ -113,7 +116,6 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                                 proof.stdin_artifact_id,
                                 options_artifact_id,
                                 cycle_limit.to_string(),
-                                "".to_string(), // TODO
                             ];
                             let outputs = vec![proof_artifact_id];
                             tracing::info!("inputs: {:?}", inputs);
@@ -155,7 +157,9 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                             was_seen
                         });
                         for id in proofs_to_fail {
-                            if let Err(e) = coordinator.fail_proof(id.clone(), None, false).await {
+                            if let Err(e) =
+                                coordinator.fail_proof(id.clone(), None, false, None).await
+                            {
                                 tracing::error!("Failed to fail expired proof: {:?}", e);
                             }
                         }

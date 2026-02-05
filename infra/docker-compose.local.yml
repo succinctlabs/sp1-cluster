@@ -1,89 +1,200 @@
 services:
+
+  alloy:
+    build:
+      context: .
+      dockerfile: Dockerfile.alloy
+    volumes:
+      - ./config.alloy:/etc/alloy/test.alloy
+    ports:
+      - "12345:12345"
+      - "4317:4317"
+      - "4318:4318"
+    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/test.alloy"]
+
   redis:
     extends:
       file: docker-compose.yml
       service: redis
+    environment:
+      - REDIS_PASSWORD=redispassword
+      - REDIS_AOF_ENABLED=no
+      - REDIS_MAXMEMORY=25gb
+      - REDIS_MAXMEMORY_POLICY=volatile-lru
 
   postgresql:
     extends:
       file: docker-compose.yml
       service: postgresql
+    environment:
+      - POSTGRES_PASSWORD=postgrespassword
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
 
   api:
     extends:
       file: docker-compose.yml
       service: api
+    image: sp1-cluster-local:api
+    environment:
+      - API_GRPC_ADDR=0.0.0.0:50051
+      - API_HTTP_ADDR=0.0.0.0:3000
+      - API_AUTO_MIGRATE=true
+      - API_DATABASE_URL=postgresql://postgres:postgrespassword@postgresql:5432/postgres
+      - OTLP_ENDPOINT=http://alloy:4317
+      - RUST_LOG=info
     build:
       context: ..
       dockerfile: infra/Dockerfile
+      secrets:
+        - private_pull_token
     command: ["/bin/sh", "-c", "/api"]
+    depends_on:
+      - alloy
+      - redis
+      - postgresql
+    # ports:
+    #   - "127.0.0.1:50051:50051"
+      # - "127.0.0.1:3000:3000"
 
   coordinator:
     extends:
       file: docker-compose.yml
       service: coordinator
+    image: sp1-cluster-local:coordinator
+    environment:
+      - COORDINATOR_CLUSTER_RPC=http://api:50051
+      - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
+      - COORDINATOR_ADDR=0.0.0.0:50051
+      - RUST_LOG=debug
+      - OTLP_ENDPOINT=http://alloy:4317
+    ports:
+      - "0.0.0.0:50053:50051"
     build:
       context: ..
       dockerfile: infra/Dockerfile
+      secrets:
+        - private_pull_token
     command: ["/bin/sh", "-c", "/coordinator"]
 
   cpu-node:
     extends:
       file: docker-compose.yml
       service: cpu-node
+    image: sp1-cluster-local:cpu-node
+    environment:
+      - NODE_COORDINATOR_RPC=http://coordinator:50051
+      - NODE_ARTIFACT_STORE=redis
+      - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
+      - WORKER_TYPE=CPU
+      - TRACING_ENABLED=true
+      - SP1_WORKER_NUM_SPLICING_WORKERS=12
+      - SP1_WORKER_SPLICING_BUFFER_SIZE=12
+      - SP1_WORKER_NUMBER_OF_SEND_SPLICE_WORKERS_PER_SPLICE=4
+      - SP1_WORKER_SEND_SPLICE_INPUT_BUFFER_SIZE_PER_SPLICE=4
+      - MINIMAL_TRACE_CHUNK_THRESHOLD=33554432
+      - WORKER_PLONK_WRAP_WEIGHT=14
+      - RUST_LOG=info
+      - OTLP_ENDPOINT=http://alloy:4317
+      - PROOF_DURATIONS_CSV=/data/proof_durations.csv
+      # - SP1_WORKER_USE_FIXED_PK=true
     build:
       context: ..
       dockerfile: infra/Dockerfile
+      secrets:
+        - private_pull_token
     command: ["/bin/sh", "-c", "/node"]
+    volumes:
+      - ~/.sp1/circuits:/home/appuser/.sp1/circuits
 
   gpu0:
     extends:
       file: docker-compose.yml
       service: gpu0
+    image: sp1-cluster-local:gpu
+    environment:
+      - NODE_COORDINATOR_RPC=http://coordinator:50051
+      - NODE_ARTIFACT_STORE=redis
+      - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
+      - WORKER_TYPE=GPU
+      - RUST_LOG=info
+      - TRACING_ENABLED=true
+      - OTLP_ENDPOINT=http://alloy:4317
+      - NO_COLOR=true
+      - CUDA_VISIBLE_DEVICES=0
+      - RUST_BACKTRACE=full
+      - RUSTFLAGS="-g"
+      - SP1_DEBUG=true
+      # - SP1_WORKER_USE_FIXED_PK=true
+      # - SP1_WORKER_VERIFY_INTERMEDIATES=false
     build:
       context: ..
       dockerfile: infra/Dockerfile.node_gpu
+      secrets:
+        - private_pull_token
     command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
 
-  gpu1:
-    extends: gpu0
+  # gpu1:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=1
+  #   extends: gpu0
 
-  gpu2:
-    extends: gpu0
+  # gpu2:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=2
+  #   extends: gpu0
 
-  gpu3:
-    extends: gpu0
+  # gpu3:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=3
+  #   extends: gpu0
 
-  gpu4:
-    extends: gpu0
+  # gpu4:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=4
+  #   extends: gpu0
 
-  gpu5:
-    extends: gpu0
+  # gpu5:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=5
+  #   extends: gpu0
 
-  gpu6:
-    extends: gpu0
+  # gpu6:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=6
+  #   extends: gpu0
 
-  gpu7:
-    extends: gpu0
+  # gpu7:
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=7
+  #   extends: gpu0
 
-  fulfiller:
-    extends:
-      file: docker-compose.yml
-      service: fulfiller
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-    command: ["/bin/sh", "-c", "/fulfiller"]
+  # fulfiller:
+  #   extends:
+  #     file: docker-compose.yml
+  #     service: fulfiller
+  #   image: sp1-cluster-local:fulfiller
+  #   pull_policy: build
+  #   build:
+  #     context: ..
+  #     dockerfile: infra/Dockerfile
+  #   command: ["/bin/sh", "-c", "/fulfiller"]
 
-  bidder:
-    extends:
-      file: docker-compose.yml
-      service: bidder
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-    command: ["/bin/sh", "-c", "/bidder"]
+  # bidder:
+  #   extends:
+  #     file: docker-compose.yml
+  #     service: bidder
+  #   image: sp1-cluster-local:bidder
+  #   pull_policy: build
+  #   build:
+  #     context: ..
+  #     dockerfile: infra/Dockerfile
+  #   command: ["/bin/sh", "-c", "/bidder"]
 
 volumes:
   redis_data:
   postgresql_data:
+
+secrets:
+  private_pull_token:
+    environment: GITHUB_TOKEN

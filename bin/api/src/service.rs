@@ -13,6 +13,7 @@ use tracing::{error, info, warn};
 
 // Database models
 #[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)]
 struct DbProofRequest {
     id: String,
     proof_status: i32,
@@ -33,6 +34,7 @@ struct DbProofRequest {
     metadata: String,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
+    extra_data: Option<String>,
 }
 
 impl DbProofRequest {
@@ -59,6 +61,7 @@ impl DbProofRequest {
             metadata: self.metadata,
             created_at: self.created_at.unix_timestamp() as u64,
             updated_at: self.updated_at.unix_timestamp() as u64,
+            extra_data: self.extra_data,
         }
     }
 }
@@ -203,10 +206,14 @@ impl ClusterService for ClusterServiceImpl {
             separated.push_bind_unseparated(metadata);
         }
 
+        if let Some(extra_data) = req.extra_data {
+            separated.push("extra_data = ");
+            separated.push_bind_unseparated(extra_data);
+        }
+
         query.push(" WHERE id = ");
         query.push_bind(&req.proof_id);
 
-        info!("query: {}", query.sql());
         let result = query.build().execute(&*self.db_pool).await;
 
         match result {

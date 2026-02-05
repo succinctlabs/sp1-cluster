@@ -16,6 +16,8 @@ pub fn task_weight(task_type: TaskType) -> usize {
         TaskType::MarkerDeferredRecord => 0,
         TaskType::PlonkWrap => *PLONK_WRAP_WEIGHT,
         TaskType::Groth16Wrap => *GROTH16_WRAP_WEIGHT,
+        TaskType::UtilVkeyMapChunk | TaskType::UtilVkeyMapController => 2,
+        TaskType::ExecuteOnly => *EXECUTE_ONLY_WEIGHT,
     }
 }
 
@@ -34,4 +36,9 @@ lazy_static! {
     pub static ref PLONK_WRAP_WEIGHT: usize = std::env::var("WORKER_PLONK_WRAP_WEIGHT")
         .map(|s| s.parse().unwrap())
         .unwrap_or(32);
+
+    /// Task weight for executor-only task.
+    pub static ref EXECUTE_ONLY_WEIGHT: usize = std::env::var("WORKER_EXECUTE_ONLY_WEIGHT")
+        .map(|s| s.parse().unwrap())
+        .unwrap_or(4);
 }

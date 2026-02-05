@@ -1,0 +1,16 @@
+[package]
+name = "sp1-cluster-utils"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+eyre = { workspace = true }
+sp1-cluster-artifact = { workspace = true }
+sp1-cluster-common = { workspace = true }
+sp1-prover-types = { workspace = true }
+sp1-sdk = { workspace = true, features = ["native-gnark"] }
+tokio = { workspace = true }
+tracing = { workspace = true }

@@ -34,6 +34,11 @@ pub struct Settings {
     /// Whether to bid on Plonk proofs
     #[serde(default = "default_plonk_enabled")]
     pub plonk_enabled: bool,
+    /// Aggressive mode: bid on all requests without capacity/time checks
+    #[serde(default)]
+    pub aggressive_mode: bool,
+    /// Minimum deadline in seconds to bid on (optional safety check, even in aggressive mode)
+    pub min_deadline_secs: Option<u64>,
 }
 
 impl Settings {

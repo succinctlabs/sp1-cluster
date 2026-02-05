@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use commands::bench::BenchCommand;
-use opentelemetry_sdk::Resource;
-use sp1_cluster_common::logger;
+
+use crate::commands::vk_gen::BuildVkeys;
 
 mod commands;
 
@@ -16,15 +16,21 @@ struct Cli {
 enum Commands {
     #[command(subcommand)]
     Bench(BenchCommand),
+    #[command(subcommand)]
+    VkGen(BuildVkeys),
 }
 
 #[tokio::main]
 async fn main() {
-    logger::init(Resource::empty());
+    if let Err(e) = dotenv::dotenv() {
+        eprintln!("not loading .env file: {}", e);
+    }
+    sp1_sdk::setup_logger();
     let cli = Cli::parse();
 
     if let Err(e) = match &cli.command {
         Commands::Bench(bench_command) => bench_command.run().await,
+        Commands::VkGen(build_vkeys) => build_vkeys.run().await,
     } {
         tracing::info!("Error: {:?}", e);
     }

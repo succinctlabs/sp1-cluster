@@ -36,7 +36,7 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Install sp1 toolchain
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-RUN curl -L https://sp1.succinct.xyz | bash && ~/.sp1/bin/sp1up
+RUN curl -L https://sp1.succinct.xyz | bash && ~/.sp1/bin/sp1up --version 6.0.0-beta.1
 
 # Install protoc
 ENV PROTOC_ZIP=protoc-29.4-linux-x86_64.zip
@@ -63,10 +63,21 @@ ARG VERGEN_GIT_SHA
 ENV VERGEN_GIT_SHA=$VERGEN_GIT_SHA
 
 # Build the application
+# Uses BuildKit secrets mount to securely pass private token without exposing it in image layers
+# The secret is mounted as a file and read during the RUN command, then never stored in layers
 RUN \
+    --mount=type=ssh \
+    --mount=type=secret,id=private_pull_token,required=false \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
+    if [ -f /run/secrets/private_pull_token ]; then \
+    PRIVATE_TOKEN=$(cat /run/secrets/private_pull_token); \
+    GIT_URL_BASE="https://${PRIVATE_TOKEN}@github.com/"; \
+    git config --global --replace-all url."${GIT_URL_BASE}".insteadOf "https://github.com/"; \
+    git config --global --add url."${GIT_URL_BASE}".insteadOf "ssh://git@github.com:"; \
+    echo "Using HTTPS + token for git (private cargo deps enabled)" >&2; \
+    fi; \
     echo "Building with profile: $BUILD_PROFILE | features: $FEATURES | rustflags: $RUSTFLAGS" && \
     cargo build --profile $BUILD_PROFILE --features "$FEATURES" \
     --bin sp1-cluster-api \
@@ -80,7 +91,10 @@ RUN \
     cp target/$BUILD_PROFILE/sp1-cluster-cli /cli && \
     cp target/$BUILD_PROFILE/sp1-cluster-coordinator /coordinator && \
     cp target/$BUILD_PROFILE/sp1-cluster-fulfiller /fulfiller && \
-    cp target/$BUILD_PROFILE/sp1-cluster-node /node
+    cp target/$BUILD_PROFILE/sp1-cluster-node /node && \
+    # Clean up any git credentials that might have been cached
+    (git config --global --unset-all url."${GIT_URL_BASE}".insteadOf || true) && \
+    (unset PRIVATE_TOKEN GIT_URL_BASE || true)
 
 #
 # Runtime Stage
@@ -108,6 +122,10 @@ COPY --from=build /cli /cli
 COPY --from=build /coordinator /coordinator
 COPY --from=build /fulfiller /fulfiller
 COPY --from=build /node /node
+
+# Create .sp1 directories with correct ownership for volume mounts
+RUN mkdir -p /home/appuser/.sp1/circuits && \
+    chown -R appuser:appgroup /home/appuser/.sp1
 
 # Set ownership to the non-root user and ensure the binary is executable
 RUN chown appuser:appgroup /api && \

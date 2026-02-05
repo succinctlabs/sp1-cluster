@@ -11,6 +11,9 @@ categories = { workspace = true }
 [dependencies]
 sp1-cluster-artifact = { workspace = true }
 sp1-cluster-common = { workspace = true }
+sp1-cluster-fulfillment = { workspace = true }
+
+sp1-sdk = { workspace = true }
 
 spn-artifacts = { workspace = true }
 spn-metrics = { workspace = true }
@@ -20,10 +23,12 @@ spn-utils = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy-signer-local = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 config = { workspace = true }
 dotenv = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+prost = { workspace = true }
 rustls = { workspace = true, features = ["ring"] }
 serde = { workspace = true }
 tokio = { workspace = true }

@@ -46,6 +46,8 @@ pub fn estimate_duration(task_type: TaskType) -> u128 {
         TaskType::SetupVkey => 4000,
         TaskType::MarkerDeferredRecord => 0,
         TaskType::UnspecifiedTaskType => 0,
+        TaskType::UtilVkeyMapChunk | TaskType::UtilVkeyMapController => 0,
+        TaskType::ExecuteOnly => 200,
     }
 }
 
@@ -53,7 +55,7 @@ pub fn estimate_duration(task_type: TaskType) -> u128 {
 fn enable_proof_fail(task_type: TaskType) -> bool {
     matches!(
         task_type,
-        TaskType::Controller | TaskType::Groth16Wrap | TaskType::PlonkWrap
+        TaskType::Controller | TaskType::Groth16Wrap | TaskType::PlonkWrap | TaskType::ExecuteOnly
     )
 }
 
@@ -116,6 +118,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 proofs_tx: None,
                 shutting_down: false,
                 policy: P::default(),
+                execute_only_mode: false,
             })),
             subscribers: DashMap::new(),
             metrics: None,
@@ -156,6 +159,7 @@ pub struct ProofResult<P: AssignmentPolicy> {
     pub id: String,
     pub success: bool,
     pub metadata: Option<P::ProofResultMetadata>,
+    pub extra_data: Option<String>,
 }
 
 /// The current state of the coordinator.
@@ -179,6 +183,10 @@ pub struct CoordinatorState<P: AssignmentPolicy> {
 
     /// The assignment policy which tracks queued tasks and has assignment logic.
     pub policy: P,
+
+    /// Whether coordinator is an execute-only cluster. If so all proof requests only trigger
+    /// EXECUTE_ONLY tasks instead of the default CONTROLLER task.
+    pub execute_only_mode: bool,
 }
 
 #[derive(Clone)]
@@ -311,11 +319,17 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             Proof::new(request.proof_id.clone(), expires_at, proof_extra),
         );
 
+        let task_type = if state.execute_only_mode {
+            TaskType::ExecuteOnly
+        } else {
+            TaskType::Controller
+        };
+
         let id = self
             .create_task_internal(
                 state,
                 TaskData {
-                    task_type: TaskType::Controller as i32,
+                    task_type: task_type as i32,
                     inputs: request.inputs,
                     outputs: request.outputs,
                     metadata: "{}".to_string(),
@@ -371,6 +385,15 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire_write"))
             .await
             .proofs_tx = Some(tx);
+    }
+
+    /// Set execute only mode
+    pub async fn set_execute_only_mode(&self, execute_only_mode: bool) {
+        self.state
+            .write()
+            .instrument(tracing::debug_span!("acquire_write"))
+            .await
+            .execute_only_mode = execute_only_mode;
     }
 
     /// Place a task in the queue.
@@ -900,7 +923,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         // Handle manual proof failure.
         if manual_proof_fail {
             tracing::info!("Proof {} controller has no more retries, failing", proof_id);
-            self.fail_proof_internal(&mut state, proof_id.clone(), None, true)
+            self.fail_proof_internal(&mut state, proof_id.clone(), None, true, None)
                 .await?;
         }
 
@@ -1026,7 +1049,11 @@ impl<P: AssignmentPolicy> Coordinator<P> {
 
     /// Mark a proof as completed.
     #[instrument(skip(self))]
-    pub async fn complete_proof(self: &Arc<Self>, proof_id: String) -> Result<(), Status> {
+    pub async fn complete_proof(
+        self: &Arc<Self>,
+        proof_id: String,
+        extra_data: Option<String>,
+    ) -> Result<(), Status> {
         let state = self
             .state
             .read()
@@ -1045,6 +1072,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 id: proof_id.clone(),
                 success: true,
                 metadata: Some(metadata),
+                extra_data,
             }) {
                 tracing::error!("Failed to send completed proof: {}", e);
             }
@@ -1074,6 +1102,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         proof_id: String,
         task_id: Option<String>,
         notify_sender: bool,
+        extra_data: Option<String>,
     ) -> Result<(), Status> {
         if state.shutting_down {
             tracing::info!(
@@ -1160,6 +1189,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                         id: proof_id.clone(),
                         success: false,
                         metadata: None,
+                        extra_data,
                     }) {
                         tracing::error!("Failed to send failed proof: {}", e);
                     }
@@ -1178,6 +1208,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         proof_id: String,
         task_id: Option<String>,
         notify_sender: bool,
+        extra_data: Option<String>,
     ) -> Result<(), Status> {
         let mut state = self
             .state
@@ -1186,7 +1217,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire"))
             .await;
 
-        self.fail_proof_internal(&mut state, proof_id, task_id, notify_sender)
+        self.fail_proof_internal(&mut state, proof_id, task_id, notify_sender, extra_data)
             .await
     }
 
@@ -1497,7 +1528,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 .instrument(tracing::debug_span!("acquire_write"))
                 .await;
             for id in proofs_to_remove {
-                if let Err(e) = self.fail_proof_internal(&mut state, id, None, false).await {
+                if let Err(e) = self
+                    .fail_proof_internal(&mut state, id, None, false, None)
+                    .await
+                {
                     tracing::error!("Failed to fail expired proof: {}", e);
                 }
             }

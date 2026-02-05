@@ -1,22 +1,24 @@
-use std::{collections::HashSet, path::PathBuf, time::Instant};
+use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Subcommand};
 use eyre::Result;
-use sp1_cluster_artifact::{
-    redis::RedisArtifactClient,
-    s3::{S3ArtifactClient, S3DownloadMode},
-    ArtifactClient, ArtifactType,
+use sp1_cluster_artifact::{redis::RedisArtifactClient, ArtifactClient, ArtifactType};
+use sp1_cluster_common::proto::{CreateDummyProofRequest, TaskStatus, TaskType};
+use sp1_cluster_utils::{request_proof_from_env, ClusterElf, ProofRequestResults};
+use sp1_cluster_worker::client::WorkerServiceClient;
+use sp1_prover::worker::{
+    ProofId, RawTaskRequest, RequesterId, SP1LightNode, TaskContext, WorkerClient,
 };
-use sp1_cluster_common::{
-    client::ClusterServiceClient,
-    proto::{self, ProofRequestStatus},
-};
+use sp1_prover_types::Artifact;
 use sp1_sdk::{network::proto::types::ProofMode, SP1Stdin};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
 
 #[derive(Debug, Args)]
 pub struct CommonArgs {
-    /// The cluster API gRPC endpoint.
+    /// The cluster/coordinator gRPC endpoint.
     #[arg(long, env = "CLI_CLUSTER_RPC")]
     pub cluster_rpc: String,
 
@@ -63,6 +65,26 @@ pub enum BenchCommand {
         #[clap(flatten)]
         common: CommonArgs,
     },
+    S3 {
+        /// S3 path to the program (e.g., "path/to/program" for s3://bucket/path/to/program/)
+        s3_path: String,
+        #[arg(short, long, default_value = "")]
+        param: String,
+        /// S3 bucket to download from
+        #[arg(long, env = "CLI_BENCH_S3_BUCKET", default_value = "sp1-testing-suite")]
+        bucket: String,
+        #[clap(flatten)]
+        common: CommonArgs,
+    },
+    /// Execute-only benchmark using S3 program (hits executor path, no proving)
+    ExecuteS3 {
+        /// S3 path to the program (e.g., "path/to/program" for s3://bucket/path/to/program/)
+        s3_path: String,
+        #[arg(short, long, default_value = "")]
+        param: String,
+        #[clap(flatten)]
+        common: CommonArgs,
+    },
 }
 
 impl BenchCommand {
@@ -80,13 +102,7 @@ impl BenchCommand {
                 stdin.write(&(mcycles * 83333));
 
                 let elf = include_bytes!("../../../../artifacts/fibonacci.bin");
-                Self::run_benchmark(
-                    elf.to_vec(),
-                    bincode::serialize(&stdin).unwrap(),
-                    common,
-                    Some(*mcycles as u64 * 1_000_000),
-                )
-                .await?;
+                Self::run_benchmark(elf.to_vec(), stdin.clone(), common).await?;
             }
             BenchCommand::Input {
                 elf_file,
@@ -100,158 +116,376 @@ impl BenchCommand {
                     common.mode
                 );
                 let elf = std::fs::read(elf_file)?;
-                let stdin = std::fs::read(stdin_file)?;
-                Self::run_benchmark(elf.to_vec(), stdin.to_vec(), common, None).await?;
+                let stdin = bincode::deserialize::<SP1Stdin>(&std::fs::read(stdin_file)?)?;
+                let proof_ids = Self::run_benchmark(elf.to_vec(), stdin, common).await?;
+
+                let elf_name = elf_file.file_name().unwrap().to_str().unwrap();
+                let workload_name = stdin_file.file_name().unwrap().to_str().unwrap();
+                // Write all proof IDs to CSV
+                for (proof_id, duration) in proof_ids {
+                    if let Err(e) =
+                        Self::append_to_csv(&proof_id, elf_name, Some(workload_name), duration)
+                    {
+                        tracing::warn!("Failed to write to CSV: {}", e);
+                    }
+                }
+            }
+            BenchCommand::S3 {
+                s3_path,
+                bucket,
+                common,
+                param,
+            } => {
+                tracing::info!("Downloading program from s3://{}/{}...", bucket, s3_path);
+                let (elf, stdin) = Self::download_from_s3(bucket, s3_path, param).await?;
+                tracing::info!("Running S3 program {:?} benchmark...", s3_path);
+                let proof_ids = Self::run_benchmark(elf, stdin, common).await?;
+
+                // Write all proof IDs to CSV
+                for (proof_id, duration) in proof_ids {
+                    if let Err(e) =
+                        Self::append_to_csv(&proof_id, s3_path, Some(param.as_str()), duration)
+                    {
+                        tracing::warn!("Failed to write to CSV: {}", e);
+                    }
+                }
+            }
+            BenchCommand::ExecuteS3 {
+                s3_path,
+                param,
+                common,
+            } => {
+                tracing::info!(
+                    "Downloading program from s3://sp1-testing-suite/{}...",
+                    s3_path
+                );
+                let (elf, stdin) =
+                    Self::download_from_s3("sp1-testing-suite", s3_path, param).await?;
+                tracing::info!("Running execute-only benchmark for {:?}...", s3_path);
+                Self::run_execute_benchmark(elf, stdin, common).await?;
             }
         }
         Ok(())
     }
 
+    /// Runs a benchmark for a given elf and stdin, returning the proof ids and elapsed times.
+    ///
+    /// TODO: Expensive clone + reuploading of elf and stdin for when running for multiple repetitions.
     async fn run_benchmark(
         elf: Vec<u8>,
-        stdin: Vec<u8>,
+        stdin: SP1Stdin,
         common: &CommonArgs,
-        cycles_estimate: Option<u64>,
-    ) -> Result<()> {
-        let client = ClusterServiceClient::new(common.cluster_rpc.clone()).await?;
+    ) -> Result<Vec<(String, Duration)>> {
+        let client = SP1LightNode::new().await;
 
-        let (elf_id, stdin_id, proof_output_ids) = if let Some(redis_nodes) = &common.redis_nodes {
-            tracing::info!("using redis artifact store");
-            let artifact_client = RedisArtifactClient::new(
-                redis_nodes
-                    .clone()
-                    .split(',')
-                    .map(|s| s.to_string())
-                    .collect(),
-                16,
-            );
-            Self::setup_artifacts(artifact_client, elf, stdin, common.count).await?
+        let vk = client.setup(&elf).await.expect("failed to setup elf");
+
+        let mut proof_ids = Vec::with_capacity(common.count as usize);
+        for _ in 0..common.count {
+            let cluster_elf = ClusterElf::NewElf(elf.clone());
+
+            let ProofRequestResults {
+                proof_id,
+                proof,
+                elapsed,
+            } = request_proof_from_env(common.mode, 4, cluster_elf, stdin.clone()).await?;
+
+            // Verify proof to CSV
+            client
+                .verify(&vk, &proof.proof)
+                .expect("failed to verify proof");
+
+            tracing::info!("Proof completed in {:?}", elapsed);
+
+            proof_ids.push((proof_id, elapsed));
+        }
+        Ok(proof_ids)
+    }
+
+    async fn download_from_s3(
+        bucket: &str,
+        s3_path: &str,
+        param: &str,
+    ) -> Result<(Vec<u8>, SP1Stdin)> {
+        // Download program.bin from S3
+        let program_output = std::process::Command::new("aws")
+            .args([
+                "s3",
+                "cp",
+                &format!("s3://{}/{}/program.bin", bucket, s3_path),
+                "program.bin",
+            ])
+            .output()?;
+
+        if !program_output.status.success() {
+            return Err(eyre::eyre!(
+                "Failed to download program.bin: {}",
+                String::from_utf8_lossy(&program_output.stderr)
+            ));
+        }
+
+        // Download stdin.bin from S3
+        let stdin_output = if param.is_empty() {
+            std::process::Command::new("aws")
+                .args([
+                    "s3",
+                    "cp",
+                    &format!("s3://{}/{}/stdin.bin", bucket, s3_path),
+                    "stdin.bin",
+                ])
+                .output()?
         } else {
-            if common.s3_bucket.is_none() || common.s3_region.is_none() {
-                return Err(eyre::eyre!(
-                    "S3 bucket and region or Redis nodes must be specified"
-                ));
-            }
-            tracing::info!("using s3 artifact store");
-            let artifact_client = S3ArtifactClient::new(
-                common.s3_region.clone().unwrap(),
-                common.s3_bucket.clone().unwrap(),
-                32,
-                S3DownloadMode::AwsSDK(
-                    S3ArtifactClient::create_s3_sdk_download_client(
-                        common.s3_region.clone().unwrap(),
-                    )
-                    .await,
-                ),
-            )
-            .await;
-            Self::setup_artifacts(artifact_client, elf, stdin, common.count).await?
+            std::process::Command::new("aws")
+                .args([
+                    "s3",
+                    "cp",
+                    &format!("s3://{}/{}/input/{}.bin", bucket, s3_path, param),
+                    "stdin.bin",
+                ])
+                .output()?
         };
 
-        let base_id = format!(
-            "cli_{}",
+        if !stdin_output.status.success() {
+            return Err(eyre::eyre!(
+                "Failed to download stdin.bin: {}",
+                String::from_utf8_lossy(&stdin_output.stderr)
+            ));
+        }
+
+        // Read the downloaded files
+        let program = std::fs::read("program.bin")?;
+        let stdin_bytes = std::fs::read("stdin.bin")?;
+        let stdin: SP1Stdin = bincode::deserialize(&stdin_bytes)?;
+
+        // Clean up the downloaded files
+        std::fs::remove_file("program.bin").ok();
+        std::fs::remove_file("stdin.bin").ok();
+
+        Ok((program, stdin))
+    }
+
+    fn append_to_csv(
+        proof_id: &str,
+        s3_path: &str,
+        param: Option<&str>,
+        duration: Duration,
+    ) -> Result<()> {
+        let csv_path = "data/bench_results.csv";
+
+        // Create data directory if it doesn't exist
+        if let Some(parent) = Path::new(csv_path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let file_exists = Path::new(csv_path).exists();
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(csv_path)?;
+
+        // Write header if file is new
+        if !file_exists {
+            writeln!(file, "proof_id,s3_path,param,duration_ms")?;
+        }
+
+        // Write data row
+        writeln!(
+            file,
+            "{},{},{},{}",
+            proof_id,
+            s3_path,
+            param.unwrap_or(""),
+            duration.as_millis()
+        )?;
+
+        Ok(())
+    }
+
+    /// Runs an execute-only benchmark, connecting directly to the coordinator.
+    /// Supports concurrent requests via common.count.
+    async fn run_execute_benchmark(
+        elf: Vec<u8>,
+        stdin: SP1Stdin,
+        common: &CommonArgs,
+    ) -> Result<()> {
+        let redis_nodes = common
+            .redis_nodes
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("CLI_REDIS_NODES is required for execute-s3"))?;
+
+        // Create artifact client
+        let nodes: Vec<String> = redis_nodes.split(',').map(|s| s.to_string()).collect();
+        let artifact_client = RedisArtifactClient::new(nodes.clone(), 10);
+
+        // Upload artifacts once (shared across all concurrent requests)
+        tracing::info!("Uploading artifacts...");
+        let elf_artifact = artifact_client
+            .create_artifact()
+            .map_err(|e| eyre::eyre!("Failed to create elf artifact: {}", e))?;
+        artifact_client
+            .upload_with_type(&elf_artifact, ArtifactType::Program, elf)
+            .await
+            .map_err(|e| eyre::eyre!("Failed to upload program: {}", e))?;
+
+        let stdin_artifact = artifact_client
+            .create_artifact()
+            .map_err(|e| eyre::eyre!("Failed to create stdin artifact: {}", e))?;
+        artifact_client
+            .upload_with_type(&stdin_artifact, ArtifactType::Stdin, stdin)
+            .await
+            .map_err(|e| eyre::eyre!("Failed to upload stdin: {}", e))?;
+
+        let count = common.count;
+        let cluster_rpc = common.cluster_rpc.clone();
+
+        tracing::info!(
+            "Submitting {} concurrent execute-only requests to {}...",
+            count,
+            cluster_rpc
+        );
+
+        // Spawn concurrent tasks
+        let mut handles = Vec::with_capacity(count as usize);
+        let start = Instant::now();
+
+        for i in 0..count {
+            let cluster_rpc = cluster_rpc.clone();
+            let elf_artifact = elf_artifact.clone();
+            let stdin_artifact = stdin_artifact.clone();
+
+            let handle = tokio::spawn(async move {
+                Self::run_single_execute_request(i, &cluster_rpc, elf_artifact, stdin_artifact)
+                    .await
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all to complete and collect results
+        let mut success_count = 0;
+        let mut fail_count = 0;
+
+        for (i, handle) in handles.into_iter().enumerate() {
+            match handle.await {
+                Ok(Ok(duration)) => {
+                    tracing::info!("Request {} completed in {:?}", i, duration);
+                    success_count += 1;
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("Request {} failed: {}", i, e);
+                    fail_count += 1;
+                }
+                Err(e) => {
+                    tracing::error!("Request {} panicked: {}", i, e);
+                    fail_count += 1;
+                }
+            }
+        }
+
+        let total_elapsed = start.elapsed();
+        tracing::info!(
+            "All {} requests completed in {:?} ({} succeeded, {} failed)",
+            count,
+            total_elapsed,
+            success_count,
+            fail_count
+        );
+
+        if fail_count > 0 {
+            Err(eyre::eyre!("{} requests failed", fail_count))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Runs a single execute-only request.
+    async fn run_single_execute_request(
+        index: u32,
+        cluster_rpc: &str,
+        elf_artifact: Artifact,
+        stdin_artifact: Artifact,
+    ) -> Result<Duration> {
+        // Connect to coordinator
+        let worker_id = format!(
+            "cli-bench-{}-{}",
+            index,
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis()
         );
-        tracing::info!("base_id: {}", base_id);
-        // Worst case timeout is 4 hours.
+
+        let client = WorkerServiceClient::new(cluster_rpc.to_string(), worker_id.clone())
+            .await
+            .map_err(|e| eyre::eyre!("Failed to connect to coordinator: {}", e))?;
+
+        // Create proof ID
+        let proof_id = format!(
+            "cli_exec_{}_{}",
+            index,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
+
+        tracing::info!("Request {} created proof_id: {}", index, proof_id);
+
+        // Create dummy proof entry
         let deadline = SystemTime::now() + Duration::from_secs(4 * 60 * 60);
-        for i in 0..common.count {
-            client
-                .create_proof_request(sp1_cluster_common::proto::ProofRequestCreateRequest {
-                    proof_id: format!("{base_id}_{i}"),
-                    program_artifact_id: elf_id.clone(),
-                    stdin_artifact_id: stdin_id.clone(),
-                    options_artifact_id: Some((common.mode as i32).to_string()),
-                    proof_artifact_id: Some(proof_output_ids[i as usize].clone()),
-                    requester: vec![],
-                    deadline: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs(),
-                    cycle_limit: 0,
-                    gas_limit: 0,
-                })
-                .await?;
-        }
-        let start_time = Instant::now();
-        // Poll until the proof request is completed.
-        let mut completed = HashSet::new();
-        loop {
-            if deadline < SystemTime::now() {
-                return Err(eyre::eyre!(
-                    "Timeout exceeded after {:?}",
-                    start_time.elapsed()
-                ));
-            }
-
-            for i in 0..common.count {
-                if completed.contains(&i) {
-                    continue;
-                }
-                let resp = client
-                    .get_proof_request(proto::ProofRequestGetRequest {
-                        proof_id: format!("{base_id}_{i}"),
-                    })
-                    .await?;
-                let Some(proof_request) = resp else {
-                    return Err(eyre::eyre!(
-                        "Proof request {} not found after {:?}",
-                        i,
-                        start_time.elapsed()
-                    ));
-                };
-                match proof_request.proof_status() {
-                    ProofRequestStatus::Completed => {
-                        completed.insert(i);
-                    }
-                    ProofRequestStatus::Failed | ProofRequestStatus::Cancelled => {
-                        return Err(eyre::eyre!(
-                            "Proof request {:?} after {:?}",
-                            proof_request.proof_status(),
-                            start_time.elapsed()
-                        ));
-                    }
-                    _ => {}
-                }
-            }
-            if completed.len() == common.count as usize {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-
-        tracing::info!("Completed after {:?}", start_time.elapsed());
-        if let Some(cycles_estimate) = cycles_estimate {
-            tracing::info!(
-                "Total Cycles: {:.2} | Aggregate MHz: {:.2}",
-                cycles_estimate * common.count as u64,
-                cycles_estimate as f64 * common.count as f64
-                    / start_time.elapsed().as_secs_f64()
-                    / 1_000_000.0
-            );
-        }
-        Ok(())
-    }
-
-    async fn setup_artifacts<A: ArtifactClient>(
-        artifact_client: A,
-        elf: Vec<u8>,
-        stdin: Vec<u8>,
-        count: u32,
-    ) -> Result<(String, String, Vec<String>)> {
-        let elf_id = artifact_client.create_artifact().unwrap();
-        artifact_client
-            .upload_with_type(&elf_id, ArtifactType::Program, elf)
+        client
+            .client
+            .clone()
+            .create_dummy_proof(CreateDummyProofRequest {
+                worker_id: worker_id.clone(),
+                proof_id: proof_id.clone(),
+                requester: "cli".to_string(),
+                expires_at: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
+            })
             .await
-            .map_err(|e| eyre::eyre!(e))?;
-        let stdin_id = artifact_client.create_artifact().unwrap();
-        artifact_client
-            .upload_raw(&stdin_id, ArtifactType::Stdin, stdin)
+            .map_err(|e| eyre::eyre!("Failed to create dummy proof: {}", e))?;
+
+        // Create task subscriber BEFORE submitting the task
+        let subscriber = client
+            .subscriber(ProofId::new(proof_id.clone()))
             .await
-            .map_err(|e| eyre::eyre!(e))?;
-        let proof_output_ids = (0..count)
-            .map(|_| artifact_client.create_artifact().unwrap().to_id())
-            .collect();
-        Ok((elf_id.to_id(), stdin_id.to_id(), proof_output_ids))
+            .map_err(|e| eyre::eyre!("Failed to create subscriber: {}", e))?
+            .per_task();
+
+        let start = Instant::now();
+
+        // Submit ExecuteOnly task
+        let task_id = subscriber
+            .client()
+            .submit_task(
+                TaskType::ExecuteOnly,
+                RawTaskRequest {
+                    inputs: vec![elf_artifact, stdin_artifact],
+                    outputs: vec![],
+                    context: TaskContext {
+                        proof_id: ProofId::new(proof_id.clone()),
+                        parent_id: None,
+                        parent_context: None,
+                        requester_id: RequesterId::new("cli".to_string()),
+                    },
+                },
+            )
+            .await
+            .map_err(|e| eyre::eyre!("Failed to submit task: {}", e))?;
+
+        // Wait for task completion
+        let status = subscriber
+            .wait_task(task_id)
+            .await
+            .map_err(|e| eyre::eyre!("Task wait failed: {}", e))?;
+
+        let elapsed = start.elapsed();
+        match status {
+            TaskStatus::Succeeded => Ok(elapsed),
+            TaskStatus::FailedFatal | TaskStatus::FailedRetryable => {
+                Err(eyre::eyre!("Task failed with status: {:?}", status))
+            }
+            _ => Err(eyre::eyre!("Unexpected task status: {:?}", status)),
+        }
     }
 }

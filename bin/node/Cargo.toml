@@ -6,13 +6,16 @@ edition = "2021"
 [features]
 default = ["native-gnark"]
 native-gnark = ["sp1-sdk/native-gnark"]
-gpu = ["dep:moongate-prover", "sp1-cluster-worker/gpu"]
+gpu = ["dep:sp1-gpu-prover", "dep:sp1-gpu-cudart", "sp1-cluster-worker/gpu"]
 
 [dependencies]
-moongate-prover = { workspace = true, optional = true }
+sp1-gpu-cudart = { workspace = true, optional = true }
+sp1-gpu-prover = { workspace = true, optional = true }
+
 sp1-cluster-artifact.workspace = true
 sp1-cluster-common.workspace = true
 sp1-cluster-worker.workspace = true
+
 sp1-prover.workspace = true
 sp1-sdk.workspace = true
 
@@ -26,6 +29,8 @@ flate2.workspace = true
 jemallocator.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
+pyroscope = "0.5.8"
+pyroscope_pprofrs = "0.2.10"
 rand.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
@@ -34,3 +39,4 @@ tar.workspace = true
 tokio.workspace = true
 tonic.workspace = true
 tracing.workspace = true
+

@@ -6,6 +6,10 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = ["tokio-blocked"]
+tokio-blocked = ["dep:tokio-blocked"]
+
 [dependencies]
 backoff = { workspace = true, features = ["futures", "tokio"] }
 eyre.workspace = true
@@ -16,10 +20,16 @@ log.workspace = true
 opentelemetry.workspace = true
 opentelemetry-appender-tracing.workspace = true
 opentelemetry-otlp = { workspace = true, features = ["tokio", "logs"] }
-opentelemetry_sdk = { workspace = true, features = ["logs", "logs_level_enabled", "rt-tokio"] }
+opentelemetry_sdk = { workspace = true, features = [
+    "logs",
+    "logs_level_enabled",
+    "rt-tokio",
+] }
 prost.workspace = true
-rustls.workspace = true
+rustls = { workspace = true, features = ["ring"] }
 serde.workspace = true
+sp1-prover-types = { workspace = true }
+tokio-blocked = { workspace = true, optional = true }
 tonic.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
