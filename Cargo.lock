@@ -7431,8 +7431,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "slop-air"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "970b9c948d9dc931fe55f8bdfc7b08af2e028ce1430a6fcec257928297c9941a"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "p3-air",
 ]
@@ -7440,8 +7439,7 @@ dependencies = [
 [[package]]
 name = "slop-algebra"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9a5dafa69444506b248467192eff361a2a720dfcbb5bfa082e29ff27ddeb89a"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "itertools 0.14.0",
  "p3-field",
@@ -7451,8 +7449,7 @@ dependencies = [
 [[package]]
 name = "slop-alloc"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ef328f17fdf904a7989bfa42a416f467c41ba5d17942629d424e3e23572c5bf"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "serde",
  "slop-algebra",
@@ -7462,8 +7459,7 @@ dependencies = [
 [[package]]
 name = "slop-baby-bear"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35850ad12aaaa8ac86bf5c5e7a02dad5a1c54bc9907c34903533d42583de0597"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "lazy_static",
  "p3-baby-bear",
@@ -7477,8 +7473,7 @@ dependencies = [
 [[package]]
 name = "slop-basefold"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "611c9a0f8a7696f2976d5adcfe668e41723c0cf8f409044619653b759f9b8ae7"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "derive-where",
  "itertools 0.14.0",
@@ -7500,8 +7495,7 @@ dependencies = [
 [[package]]
 name = "slop-basefold-prover"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "192a8171a5ba804809c956a69157ba8acb04315ef5377ce6d2f8b777354e155b"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "derive-where",
  "itertools 0.14.0",
@@ -7527,8 +7521,7 @@ dependencies = [
 [[package]]
 name = "slop-bn254"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7651f389b6548682d60d9a03f81685101e3fa27a338c9687cc6f7f0cbc6c886c"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "ff 0.13.1",
  "p3-bn254-fr",
@@ -7543,8 +7536,7 @@ dependencies = [
 [[package]]
 name = "slop-challenger"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc8d9e0adc54fbd22a678b35dd8f5d8494823883f45fd9e06cccf801c18937dc"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "futures",
  "p3-challenger",
@@ -7556,8 +7548,7 @@ dependencies = [
 [[package]]
 name = "slop-commit"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d47db0e7de8922fa8d360f60f45041f3bd4af5d475e35b34c3394a88f532276e"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "p3-commit",
  "serde",
@@ -7567,8 +7558,7 @@ dependencies = [
 [[package]]
 name = "slop-dft"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5c16168d973ca7e4bb5a0e2af61f8e0321ecebfa65e8de3015a45a5ff723107"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "p3-dft",
  "serde",
@@ -7581,8 +7571,7 @@ dependencies = [
 [[package]]
 name = "slop-fri"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9abd657e5ad15785493d102d93908eefb9dc521ac76cbabc3000fa849eaeda12"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "p3-fri",
 ]
@@ -7590,8 +7579,7 @@ dependencies = [
 [[package]]
 name = "slop-futures"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6639a37f4514ddc7c5d11a78c44ce0aaf1debb52b476a9597b03466122da152"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "crossbeam",
  "futures",
@@ -7605,8 +7593,7 @@ dependencies = [
 [[package]]
 name = "slop-jagged"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dd739de73d0377a81f3c30eba8d421783ad44477a43b73ffdc709c9bfe2ef3c"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "derive-where",
  "futures",
@@ -7639,8 +7626,7 @@ dependencies = [
 [[package]]
 name = "slop-keccak-air"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b012721afad1744b732cdc83a6a41bbbf2d1caa1ae7afc4cf776f658bd9f4a89"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "p3-keccak-air",
 ]
@@ -7648,8 +7634,7 @@ dependencies = [
 [[package]]
 name = "slop-koala-bear"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc1ebef99be47f39033cb30017265a2a72c7bdf8b070806330d005dd8b8b1945"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "lazy_static",
  "p3-koala-bear",
@@ -7663,8 +7648,7 @@ dependencies = [
 [[package]]
 name = "slop-matrix"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b58ba943a1a2c03b0a0937226e626d6476b9c3d25b19e053c02fdf0aa318f631"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "p3-matrix",
 ]
@@ -7672,8 +7656,7 @@ dependencies = [
 [[package]]
 name = "slop-maybe-rayon"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2082e90659b5cc227a4c778023e9524c234b0da608cc58570b6c15246b0a166c"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "p3-maybe-rayon",
 ]
@@ -7681,8 +7664,7 @@ dependencies = [
 [[package]]
 name = "slop-merkle-tree"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42d187a5b37cfc72d680bdb857179ad4ef41e472938542bfde2a4dceb3d6d787"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "derive-where",
  "ff 0.13.1",
@@ -7708,8 +7690,7 @@ dependencies = [
 [[package]]
 name = "slop-multilinear"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aee70d1e61c782e8969ba482d5c4bddc1401c2ac726f5811a1244de210ccc79"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "derive-where",
  "futures",
@@ -7729,8 +7710,7 @@ dependencies = [
 [[package]]
 name = "slop-poseidon2"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bdff5ded919e9a133ce0b02264046e56f0bac1719860d712278c4a5a481239c"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "p3-poseidon2",
 ]
@@ -7738,8 +7718,7 @@ dependencies = [
 [[package]]
 name = "slop-primitives"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a64de4dca43df05df0f4c87f6adc4ba0b0cbf43ff81397e945bf350ef49ef6ed"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "slop-algebra",
 ]
@@ -7747,8 +7726,7 @@ dependencies = [
 [[package]]
 name = "slop-stacked"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0147049633af8194598c570c472b1922cedffa85267e7df88a8ef8c7263efd71"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "derive-where",
  "futures",
@@ -7770,8 +7748,7 @@ dependencies = [
 [[package]]
 name = "slop-sumcheck"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c72f7f5463ebe913641ecb0a9a59208fbc6aac17388de30c47ce270af51b0f90"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "futures",
  "itertools 0.14.0",
@@ -7788,8 +7765,7 @@ dependencies = [
 [[package]]
 name = "slop-symmetric"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9940d97629af0349014165d9a831e48963f40d88ac0c6f3fe38bef2a9f9c1da5"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "p3-symmetric",
 ]
@@ -7797,8 +7773,7 @@ dependencies = [
 [[package]]
 name = "slop-tensor"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "433ad2ae43171bc9b189bc1d8683c46c5ed2023aed25aee3ac7a09a9c17a30b4"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "arrayvec",
  "derive-where",
@@ -7817,8 +7792,7 @@ dependencies = [
 [[package]]
 name = "slop-uni-stark"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c36f6b09cee64cd81a1bae41b46e4b9d4b54357286f34f958906c43c23a7c24b"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "p3-uni-stark",
 ]
@@ -7826,8 +7800,7 @@ dependencies = [
 [[package]]
 name = "slop-utils"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff2cac845861a61653a9a16367778524655b9575252dffbb6b29b71912061fa6"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "p3-util",
  "tracing-forest",
@@ -7837,8 +7810,7 @@ dependencies = [
 [[package]]
 name = "slop-whir"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ffb5d652709ebd0c28957ac6e61d43a92f295ba25e4f9eb3a5806faaf2d848a"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "derive-where",
  "futures",
@@ -7906,8 +7878,7 @@ dependencies = [
 [[package]]
 name = "sp1-build"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ed88d7701d09e579e60a875cd7ea4964ef60d9d5c1e260d7021b3080ece5c24"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "anyhow",
  "cargo_metadata 0.18.1",
@@ -8212,8 +8183,7 @@ dependencies = [
 [[package]]
 name = "sp1-core-executor"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c19d988bec7c827c10c16421ef5f95b0d8b870c9036e37ff9794b00468139dfa"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -8252,8 +8222,7 @@ dependencies = [
 [[package]]
 name = "sp1-core-machine"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0a2a2cd22e1d364d64cc9cdb36e610847287b6536cdd03cfb711e5bd03f928f"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "bincode",
  "cfg-if",
@@ -8299,8 +8268,7 @@ dependencies = [
 [[package]]
 name = "sp1-cuda"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ecb4464f02defc4803c5c05cadc24c1040f50d33ba66104ae0451377690b629"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "bincode",
  "bytes",
@@ -8320,8 +8288,7 @@ dependencies = [
 [[package]]
 name = "sp1-curves"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8751d3edb3cacd28fc9ad827b3435744e47e6a00e32270b4a56ad1a6bfcf2c54"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "cfg-if",
  "dashu",
@@ -8342,8 +8309,7 @@ dependencies = [
 [[package]]
 name = "sp1-derive"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e728230d1b85f44cbb9bb26544606d0b2587de165e474dd2d5640c94448e0ee"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8353,8 +8319,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-air"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19e4724e1e2cb42abbf5e1cb2261fe94760eec57ed82bcfc2bf1e7a507882232"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "itertools 0.14.0",
  "lazy_static",
@@ -8373,8 +8338,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-basefold"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26ba800f74443e9e82b948fb3fafbba945bc3828a3fa8f8df82152c9fa1c64a6"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "itertools 0.14.0",
  "rand 0.8.5",
@@ -8407,8 +8371,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-challenger"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c47f4c254a451a1ec451e226be6d2bfbbd1e92e2622d50d3c81cf071ee7a21"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "slop-algebra",
  "slop-alloc",
@@ -8423,8 +8386,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-commit"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f39e4a18e8c0f14f4162a25a2819d38355617f7ae6bf31e1a597909e038157cd"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "itertools 0.14.0",
  "rand 0.8.5",
@@ -8452,8 +8414,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-cudart"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60b91d39ded2f81915e3c77342e40e767066805910313195c1718dad5eac1fb0"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "crossbeam",
  "futures",
@@ -8482,8 +8443,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-jagged-assist"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ddb711a62115bdb3430c678967b54e1f47adb46125086af73a0d5131f6d590b"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "futures",
  "itertools 0.14.0",
@@ -8509,8 +8469,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-jagged-sumcheck"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9aa007d026814961f3a28b5e602d21c875b75cec8b68b39b21984b3179f05599"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "futures",
  "itertools 0.14.0",
@@ -8532,8 +8491,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-jagged-tracegen"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4f7fd9c2cb0e660fdf587141839ccc60b167348f5929c3c07f2e14d2072b810"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "futures",
  "itertools 0.14.0",
@@ -8561,8 +8519,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-logup-gkr"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6649a99ae547b27e9cf93863e2aa1fef7673388ffc08cb310f45936348ca50a9"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "futures",
  "itertools 0.14.0",
@@ -8598,8 +8555,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-merkle-tree"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13cac282d33039707b52e9c53d01d39ca6ff4b8631f20a81def2ec50c31c73fd"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "slop-algebra",
  "slop-alloc",
@@ -8624,8 +8580,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-prover"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7ac582787716affa1de1a74b050b44e94cc507a8a5bb39e727d42111265e663"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "clap",
  "serde",
@@ -8659,8 +8614,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-shard-prover"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "332c617c7e2c26a410cb038829c74f62f36345d211db941a9e01600947bbfdc0"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "slop-algebra",
  "slop-alloc",
@@ -8694,8 +8648,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-sys"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbfaa86fb7b19efa6b2038ce51addc85899159e099cfb8264405a08d36772ffa"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "cbindgen",
  "cmake",
@@ -8711,8 +8664,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-tracegen"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d719dcd33e3ca8ad48c195a18f92665fb7427e5be502ca99ad4cd80d0556d41d"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "futures",
  "rayon",
@@ -8737,8 +8689,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-tracing"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ac3f14444febbe9e29776403b001b7adb20f88f7294c2b43e1f827d89b38e7e"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "sp1-gpu-cudart",
  "tracing",
@@ -8748,8 +8699,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-utils"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "460228eb3e78e2df3c1f52db049d37c05df14428d332b58b71040a52ca8c4336"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "slop-algebra",
  "slop-alloc",
@@ -8762,8 +8712,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-zerocheck"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66b3c18c6f045ba039b0b117a132b23acf4c2bb8acc3dd44b54fe2478cc7eb20"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "itertools 0.14.0",
  "rand 0.8.5",
@@ -8794,8 +8743,7 @@ dependencies = [
 [[package]]
 name = "sp1-hypercube"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8b92a1773d4856d488043bac221c25f622cfaeb98accb7817b4aebbf9e7d71a"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "arrayref",
  "deepsize2",
@@ -8842,8 +8790,7 @@ dependencies = [
 [[package]]
 name = "sp1-jit"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c26fda72527009dabf7dfa0df0029ab01ed603d1cd393ea1da2348d1a39005c3"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "dynasmrt",
  "hashbrown 0.14.5",
@@ -8857,8 +8804,7 @@ dependencies = [
 [[package]]
 name = "sp1-primitives"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4de5861af7dfcada920f67decec7bc1881fc77f613f489e85f63d452c6cfbe51"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "bincode",
  "blake3",
@@ -8881,8 +8827,7 @@ dependencies = [
 [[package]]
 name = "sp1-prover"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38f6b53a02d83ef9c27ae29b0b56218e7c6335c08e029153e3b1db1f5aa6e0b6"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "anyhow",
  "bincode",
@@ -8945,8 +8890,7 @@ dependencies = [
 [[package]]
 name = "sp1-prover-types"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bb22b7d9eb6412316ce3b6cc5c75356528ca81882e0ee6aa97b76beb940dfc4"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "anyhow",
  "async-scoped",
@@ -8966,8 +8910,7 @@ dependencies = [
 [[package]]
 name = "sp1-recursion-circuit"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a80e6b635600cc236fc60461d45990f54775d53d6dcd78c24258bb2eed1fd6d"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "bincode",
  "itertools 0.14.0",
@@ -9006,8 +8949,7 @@ dependencies = [
 [[package]]
 name = "sp1-recursion-compiler"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68cae91a3a8312f43e52342dc609765048b85d5c55ca2ebd7ff01139a01bc841"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "backtrace",
  "cfg-if",
@@ -9027,8 +8969,7 @@ dependencies = [
 [[package]]
 name = "sp1-recursion-executor"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43e759f3e5a52db702b59ef9a9db2fbf3fb87614a56d3a92294f74f00bb541c6"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "backtrace",
  "cfg-if",
@@ -9051,8 +8992,7 @@ dependencies = [
 [[package]]
 name = "sp1-recursion-gnark-ffi"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4596e1dd60a1ede1e68b4478d81cb9f012d08a4e7e6c51ab91c01c4add80d355"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "anyhow",
  "bincode",
@@ -9076,8 +9016,7 @@ dependencies = [
 [[package]]
 name = "sp1-recursion-machine"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1e5081b28250d5267bf9a4688edb5e934b7aefe34e12ab1dfce84930b3a12c6"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "itertools 0.14.0",
  "rand 0.8.5",
@@ -9099,8 +9038,7 @@ dependencies = [
 [[package]]
 name = "sp1-sdk"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b82f2c2748c176ea9d9c61b2ff80c11c3ec39e76cab15af9e1bfc10a926288f"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -9161,8 +9099,7 @@ dependencies = [
 [[package]]
 name = "sp1-verifier"
 version = "6.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad7284d42a397e400be4b10a161cdbb11b66fa5aee3008e939a2fa727c91188e"
+source = "git+https://github.com/succinctlabs/sp1?tag=v6.0.0-rc.1#7c1b84888a6a9f17c85a4be0cf9c2c9ab9c8882c"
 dependencies = [
  "bincode",
  "blake3",
