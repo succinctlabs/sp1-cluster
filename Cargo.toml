@@ -137,6 +137,10 @@ tower = "0.5.2"
 tracing = "0.1.41"
 tracing-opentelemetry = "0.24.0"
 tracing-subscriber = "0.3.19"
+# Pin vergen to 9.0.6 to fix vergen-lib version conflict
+# vergen 9.1.0 uses vergen-lib 9.x, but vergen-git2 1.x needs vergen-lib 0.1.x
+# vergen 9.0.6 uses vergen-lib 0.1.x which is compatible
+vergen = "=9.0.6"
 vergen-git2 = { version = "1.0.1", default-features = false, features = [
     "build",
     "cargo",
