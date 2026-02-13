@@ -14,6 +14,8 @@ global:
   redis:
     # Change this to a secure password.
     password: redispassword
+  security:
+    allowInsecureImages: true
 
 redis-store:
   enabled: true
@@ -145,7 +147,7 @@ postgresql:
   enabled: true
   fullnameOverride: postgresql
   image:
-    repository: bitnami/postgresql
+    repository: bitnamilegacy/postgresql
   auth:
     # Change this to a secure password.
     postgresPassword: postgrespassword

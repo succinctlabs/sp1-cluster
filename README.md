@@ -46,15 +46,15 @@ cargo build --release
 
 ## Deploying
 
-To deploy to a Kubernetes cluster, you can use the provided Helm chart in the `infra/charts/sp1-cluster` directory.
+For a complete step-by-step deployment guide (AWS EKS, Helm, verification, and testing), see **[DEPLOY.md](DEPLOY.md)**.
+
+Quick start:
 
 ```bash
 cd infra/charts/sp1-cluster
-cp values-example.yaml values-testnet.yaml
-```
-
-Edit the values-testnet.yaml file to configure your cluster.
-
-```bash
-helm install sp1-cluster . -f values-testnet.yaml
+cp values-example.yaml values.yaml
+# Edit values.yaml (see DEPLOY.md for required changes)
+helm dependency update ../redis-store
+helm dependency update .
+helm upgrade --install sp1-cluster . -f values.yaml -n sp1-cluster
 ```
