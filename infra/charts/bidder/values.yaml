@@ -5,7 +5,7 @@ replicaCount: 1
 image:
   repository: ghcr.io/succinctlabs/sp1-cluster
   pullPolicy: IfNotPresent
-  tag: base-v1.0.4
+  tag: base-v2.0.2
 
 extraEnv: {}
 
