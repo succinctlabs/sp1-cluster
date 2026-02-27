@@ -13,7 +13,13 @@ services:
       - "12345:12345"
       - "4317:4317"
       - "4318:4318"
-    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/test.alloy"]
+    command:
+      [
+        "run",
+        "--server.http.listen-addr=0.0.0.0:12345",
+        "--storage.path=/var/lib/alloy/data",
+        "/etc/alloy/test.alloy",
+      ]
 
   # Redis service (exposed for GPU workers)
   redis:
@@ -63,6 +69,8 @@ services:
       - alloy
 
   # Coordinator Service (exposed for GPU workers)
+  # Host port 50053 = coordinator. Remote workers connect here:
+  #   NODE_COORDINATOR_RPC=http://<MANAGER_IP>:50053
   coordinator:
     image: ghcr.io/succinctlabs/sp1-cluster:latest
     environment:
