@@ -28,4 +28,4 @@ copybara.jar
 **/node_modules
 
 values-*.yaml
-!values-example.yaml
+!values-example.yaml.worktrees/
