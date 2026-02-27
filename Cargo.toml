@@ -145,6 +145,28 @@ vergen-git2 = { version = "1.0.1", default-features = false, features = [
 ] }
 zstd = "0.13.3"
 
+[patch.crates-io]
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-verifier = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-recursion-gnark-ffi = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-recursion-machine = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-curves = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-derive = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-lib = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-zkvm = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+
+sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+
 [workspace.metadata.cargo-shear]
 ignored = ["prost", "serde"]
 
