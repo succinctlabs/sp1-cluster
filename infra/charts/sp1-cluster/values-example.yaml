@@ -60,7 +60,7 @@ cpu-node:
           name: cluster-secrets
           key: REDIS_NODES
   resources:
-    # At least 64 GB of RAM is necessary for Plonk.
+    # At least 64 GB of RAM to fit Controller + PlonkWrap concurrently.
     requests:
       cpu: 4
       memory: 64Gi
