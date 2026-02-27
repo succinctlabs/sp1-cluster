@@ -164,6 +164,9 @@ sp1-derive = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/cont
 sp1-lib = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
 sp1-zkvm = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
 
+sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", branch = "yuwen/controller-finishing" }
+
 [workspace.metadata.cargo-shear]
 ignored = ["prost", "serde"]
 
