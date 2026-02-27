@@ -8,12 +8,17 @@ use anyhow::Result;
 use opentelemetry::Context;
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::proto::{ProofRequestStatus, WorkerTask};
-use sp1_prover::worker::{ProofId, TaskId, TaskMetadata, WorkerClient};
+use sp1_prover::worker::{ControllerOutput, ProofId, TaskId, TaskMetadata, WorkerClient};
 use std::sync::Arc;
 
 impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
     /// The controller task for an SP1 proof. This task does all of the coordination for a full
     /// SP1 proof which can have mode core, compressed, plonk, and groth16.
+    ///
+    /// For Groth16/Plonk modes, the controller defers proof completion: it submits the
+    /// shrinkwrap + wrap tasks and returns immediately, releasing its memory weight.
+    /// The wrap task (Groth16Wrap/PlonkWrap) handles the final proof assembly and calls
+    /// complete_proof.
     pub async fn process_sp1_controller(
         self: &Arc<Self>,
         parent: Context,
@@ -33,18 +38,25 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
 
         let raw_task_request = worker_task_to_raw_task_request(&data, Some(parent));
 
-        self.worker.controller().run(raw_task_request).await?;
+        let (_, controller_output) = self.worker.controller().run(raw_task_request).await?;
 
-        // Mark proof as completed.
-        self.worker
-            .worker_client()
-            .complete_proof(
-                ProofId::new(data.proof_id.clone()),
-                Some(TaskId::new(task.task_id.clone())),
-                ProofRequestStatus::Completed,
-                "",
-            )
-            .await?;
+        match controller_output {
+            ControllerOutput::CompleteProof => {
+                // Mark proof as completed immediately (Core/Compressed modes).
+                self.worker
+                    .worker_client()
+                    .complete_proof(
+                        ProofId::new(data.proof_id.clone()),
+                        Some(TaskId::new(task.task_id.clone())),
+                        ProofRequestStatus::Completed,
+                        "",
+                    )
+                    .await?;
+            }
+            ControllerOutput::DeferCompleteProof { .. } => {
+                // Groth16/Plonk: the wrap task will complete the proof.
+            }
+        }
 
         Ok(TaskMetadata { gpu_time: None })
     }
