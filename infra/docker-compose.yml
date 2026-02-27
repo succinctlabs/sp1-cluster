@@ -49,8 +49,9 @@ services:
       - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
       - COORDINATOR_ADDR=0.0.0.0:50051
     command: ["/bin/sh", "-c", "/coordinator"]
-    # ports:
-    #   - "50052:50051"
+    # Expose coordinator for remote workers connecting from other machines.
+    ports:
+      - "0.0.0.0:50053:50051"
     depends_on:
       - api
 
@@ -70,10 +71,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '8'
+          cpus: "8"
           memory: 48G
         reservations:
-          cpus: '4'
+          cpus: "4"
           memory: 48G
     depends_on:
       - coordinator
@@ -95,10 +96,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '8'
+          cpus: "8"
           memory: 48G
         reservations:
-          cpus: '4'
+          cpus: "4"
           memory: 48G
     depends_on:
       - coordinator
@@ -116,10 +117,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '32'
+          cpus: "32"
           memory: 24G
         reservations:
-          cpus: '32'
+          cpus: "32"
           memory: 24G
     depends_on:
       - coordinator
@@ -130,43 +131,43 @@ services:
 
   gpu1:
     environment:
-    - CUDA_VISIBLE_DEVICES=1
+      - CUDA_VISIBLE_DEVICES=1
     extends:
       service: gpu0
 
   gpu2:
     environment:
-    - CUDA_VISIBLE_DEVICES=2
+      - CUDA_VISIBLE_DEVICES=2
     extends:
       service: gpu0
 
   gpu3:
     environment:
-    - CUDA_VISIBLE_DEVICES=3
+      - CUDA_VISIBLE_DEVICES=3
     extends:
       service: gpu0
 
   gpu4:
     environment:
-    - CUDA_VISIBLE_DEVICES=4
+      - CUDA_VISIBLE_DEVICES=4
     extends:
       service: gpu0
 
   gpu5:
     environment:
-    - CUDA_VISIBLE_DEVICES=5
+      - CUDA_VISIBLE_DEVICES=5
     extends:
       service: gpu0
 
   gpu6:
     environment:
-    - CUDA_VISIBLE_DEVICES=6
+      - CUDA_VISIBLE_DEVICES=6
     extends:
       service: gpu0
 
   gpu7:
     environment:
-    - CUDA_VISIBLE_DEVICES=7
+      - CUDA_VISIBLE_DEVICES=7
     extends:
       service: gpu0
 

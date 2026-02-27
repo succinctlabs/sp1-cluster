@@ -1,6 +1,8 @@
-# GPU Worker Node Docker Compose
-# This runs on GPU machines, connecting to management node
-# Includes: Alloy (local) and GPU nodes
+# Worker Node Docker Compose
+# Runs on separate machines, connecting to the management node.
+#
+# Same machine as manager: docker compose up
+# Remote machine: MANAGER_HOST=<ip> docker compose up
 
 services:
   # Alloy observability service (local to this worker)
@@ -14,7 +16,13 @@ services:
       - "12345:12345"
       - "4317:4317"
       - "4318:4318"
-    command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/test.alloy"]
+    command:
+      [
+        "run",
+        "--server.http.listen-addr=0.0.0.0:12345",
+        "--storage.path=/var/lib/alloy/data",
+        "/etc/alloy/test.alloy",
+      ]
 
   # # Redis service (exposed for GPU workers)
   # redis:
@@ -41,10 +49,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - NODE_COORDINATOR_RPC=http://host.docker.internal:50053
+      - NODE_COORDINATOR_RPC=http://${MANAGER_HOST:-host.docker.internal}:50053
       - WORKER_MAX_WEIGHT_OVERRIDE=24
       - NODE_ARTIFACT_STORE=redis
-      - NODE_REDIS_NODES=redis://:redispassword@host.docker.internal:6379/0
+      - NODE_REDIS_NODES=redis://:redispassword@${MANAGER_HOST:-host.docker.internal}:6379/0
       - WORKER_TYPE=GPU
       - RUST_LOG=debug,tower=info,h2=info,tonic-web=info,hyper-util=info
       - TRACING_ENABLED=true
@@ -111,6 +119,32 @@ services:
   #   cpuset: "448-511"  # Second half of NUMA node 3
   #   extends:
   #     service: gpu0
+
+  # # CPU Node — uncomment to run CPU workers on this machine
+  # # For performance tuning (splicing workers, buffer sizes), see:
+  # #   https://github.com/succinctlabs/sp1/blob/main/crates/prover/src/worker/config.rs
+  # cpu-node:
+  #   image: ghcr.io/succinctlabs/sp1-cluster:latest
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   environment:
+  #     - NODE_COORDINATOR_RPC=http://${MANAGER_HOST:-host.docker.internal}:50053
+  #     - WORKER_MAX_WEIGHT_OVERRIDE=48
+  #     - WORKER_CONTROLLER_WEIGHT=16
+  #     - NODE_ARTIFACT_STORE=redis
+  #     - NODE_REDIS_NODES=redis://:redispassword@${MANAGER_HOST:-host.docker.internal}:6379/0
+  #     - WORKER_TYPE=CPU
+  #   volumes:
+  #     - ${HOME}/.sp1/circuits:/root/.sp1/circuits
+  #   command: ["/bin/sh", "-c", "/node"]
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 96G
+  #       reservations:
+  #         memory: 96G
+  #   depends_on:
+  #     - alloy
 
 volumes:
   redis_data:
