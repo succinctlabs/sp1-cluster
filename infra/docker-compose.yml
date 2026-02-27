@@ -60,6 +60,7 @@ services:
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=32
+      - WORKER_CONTROLLER_WEIGHT=16
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=CPU
@@ -84,6 +85,7 @@ services:
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       - WORKER_MAX_WEIGHT_OVERRIDE=32
+      - WORKER_CONTROLLER_WEIGHT=16
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=ALL
