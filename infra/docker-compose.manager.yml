@@ -104,9 +104,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 80G
+          memory: 128G
         reservations:
-          memory: 80G
+          memory: 128G
 
     depends_on:
       - coordinator
