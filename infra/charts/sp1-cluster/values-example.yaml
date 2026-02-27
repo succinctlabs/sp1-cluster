@@ -60,13 +60,13 @@ cpu-node:
           name: cluster-secrets
           key: REDIS_NODES
   resources:
-    # At least 32 GB of RAM is necessary for Plonk.
+    # At least 64 GB of RAM is necessary for Plonk.
     requests:
       cpu: 4
-      memory: 32Gi
+      memory: 64Gi
     limits:
       cpu: 8
-      memory: 32Gi
+      memory: 64Gi
   image:
     tag: "base-v2.0.2"
   imagePullSecrets:

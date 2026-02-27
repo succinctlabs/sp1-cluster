@@ -71,10 +71,10 @@ services:
       resources:
         limits:
           cpus: '8'
-          memory: 32G
+          memory: 64G
         reservations:
           cpus: '4'
-          memory: 32G
+          memory: 64G
     depends_on:
       - coordinator
       - redis
@@ -96,10 +96,10 @@ services:
       resources:
         limits:
           cpus: '8'
-          memory: 32G
+          memory: 64G
         reservations:
           cpus: '4'
-          memory: 32G
+          memory: 64G
     depends_on:
       - coordinator
       - redis
