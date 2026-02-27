@@ -52,7 +52,7 @@ cpu-node:
   extraEnv:
     NODE_COORDINATOR_RPC: http://coordinator-grpc:50051
     # Set this based on how many GB of RAM is available.
-    WORKER_MAX_WEIGHT_OVERRIDE: "32"
+    WORKER_MAX_WEIGHT_OVERRIDE: "64"
     NODE_ARTIFACT_STORE: redis
     NODE_REDIS_NODES:
       valueFrom:
