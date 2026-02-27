@@ -52,7 +52,7 @@ cpu-node:
   extraEnv:
     NODE_COORDINATOR_RPC: http://coordinator-grpc:50051
     # Set this based on how many GB of RAM is available.
-    WORKER_MAX_WEIGHT_OVERRIDE: "64"
+    WORKER_MAX_WEIGHT_OVERRIDE: "48"
     WORKER_CONTROLLER_WEIGHT: "16"
     NODE_ARTIFACT_STORE: redis
     NODE_REDIS_NODES:
@@ -61,13 +61,13 @@ cpu-node:
           name: cluster-secrets
           key: REDIS_NODES
   resources:
-    # At least 64 GB of RAM to fit Controller + PlonkWrap concurrently.
+    # At least 48 GB of RAM to fit Controller + PlonkWrap concurrently.
     requests:
       cpu: 4
-      memory: 64Gi
+      memory: 48Gi
     limits:
       cpu: 8
-      memory: 64Gi
+      memory: 48Gi
   image:
     tag: "base-v2.0.2"
   imagePullSecrets:

@@ -59,7 +59,7 @@ services:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.0.2
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
-      - WORKER_MAX_WEIGHT_OVERRIDE=64
+      - WORKER_MAX_WEIGHT_OVERRIDE=48
       - WORKER_CONTROLLER_WEIGHT=16
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
@@ -71,10 +71,10 @@ services:
       resources:
         limits:
           cpus: '8'
-          memory: 64G
+          memory: 48G
         reservations:
           cpus: '4'
-          memory: 64G
+          memory: 48G
     depends_on:
       - coordinator
       - redis
@@ -84,7 +84,7 @@ services:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.0.2
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
-      - WORKER_MAX_WEIGHT_OVERRIDE=64
+      - WORKER_MAX_WEIGHT_OVERRIDE=48
       - WORKER_CONTROLLER_WEIGHT=16
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
@@ -96,10 +96,10 @@ services:
       resources:
         limits:
           cpus: '8'
-          memory: 64G
+          memory: 48G
         reservations:
           cpus: '4'
-          memory: 64G
+          memory: 48G
     depends_on:
       - coordinator
       - redis
