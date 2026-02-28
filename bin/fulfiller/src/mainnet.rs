@@ -309,4 +309,8 @@ impl NetworkRequest for NetworkProofRequest {
     fn stdin_public_uri(&self) -> &str {
         &self.0.stdin_public_uri
     }
+
+    fn is_unexecutable(&self) -> bool {
+        self.0.execution_status == spn_network_types::ExecutionStatus::Unexecutable as i32
+    }
 }

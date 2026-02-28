@@ -24,6 +24,11 @@ pub trait NetworkRequest: Send + Sync + 'static {
     fn program_public_uri(&self) -> &str;
 
     fn stdin_public_uri(&self) -> &str;
+
+    /// Whether the execution oracle has marked this request as unexecutable.
+    fn is_unexecutable(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]

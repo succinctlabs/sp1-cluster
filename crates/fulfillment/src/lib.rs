@@ -30,12 +30,54 @@ pub mod run;
 const REFRESH_INTERVAL_SEC: u64 = 3;
 /// The maximum number of requests to handle in a single refresh loop.
 const REQUEST_LIMIT: u32 = 1000;
-/// The error strings that should trigger a VERIFICATION_KEY_MISMATCH error.
-const VK_MISMATCH_STRINGS: &[&str] = &[
-    "InvalidPowWitness",
-    "sp1 vk hash mismatch",
-    "vk hash from syscall does not match vkey from input",
-];
+/// Terminal errors that can occur when submitting a proof to the network. These represent
+/// permanent rejection conditions where retrying will never succeed.
+#[derive(Debug, Clone, Copy)]
+enum TerminalSubmitError {
+    /// The execution oracle marked the request as unexecutable (e.g., guest panic).
+    Unexecutable,
+    /// The verification key does not match what the network expects for the program.
+    VkMismatch,
+}
+
+impl TerminalSubmitError {
+    /// Classifies a submission error into a terminal error, if it matches.
+    fn classify(err: &anyhow::Error) -> Option<Self> {
+        const UNEXECUTABLE_PATTERNS: &[&str] = &["not in an executed state"];
+        const VK_MISMATCH_PATTERNS: &[&str] = &[
+            "InvalidPowWitness",
+            "sp1 vk hash mismatch",
+            "vk hash from syscall does not match vkey from input",
+        ];
+
+        let err_text = format!("{err:?}");
+        if UNEXECUTABLE_PATTERNS.iter().any(|s| err_text.contains(s)) {
+            Some(Self::Unexecutable)
+        } else if VK_MISMATCH_PATTERNS.iter().any(|s| err_text.contains(s)) {
+            Some(Self::VkMismatch)
+        } else {
+            None
+        }
+    }
+
+    /// The error code to send to the network when failing the request.
+    fn network_error_code(self) -> Option<i32> {
+        match self {
+            // ProofRequestError::VerificationKeyMismatch = 2.
+            Self::VkMismatch => Some(2),
+            Self::Unexecutable => None,
+        }
+    }
+}
+
+impl std::fmt::Display for TerminalSubmitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unexecutable => write!(f, "unexecutable"),
+            Self::VkMismatch => write!(f, "VK mismatch"),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct Fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> {
@@ -82,6 +124,31 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             disable_fulfillment,
             request_probability,
         }
+    }
+
+    /// Fails a request on the network with an optional error code and marks it as handled on
+    /// the cluster. Used when submission is permanently rejected (unexecutable, VK mismatch).
+    async fn fail_and_mark_handled(&self, request_id: &str, error: Option<i32>) -> Result<()> {
+        self.network
+            .fail_request_with_error(request_id, error, self.domain.as_slice(), &self.signer)
+            .await?;
+
+        if let Err(e) = self
+            .cluster
+            .update_proof_request(ProofRequestUpdateRequest {
+                proof_id: request_id.to_string(),
+                handled: Some(true),
+                ..Default::default()
+            })
+            .await
+        {
+            error!(
+                "failed to mark request 0x{} as handled: {:?}",
+                request_id, e
+            );
+        }
+
+        Ok(())
     }
 
     /// Runs the fulfiller loop.
@@ -158,31 +225,22 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                         error!("failed to submit request 0x{}: {:?}", request_id, e);
                         self_clone.metrics.request_submission_failures.increment(1);
 
-                        // Fail the request if the verification key does not match the one
-                        // expected for the program.
-                        let err_text = format!("{e:?}");
-                        if VK_MISMATCH_STRINGS.iter().any(|s| err_text.contains(s)) {
-                            // ProofRequestError::VerificationKeyMismatch = 2
-                            const VK_MISMATCH_ERROR: i32 = 2;
+                        // Classify the submission error and fail the request permanently
+                        // on the network if it matches a known terminal condition.
+                        if let Some(terminal) = TerminalSubmitError::classify(&e) {
                             match self_clone
-                                .network
-                                .fail_request_with_error(
-                                    &request_id,
-                                    Some(VK_MISMATCH_ERROR),
-                                    self_clone.domain.as_slice(),
-                                    &self_clone.signer,
-                                )
+                                .fail_and_mark_handled(&request_id, terminal.network_error_code())
                                 .await
                             {
-                                Ok(_) => {
-                                    info!("failed request 0x{} due to VK mismatch", request_id);
+                                Ok(()) => {
+                                    info!("request 0x{} rejected and handled: {}", request_id, terminal);
                                     self_clone.metrics.requests_failed.increment(1);
                                     self_clone.metrics.total_requests_processed.increment(1);
                                 }
                                 Err(e) => {
                                     error!(
-                                        "failed to fail request 0x{} with VK mismatch: {:?}",
-                                        request_id, e
+                                        "request 0x{} rejected ({}), failed to handle: {:?}",
+                                        request_id, terminal, e
                                     );
                                 }
                             }
@@ -361,7 +419,10 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                         self_clone.metrics.total_requests_processed.increment(1);
                     }
                     Err(e) => {
-                        error!("failed to cancel request 0x{}: {:?}", request_id, e);
+                        error!(
+                            "failed to cancel request 0x{}: {:?}",
+                            request_id, e
+                        );
                         self_clone.metrics.request_cancel_failures.increment(1);
                     }
                 }
@@ -373,22 +434,43 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         Ok(())
     }
 
-    /// Cancels a request by failing fulfillment on the network and unclaming it on the cluster.
+    /// Cancels a request by notifying the network and forcing the cluster to stop any
+    /// in-progress proving. Falls back to marking handled=true when the cluster cancel
+    /// fails (request no longer Pending), which triggers coordinator orphan detection
+    /// and aborts running proof tasks within ~500ms.
     async fn cancel_request(&self, request_id: &str) -> Result<()> {
-        // Send the failed fulfillment to the network.
+        // Send the cancellation to the network.
         if !self.disable_fulfillment {
             self.network
                 .cancel_request(request_id, &self.signer)
                 .await?;
         }
 
-        // Update the status to cancelled on the cluster.
-        self.cluster
+        // Try to cancel on the cluster (only works for Pending requests).
+        let cancel_result = self
+            .cluster
             .cancel_proof_request(ProofRequestCancelRequest {
                 proof_id: request_id.to_string(),
             })
-            .map_err(|e| anyhow!("failed to update proof request status: {}", e))
-            .await?;
+            .await;
+
+        if cancel_result.is_err() {
+            // Request is no longer Pending (proving in progress or completed).
+            // Mark as handled to trigger coordinator orphan detection, which
+            // will abort any running proof tasks within ~500ms.
+            info!(
+                "cancel failed for 0x{}, marking handled to abort in-progress proving",
+                request_id
+            );
+            self.cluster
+                .update_proof_request(ProofRequestUpdateRequest {
+                    proof_id: request_id.to_string(),
+                    handled: Some(true),
+                    ..Default::default()
+                })
+                .map_err(|e| anyhow!("failed to mark request as handled: {}", e))
+                .await?;
+        }
 
         Ok(())
     }
@@ -425,6 +507,12 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 
                 // Note: We can't check fulfiller via NetworkRequest trait, so we skip this check
                 // The network layer should handle filtering requests with fulfillers
+
+                // Skip requests that the execution oracle has marked as unexecutable.
+                if request.is_unexecutable() {
+                    info!("skipping unexecutable request 0x{}", request_id_hex);
+                    return false;
+                }
 
                 // Check if it's already in the cluster
                 if cluster_requests.contains(&request_id_hex) {
