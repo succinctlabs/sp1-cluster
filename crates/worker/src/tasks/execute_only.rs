@@ -60,13 +60,23 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
         .map_err(|e| ExecutionError::Other(e.to_string()));
 
         let result_obj = match execution_result {
-            Ok((pv, _, execution_report)) => ExecutionResult {
+            Ok((pv, _, execution_report)) if execution_report.exit_code == 0 => ExecutionResult {
                 status: ExecutionStatus::Executed as i32,
                 failure_cause: ExecutionFailureCause::Unspecified as i32,
                 cycles: execution_report.total_instruction_count(),
                 gas: execution_report.gas().unwrap_or(0),
                 public_values_hash: pv.hash(),
             },
+            Ok((_, _, execution_report)) => {
+                // Non-zero exit code means the guest program panicked.
+                ExecutionResult {
+                    status: ExecutionStatus::Failed as i32,
+                    failure_cause: ExecuteFailureCause::UnspecifiedExecutionFailureCause as i32,
+                    cycles: execution_report.total_instruction_count(),
+                    gas: execution_report.gas().unwrap_or(0),
+                    public_values_hash: vec![],
+                }
+            }
             Err(err) => {
                 // Determine the cause of failure.
                 #[allow(unreachable_patterns)]
