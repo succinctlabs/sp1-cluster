@@ -233,7 +233,10 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                                 .await
                             {
                                 Ok(()) => {
-                                    info!("request 0x{} rejected and handled: {}", request_id, terminal);
+                                    info!(
+                                        "request 0x{} rejected and handled: {}",
+                                        request_id, terminal
+                                    );
                                     self_clone.metrics.requests_failed.increment(1);
                                     self_clone.metrics.total_requests_processed.increment(1);
                                 }
@@ -419,10 +422,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                         self_clone.metrics.total_requests_processed.increment(1);
                     }
                     Err(e) => {
-                        error!(
-                            "failed to cancel request 0x{}: {:?}",
-                            request_id, e
-                        );
+                        error!("failed to cancel request 0x{}: {:?}", request_id, e);
                         self_clone.metrics.request_cancel_failures.increment(1);
                     }
                 }
