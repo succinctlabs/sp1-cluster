@@ -69,10 +69,6 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
             },
             Ok((_, _, execution_report)) => {
                 // Non-zero exit code means the guest program panicked.
-                log::error!(
-                    "execution returned non-zero exit code {}: marking as failed",
-                    execution_report.exit_code
-                );
                 ExecutionResult {
                     status: ExecutionStatus::Failed as i32,
                     failure_cause: ExecuteFailureCause::UnspecifiedExecutionFailureCause as i32,
