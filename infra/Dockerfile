@@ -36,7 +36,7 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Install sp1 toolchain
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-RUN curl -L https://sp1.succinct.xyz | bash && ~/.sp1/bin/sp1up --version 6.0.0
+RUN curl -L https://sp1.succinct.xyz | bash && ~/.sp1/bin/sp1up
 
 # Install protoc
 ENV PROTOC_ZIP=protoc-29.4-linux-x86_64.zip

@@ -3,14 +3,14 @@ use crate::utils::worker_task_to_raw_task_request;
 use anyhow::Result;
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::proto::{ProofRequestStatus, WorkerTask};
+use sp1_primitives::io::SP1PublicValues;
 use sp1_prover::worker::{
-    ProofFromNetwork, ProofId, RawTaskRequest, SP1Proof, TaskId, TaskMetadata, WrapFinalizeInput,
-    WorkerClient,
+    ProofFromNetwork, ProofId, RawTaskRequest, SP1Proof, TaskId, TaskMetadata, WorkerClient,
+    WrapFinalizeInput,
 };
 use sp1_prover::SP1_CIRCUIT_VERSION;
 use sp1_prover_types::network_base_types::ProofMode;
 use sp1_prover_types::ArtifactType;
-use sp1_primitives::io::SP1PublicValues;
 use std::sync::Arc;
 
 use crate::SP1ClusterWorker;
@@ -41,7 +41,12 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
 
         match mode {
             ProofMode::Plonk => self.worker.prover_engine().run_plonk(prove_request).await?,
-            ProofMode::Groth16 => self.worker.prover_engine().run_groth16(prove_request).await?,
+            ProofMode::Groth16 => {
+                self.worker
+                    .prover_engine()
+                    .run_groth16(prove_request)
+                    .await?
+            }
             _ => return Err(TaskError::Fatal(anyhow::anyhow!("Invalid proof mode"))),
         }
 
@@ -57,11 +62,19 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
 
             let inner_proof = match mode {
                 ProofMode::Groth16 => {
-                    let proof = self.worker.artifact_client().download(wrap_proof_artifact).await?;
+                    let proof = self
+                        .worker
+                        .artifact_client()
+                        .download(wrap_proof_artifact)
+                        .await?;
                     SP1Proof::Groth16(proof)
                 }
                 ProofMode::Plonk => {
-                    let proof = self.worker.artifact_client().download(wrap_proof_artifact).await?;
+                    let proof = self
+                        .worker
+                        .artifact_client()
+                        .download(wrap_proof_artifact)
+                        .await?;
                     SP1Proof::Plonk(proof)
                 }
                 _ => unreachable!(),
