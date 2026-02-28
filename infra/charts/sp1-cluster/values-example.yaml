@@ -69,7 +69,7 @@ cpu-node:
       cpu: 8
       memory: 48Gi
   image:
-    tag: "base-v2.0.2"
+    tag: "base-v2.0.3"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-GPU machine with a powerful CPU.
@@ -102,7 +102,7 @@ gpu-node:
       # cpu: 32.0
       # memory: 24Gi
   image:
-    tag: "node-gpu-v2.0.2"
+    tag: "node-gpu-v2.0.3"
   imagePullSecrets:
     - name: ghcr-secret
 
@@ -119,7 +119,7 @@ api:
           key: DATABASE_URL
   replicaCount: 1
   image:
-    tag: "base-v2.0.2"
+    tag: "base-v2.0.3"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.
@@ -134,7 +134,7 @@ coordinator:
     COORDINATOR_METRICS_ADDR: 0.0.0.0:9090
     COORDINATOR_ADDR: 0.0.0.0:50051
   image:
-    tag: "base-v2.0.2"
+    tag: "base-v2.0.3"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.
@@ -186,7 +186,7 @@ fulfiller:
           name: cluster-secrets
           key: PRIVATE_KEY
   image:
-    tag: "base-v2.0.2"
+    tag: "base-v2.0.3"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.
@@ -212,7 +212,7 @@ bidder:
     BIDDER_MAX_CONCURRENT_PROOFS: 1
     BIDDER_BID_AMOUNT: 1
   image:
-    tag: "base-v2.0.2"
+    tag: "base-v2.0.3"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.
