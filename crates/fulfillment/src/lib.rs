@@ -63,9 +63,10 @@ impl TerminalSubmitError {
     /// The error code to send to the network when failing the request.
     fn network_error_code(self) -> Option<i32> {
         match self {
+            // ProofRequestError::ExecutionFailure = 1.
+            Self::Unexecutable => Some(1),
             // ProofRequestError::VerificationKeyMismatch = 2.
             Self::VkMismatch => Some(2),
-            Self::Unexecutable => None,
         }
     }
 }
