@@ -105,6 +105,9 @@ async fn main() -> Result<()> {
     let (metrics, _metrics_server_handle, metrics_shutdown_tx) =
         initialize_metrics().await.map_err(|e| eyre::eyre!(e))?;
 
+    #[cfg(feature = "gpu")]
+    metrics.num_gpu_workers.set(1.0);
+
     ctrlc::set_handler(move || {
         let is_shutting_down = shutting_down_clone.load(Ordering::Relaxed);
         if !is_shutting_down {
