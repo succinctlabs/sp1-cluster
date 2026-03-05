@@ -396,30 +396,6 @@
                 "overrides": [
                     {
                         "matcher": {
-                            "id": "byName",
-                            "options": "sum(rate(spn_cluster_worker_gpu_busy_time{environment=\"production3\",cluster_arn=~\".*production3-opsuccinct-prover\"}[4m0s])>0)/1000"
-                        },
-                        "properties": [
-                            {
-                                "id": "displayName",
-                                "value": "Estimated GPUs Busy"
-                            }
-                        ]
-                    },
-                    {
-                        "matcher": {
-                            "id": "byName",
-                            "options": "sum(spn_cluster_worker_num_gpu_workers{environment=\"production3\",cluster_arn=~\".*production3-opsuccinct-prover\"})"
-                        },
-                        "properties": [
-                            {
-                                "id": "displayName",
-                                "value": "Actual GPUs"
-                            }
-                        ]
-                    },
-                    {
-                        "matcher": {
                             "id": "byRegexp",
                             "options": "/spn_cluster_worker_gpu_busy_time/"
                         },
