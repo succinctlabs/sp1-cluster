@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eyre::Result;
