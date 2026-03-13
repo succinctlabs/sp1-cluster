@@ -416,6 +416,27 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
         let response = self.coordinator.get_info().await;
         Ok(Response::new(response))
     }
+
+    type SubscribeTaskMessagesStream =
+        UnboundedReceiverStream<Result<proto::MessageStreamResponse, Status>>;
+
+    async fn subscribe_task_messages(
+        &self,
+        request: Request<proto::SubscribeTaskMessagesRequest>,
+    ) -> Result<Response<Self::SubscribeTaskMessagesStream>, Status> {
+        let req = request.into_inner();
+        let rx = self.coordinator.subscribe_task_channel(&req.task_id, req.start_offset as usize);
+        Ok(Response::new(UnboundedReceiverStream::new(rx)))
+    }
+
+    async fn send_task_message(
+        &self,
+        request: Request<proto::SendTaskMessageRequest>,
+    ) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        self.coordinator.send_task_message(&req.task_id, req.payload);
+        Ok(Response::new(()))
+    }
 }
 
 /// A subscriber handler.

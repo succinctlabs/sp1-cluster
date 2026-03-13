@@ -73,6 +73,7 @@ pub fn spawn_coordinator_periodic_task<P: AssignmentPolicy>(
             loop {
                 coordinator.cleanup_dead_workers().await;
                 coordinator.cleanup_dead_subscribers().await;
+                coordinator.cleanup_stale_task_channels();
                 coordinator.cleanup_cancel_expired_proofs().await;
                 coordinator.print_info().await;
                 print_latency().await;

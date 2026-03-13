@@ -14,8 +14,9 @@ pub use policy::AssignmentPolicy;
 use sp1_cluster_common::consts::CONTROLLER_WEIGHT;
 use sp1_cluster_common::proto::{self};
 use sp1_cluster_common::proto::{
-    server_message, server_sub_message, CancelTask, EndOfStream, GetStatsResponse, ServerMessage,
-    ServerSubMessage, TaskData, TaskResult, TaskStatus, TaskType, WorkerTask, WorkerType,
+    server_message, server_sub_message, CancelTask, EndOfStream, GetStatsResponse,
+    MessageStreamResponse, ServerMessage, ServerSubMessage, TaskData, TaskResult, TaskStatus,
+    TaskType, WorkerTask, WorkerType,
 };
 use sp1_sdk::SP1_CIRCUIT_VERSION;
 use std::{
@@ -48,6 +49,7 @@ pub fn estimate_duration(task_type: TaskType) -> u128 {
         TaskType::UnspecifiedTaskType => 0,
         TaskType::UtilVkeyMapChunk | TaskType::UtilVkeyMapController => 0,
         TaskType::ExecuteOnly => 200,
+        TaskType::CoreExecute => 200,
     }
 }
 
@@ -55,7 +57,11 @@ pub fn estimate_duration(task_type: TaskType) -> u128 {
 fn enable_proof_fail(task_type: TaskType) -> bool {
     matches!(
         task_type,
-        TaskType::Controller | TaskType::Groth16Wrap | TaskType::PlonkWrap | TaskType::ExecuteOnly
+        TaskType::Controller
+            | TaskType::Groth16Wrap
+            | TaskType::PlonkWrap
+            | TaskType::ExecuteOnly
+            | TaskType::CoreExecute
     )
 }
 
@@ -85,6 +91,30 @@ pub struct Subscriber {
     last_update: SystemTime,
 }
 
+pub struct MessageChannelState {
+    inner: std::sync::Mutex<MessageChannelInner>,
+}
+
+struct MessageChannelInner {
+    subscribers: Vec<mpsc::UnboundedSender<Result<MessageStreamResponse, Status>>>,
+    buffer: Vec<Vec<u8>>,
+    closed: bool,
+    closed_at: Option<std::time::Instant>,
+}
+
+impl Default for MessageChannelState {
+    fn default() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(MessageChannelInner {
+                subscribers: Vec::new(),
+                buffer: Vec::new(),
+                closed: false,
+                closed_at: None,
+            }),
+        }
+    }
+}
+
 /// The task coordinator.
 pub struct Coordinator<P: AssignmentPolicy> {
     /// Current state which can be accessed concurrently.
@@ -92,6 +122,9 @@ pub struct Coordinator<P: AssignmentPolicy> {
 
     /// Thread safe map of subscribers.
     pub subscribers: DashMap<String, Subscriber>,
+
+    /// Message channels keyed by task_id.
+    pub task_channels: DashMap<String, MessageChannelState>,
 
     /// Metrics for the coordinator
     pub metrics: Option<Arc<metrics::CoordinatorMetrics>>,
@@ -121,6 +154,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 execute_only_mode: false,
             })),
             subscribers: DashMap::new(),
+            task_channels: DashMap::new(),
             metrics: None,
         }
     }
@@ -499,6 +533,8 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             };
             // Update task status.
             task.status = TaskStatus::Succeeded;
+
+            self.close_task_channel(&task_id);
 
             let remaining_tasks = proof.active_tasks;
 
@@ -904,6 +940,8 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         // Set task status.
         task.status = status;
 
+        self.close_task_channel(&task_id);
+
         // Clone currently borrowed data so we can reborrow from state.
         let task = task.clone();
         let task_weight = task.data.weight;
@@ -1181,6 +1219,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 }
             }
 
+            for task in proof.tasks.values() {
+                self.close_task_channel(&task.id);
+            }
+
             tracing::info!("Failed proof {} ", proof_id);
 
             if notify_sender {
@@ -1263,6 +1305,21 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                     true
                 }
             });
+        });
+    }
+
+    /// Remove task channel entries that have been closed for longer than the sweep threshold,
+    /// or whose task no longer exists in any proof.
+    pub fn cleanup_stale_task_channels(&self) {
+        const STALE_THRESHOLD: Duration = Duration::from_secs(60);
+        self.task_channels.retain(|_task_id, state| {
+            let inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(closed_at) = inner.closed_at {
+                if closed_at.elapsed() > STALE_THRESHOLD {
+                    return false;
+                }
+            }
+            true
         });
     }
 
@@ -1539,6 +1596,76 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         }
     }
 
+    /// Send a message on a task channel, lazily creating the channel entry if needed.
+    /// Buffers the payload so late or reconnecting subscribers can replay it.
+    pub fn send_task_message(&self, task_id: &str, payload: Vec<u8>) {
+        let state = self.task_channels.entry(task_id.to_string()).or_default();
+        let mut inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.closed {
+            tracing::warn!("Dropping message for already-closed task channel {}", task_id);
+            return;
+        }
+        inner.buffer.push(payload.clone());
+        let msg = Ok(MessageStreamResponse {
+            message: Some(
+                proto::message_stream_response::Message::Payload(payload),
+            ),
+        });
+        inner.subscribers.retain(|tx| tx.send(msg.clone()).is_ok());
+    }
+
+    /// Close a task's message channel, sending end_of_stream to all current subscribers.
+    /// The entry is kept (marked closed) so late subscribers can replay buffered messages.
+    pub fn close_task_channel(&self, task_id: &str) {
+        if let Some(state) = self.task_channels.get(task_id) {
+            let mut inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if inner.closed {
+                return;
+            }
+            inner.closed = true;
+            inner.closed_at = Some(std::time::Instant::now());
+            let eos = Ok(MessageStreamResponse {
+                message: Some(
+                    proto::message_stream_response::Message::EndOfStream(proto::EndOfStream {}),
+                ),
+            });
+            for tx in inner.subscribers.drain(..) {
+                tx.send(eos.clone()).ok();
+            }
+        }
+    }
+
+    /// Subscribe to a task's message channel, returning the receiver end.
+    /// Replays buffered messages starting from `start_offset`. If the channel
+    /// is already closed, sends the buffer followed by EndOfStream immediately.
+    pub fn subscribe_task_channel(
+        &self,
+        task_id: &str,
+        start_offset: usize,
+    ) -> mpsc::UnboundedReceiver<Result<MessageStreamResponse, Status>> {
+        let state = self.task_channels.entry(task_id.to_string()).or_default();
+        let mut inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = mpsc::unbounded_channel();
+        for payload in inner.buffer.iter().skip(start_offset) {
+            let msg = Ok(MessageStreamResponse {
+                message: Some(
+                    proto::message_stream_response::Message::Payload(payload.clone()),
+                ),
+            });
+            let _ = tx.send(msg);
+        }
+        if inner.closed {
+            let _ = tx.send(Ok(MessageStreamResponse {
+                message: Some(
+                    proto::message_stream_response::Message::EndOfStream(proto::EndOfStream {}),
+                ),
+            }));
+        } else {
+            inner.subscribers.push(tx);
+        }
+        rx
+    }
+
     // Shutdown the coordinator.
     #[instrument(skip(self))]
     pub async fn shutdown(self: &Arc<Self>) {
@@ -1567,6 +1694,11 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             worker.active_tasks.clear();
         }
         tracing::info!("Cancelled {} tasks", total);
+        // Close all task message channels.
+        let task_ids: Vec<String> = self.task_channels.iter().map(|e| e.key().clone()).collect();
+        for task_id in &task_ids {
+            self.close_task_channel(task_id);
+        }
         // Close all sub channels.
         let mut subs = 0;
         for entry in &self.subscribers {
@@ -1581,5 +1713,288 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             subs += 1;
         }
         tracing::info!("Closed {} subscribers", subs);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use policy::default::DefaultPolicy;
+
+    fn coordinator() -> Coordinator<DefaultPolicy> {
+        Coordinator::new()
+    }
+
+    fn extract_payload(
+        msg: Result<MessageStreamResponse, Status>,
+    ) -> Option<Vec<u8>> {
+        match msg.ok()?.message? {
+            proto::message_stream_response::Message::Payload(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    fn is_end_of_stream(msg: &Result<MessageStreamResponse, Status>) -> bool {
+        matches!(
+            msg.as_ref().ok().and_then(|r| r.message.as_ref()),
+            Some(proto::message_stream_response::Message::EndOfStream(_))
+        )
+    }
+
+    #[test]
+    fn subscribe_then_send() {
+        let c = coordinator();
+        let mut rx = c.subscribe_task_channel("t1", 0);
+
+        c.send_task_message("t1", vec![1, 2, 3]);
+        c.send_task_message("t1", vec![4, 5]);
+
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![1, 2, 3]));
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![4, 5]));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn send_then_subscribe_replays_buffer() {
+        let c = coordinator();
+
+        c.send_task_message("t1", vec![10]);
+        c.send_task_message("t1", vec![20]);
+        c.send_task_message("t1", vec![30]);
+
+        let mut rx = c.subscribe_task_channel("t1", 0);
+
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![10]));
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![20]));
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![30]));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn close_sends_eos_to_active_subscriber() {
+        let c = coordinator();
+        let mut rx = c.subscribe_task_channel("t1", 0);
+
+        c.send_task_message("t1", vec![1]);
+        c.close_task_channel("t1");
+
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![1]));
+        assert!(is_end_of_stream(&rx.try_recv().unwrap()));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn subscribe_after_close_gets_buffer_and_eos() {
+        let c = coordinator();
+
+        c.send_task_message("t1", vec![1]);
+        c.send_task_message("t1", vec![2]);
+        c.close_task_channel("t1");
+
+        let mut rx = c.subscribe_task_channel("t1", 0);
+
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![1]));
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![2]));
+        assert!(is_end_of_stream(&rx.try_recv().unwrap()));
+    }
+
+    #[test]
+    fn subscribe_to_unknown_task_creates_empty_channel() {
+        let c = coordinator();
+        let mut rx = c.subscribe_task_channel("nonexistent", 0);
+
+        // Channel is open but empty.
+        assert!(rx.try_recv().is_err());
+        assert_eq!(c.task_channels.len(), 1);
+    }
+
+    #[test]
+    fn send_after_close_is_ignored() {
+        let c = coordinator();
+        let mut rx = c.subscribe_task_channel("t1", 0);
+
+        c.close_task_channel("t1");
+        c.send_task_message("t1", vec![99]);
+
+        assert!(is_end_of_stream(&rx.try_recv().unwrap()));
+        // No payload after EOS — the send was discarded.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn double_close_is_idempotent() {
+        let c = coordinator();
+        let mut rx = c.subscribe_task_channel("t1", 0);
+
+        c.close_task_channel("t1");
+        c.close_task_channel("t1");
+
+        assert!(is_end_of_stream(&rx.try_recv().unwrap()));
+        // Only one EOS.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn dead_subscriber_is_pruned_on_send() {
+        let c = coordinator();
+        let rx = c.subscribe_task_channel("t1", 0);
+        drop(rx);
+
+        // Sending should not panic; it prunes the dead subscriber.
+        c.send_task_message("t1", vec![1]);
+
+        let inner = c.task_channels.get("t1").unwrap();
+        let inner = inner.inner.lock().unwrap();
+        assert!(inner.subscribers.is_empty());
+        assert_eq!(inner.buffer.len(), 1);
+    }
+
+    #[test]
+    fn multiple_subscribers_all_receive() {
+        let c = coordinator();
+        let mut rx1 = c.subscribe_task_channel("t1", 0);
+        let mut rx2 = c.subscribe_task_channel("t1", 0);
+
+        c.send_task_message("t1", vec![42]);
+
+        assert_eq!(extract_payload(rx1.try_recv().unwrap()), Some(vec![42]));
+        assert_eq!(extract_payload(rx2.try_recv().unwrap()), Some(vec![42]));
+    }
+
+    #[test]
+    fn late_second_subscriber_gets_full_replay() {
+        let c = coordinator();
+        let mut rx1 = c.subscribe_task_channel("t1", 0);
+
+        c.send_task_message("t1", vec![1]);
+        c.send_task_message("t1", vec![2]);
+
+        let mut rx2 = c.subscribe_task_channel("t1", 0);
+
+        // rx1 got messages live.
+        assert_eq!(extract_payload(rx1.try_recv().unwrap()), Some(vec![1]));
+        assert_eq!(extract_payload(rx1.try_recv().unwrap()), Some(vec![2]));
+
+        // rx2 gets the full replay.
+        assert_eq!(extract_payload(rx2.try_recv().unwrap()), Some(vec![1]));
+        assert_eq!(extract_payload(rx2.try_recv().unwrap()), Some(vec![2]));
+    }
+
+    #[test]
+    fn subscribe_with_offset_skips_earlier_messages() {
+        let c = coordinator();
+
+        c.send_task_message("t1", vec![10]);
+        c.send_task_message("t1", vec![20]);
+        c.send_task_message("t1", vec![30]);
+
+        let mut rx = c.subscribe_task_channel("t1", 2);
+
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![30]));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn subscribe_with_offset_beyond_buffer_gets_nothing() {
+        let c = coordinator();
+
+        c.send_task_message("t1", vec![10]);
+        c.send_task_message("t1", vec![20]);
+
+        let mut rx = c.subscribe_task_channel("t1", 5);
+
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn fail_proof_closes_task_channels() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            let mut proof = Proof::new("p1".into(), None, Default::default());
+            proof.tasks.insert("t1".into(), Task {
+                id: "t1".into(),
+                data: TaskData { proof_id: "p1".into(), ..Default::default() },
+                created_at: SystemTime::now(),
+                status: TaskStatus::Running,
+                retries: 0,
+                subscribers: HashSet::new(),
+                worker: None,
+                extra: Default::default(),
+            });
+            proof.active_tasks = 1;
+            state.proofs.insert("p1".into(), proof);
+        }
+
+        let mut rx = c.subscribe_task_channel("t1", 0);
+        c.send_task_message("t1", vec![1]);
+
+        let _ = c.fail_proof("p1".into(), None, false, None).await;
+
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![1]));
+        assert!(is_end_of_stream(&rx.try_recv().unwrap()));
+    }
+
+    #[test]
+    fn send_after_mutex_poison_does_not_panic() {
+        let c = coordinator();
+        c.send_task_message("t1", vec![1]);
+
+        let state = c.task_channels.get("t1").unwrap();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.inner.lock().unwrap();
+            panic!("intentional poison");
+        }));
+        drop(state);
+
+        c.send_task_message("t1", vec![2]);
+    }
+
+    #[tokio::test]
+    async fn shutdown_closes_task_channels() {
+        let c = Arc::new(coordinator());
+        let mut rx = c.subscribe_task_channel("t1", 0);
+        c.send_task_message("t1", vec![42]);
+
+        c.shutdown().await;
+
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![42]));
+        assert!(is_end_of_stream(&rx.try_recv().unwrap()));
+    }
+
+    #[test]
+    fn cleanup_removes_stale_closed_channels() {
+        let c = coordinator();
+        c.send_task_message("t1", vec![1]);
+        c.close_task_channel("t1");
+
+        // Backdate the closed_at to exceed the stale threshold.
+        {
+            let entry = c.task_channels.get("t1").unwrap();
+            let mut inner = entry.inner.lock().unwrap();
+            inner.closed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(120));
+        }
+
+        c.cleanup_stale_task_channels();
+        assert!(c.task_channels.is_empty());
+    }
+
+    #[test]
+    fn cleanup_keeps_recently_closed_channels() {
+        let c = coordinator();
+        c.send_task_message("t1", vec![1]);
+        c.close_task_channel("t1");
+
+        c.cleanup_stale_task_channels();
+        assert_eq!(c.task_channels.len(), 1);
+    }
+
+    #[test]
+    fn cleanup_keeps_open_channels() {
+        let c = coordinator();
+        c.send_task_message("t1", vec![1]);
+
+        c.cleanup_stale_task_channels();
+        assert_eq!(c.task_channels.len(), 1);
     }
 }
