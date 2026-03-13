@@ -471,6 +471,100 @@ impl WorkerClient for WorkerServiceClient {
         Ok(SubscriberBuilder::new(self.clone(), sub_tx, res_rx))
     }
 
+    async fn subscribe_task_messages(
+        &self,
+        task_id: &TaskId,
+    ) -> anyhow::Result<mpsc::UnboundedReceiver<Vec<u8>>> {
+        let request = proto::SubscribeTaskMessagesRequest {
+            worker_id: self.worker_id.clone(),
+            task_id: task_id.to_string(),
+        };
+        let response = self.client.clone().subscribe_task_messages(request.clone()).await?;
+        let mut inbound = response.into_inner();
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let client = self.client.clone();
+        let backoff = self.backoff.clone();
+        tokio::spawn(async move {
+            let mut forwarded: usize = 0;
+            let mut skip: usize = 0;
+            'outer: loop {
+                while let Some(msg) = inbound.next().await {
+                    match msg {
+                        Ok(resp) => match resp.message {
+                            Some(proto::message_stream_response::Message::Payload(data)) => {
+                                if skip > 0 {
+                                    skip -= 1;
+                                    continue;
+                                }
+                                forwarded += 1;
+                                if tx.send(data).is_err() {
+                                    break 'outer;
+                                }
+                            }
+                            Some(proto::message_stream_response::Message::EndOfStream(_)) => {
+                                break 'outer;
+                            }
+                            None => {
+                                break 'outer;
+                            }
+                        },
+                        Err(e) => {
+                            tracing::warn!("Task message stream error, reconnecting: {:?}", e);
+                            match backoff::future::retry(backoff.clone(), || async {
+                                client
+                                    .clone()
+                                    .subscribe_task_messages(request.clone())
+                                    .await
+                                    .map_err(status_to_backoff_error)
+                            })
+                            .await
+                            {
+                                Ok(response) => {
+                                    inbound = response.into_inner();
+                                    skip = forwarded;
+                                    continue 'outer;
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to reconnect task message stream: {:?}",
+                                        e
+                                    );
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+        });
+
+        Ok(rx)
+    }
+
+    async fn send_task_message(
+        &self,
+        task_id: &TaskId,
+        payload: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        let request = proto::SendTaskMessageRequest {
+            worker_id: self.worker_id.clone(),
+            task_id: task_id.to_string(),
+            payload,
+        };
+        let backoff = self.backoff.clone();
+        backoff::future::retry(backoff, || async {
+            self.client
+                .clone()
+                .send_task_message(request.clone())
+                .await
+                .map_err(status_to_backoff_error)
+        })
+        .await?;
+        Ok(())
+    }
+
     async fn complete_proof(
         &self,
         proof_id: ProofId,
