@@ -14,7 +14,18 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskMetadata {
+    #[serde(alias = "gpu_time", default, deserialize_with = "deserialize_gpu_ms")]
     pub gpu_ms: u64,
+}
+
+/// Deserializes a GPU time value that may be either a number or null.
+/// The worker sends gpu_time as Option<u64>, so the JSON value can be null
+/// when no GPU time was recorded. This function treats null as 0.
+fn deserialize_gpu_ms<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<u64>::deserialize(deserializer).map(|opt| opt.unwrap_or(0))
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
