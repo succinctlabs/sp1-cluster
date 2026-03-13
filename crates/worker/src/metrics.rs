@@ -34,6 +34,9 @@ pub struct WorkerMetrics {
 
     /// Amount of time spent within the GPU lock.
     pub gpu_busy_time: Counter,
+
+    /// Total number of cycles executed across all proofs.
+    pub num_cycles_executed: Counter,
 }
 
 impl WorkerMetrics {

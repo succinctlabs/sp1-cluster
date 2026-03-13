@@ -122,6 +122,13 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
             }
         };
 
+        // Increment the cycles counter if any cycles were executed.
+        if result_obj.cycles > 0 {
+            if let Some(m) = self.metrics.as_ref() {
+                m.num_cycles_executed.increment(result_obj.cycles);
+            }
+        }
+
         // Determine proof status based on execution result
         let proof_status = if result_obj.status == ExecutionStatus::Executed as i32 {
             ProofRequestStatus::Completed
