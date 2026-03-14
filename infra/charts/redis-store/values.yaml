@@ -35,7 +35,7 @@ redis:
       acllog-max-len 128
 
       io-threads 16
-      maxmemory 30gb
+      maxmemory 8gb
       maxmemory-policy allkeys-lru
       hz 100
 
