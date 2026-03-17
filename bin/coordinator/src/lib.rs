@@ -1910,7 +1910,7 @@ mod tests {
         let c = Arc::new(coordinator());
         {
             let mut state = c.state.write().await;
-            let mut proof = Proof::new("p1".into(), None, Default::default());
+            let mut proof = Proof::new("p1".into(), None, ());
             proof.tasks.insert(
                 "t1".into(),
                 Task {
