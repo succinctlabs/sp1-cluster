@@ -1602,14 +1602,15 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         let state = self.task_channels.entry(task_id.to_string()).or_default();
         let mut inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner.closed {
-            tracing::warn!("Dropping message for already-closed task channel {}", task_id);
+            tracing::warn!(
+                "Dropping message for already-closed task channel {}",
+                task_id
+            );
             return;
         }
         inner.buffer.push(payload.clone());
         let msg = Ok(MessageStreamResponse {
-            message: Some(
-                proto::message_stream_response::Message::Payload(payload),
-            ),
+            message: Some(proto::message_stream_response::Message::Payload(payload)),
         });
         inner.subscribers.retain(|tx| tx.send(msg.clone()).is_ok());
     }
@@ -1625,9 +1626,9 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             inner.closed = true;
             inner.closed_at = Some(std::time::Instant::now());
             let eos = Ok(MessageStreamResponse {
-                message: Some(
-                    proto::message_stream_response::Message::EndOfStream(proto::EndOfStream {}),
-                ),
+                message: Some(proto::message_stream_response::Message::EndOfStream(
+                    proto::EndOfStream {},
+                )),
             });
             for tx in inner.subscribers.drain(..) {
                 tx.send(eos.clone()).ok();
@@ -1648,17 +1649,17 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         let (tx, rx) = mpsc::unbounded_channel();
         for payload in inner.buffer.iter().skip(start_offset) {
             let msg = Ok(MessageStreamResponse {
-                message: Some(
-                    proto::message_stream_response::Message::Payload(payload.clone()),
-                ),
+                message: Some(proto::message_stream_response::Message::Payload(
+                    payload.clone(),
+                )),
             });
             let _ = tx.send(msg);
         }
         if inner.closed {
             let _ = tx.send(Ok(MessageStreamResponse {
-                message: Some(
-                    proto::message_stream_response::Message::EndOfStream(proto::EndOfStream {}),
-                ),
+                message: Some(proto::message_stream_response::Message::EndOfStream(
+                    proto::EndOfStream {},
+                )),
             }));
         } else {
             inner.subscribers.push(tx);
@@ -1725,9 +1726,7 @@ mod tests {
         Coordinator::new()
     }
 
-    fn extract_payload(
-        msg: Result<MessageStreamResponse, Status>,
-    ) -> Option<Vec<u8>> {
+    fn extract_payload(msg: Result<MessageStreamResponse, Status>) -> Option<Vec<u8>> {
         match msg.ok()?.message? {
             proto::message_stream_response::Message::Payload(data) => Some(data),
             _ => None,
@@ -1912,16 +1911,22 @@ mod tests {
         {
             let mut state = c.state.write().await;
             let mut proof = Proof::new("p1".into(), None, Default::default());
-            proof.tasks.insert("t1".into(), Task {
-                id: "t1".into(),
-                data: TaskData { proof_id: "p1".into(), ..Default::default() },
-                created_at: SystemTime::now(),
-                status: TaskStatus::Running,
-                retries: 0,
-                subscribers: HashSet::new(),
-                worker: None,
-                extra: Default::default(),
-            });
+            proof.tasks.insert(
+                "t1".into(),
+                Task {
+                    id: "t1".into(),
+                    data: TaskData {
+                        proof_id: "p1".into(),
+                        ..Default::default()
+                    },
+                    created_at: SystemTime::now(),
+                    status: TaskStatus::Running,
+                    retries: 0,
+                    subscribers: HashSet::new(),
+                    worker: None,
+                    extra: Default::default(),
+                },
+            );
             proof.active_tasks = 1;
             state.proofs.insert("p1".into(), proof);
         }

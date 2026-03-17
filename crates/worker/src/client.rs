@@ -511,10 +511,7 @@ impl WorkerClient for WorkerServiceClient {
                     {
                         Ok(response) => Some(response.into_inner()),
                         Err(e) => {
-                            tracing::error!(
-                                "Failed to reconnect task message stream: {:?}",
-                                e
-                            );
+                            tracing::error!("Failed to reconnect task message stream: {:?}", e);
                             None
                         }
                     }
@@ -526,11 +523,7 @@ impl WorkerClient for WorkerServiceClient {
         Ok(rx)
     }
 
-    async fn send_task_message(
-        &self,
-        task_id: &TaskId,
-        payload: Vec<u8>,
-    ) -> anyhow::Result<()> {
+    async fn send_task_message(&self, task_id: &TaskId, payload: Vec<u8>) -> anyhow::Result<()> {
         let request = proto::SendTaskMessageRequest {
             worker_id: self.worker_id.clone(),
             task_id: task_id.to_string(),
@@ -653,8 +646,12 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let stream1 = tokio_stream::iter(vec![
-            Ok(MessageStreamResponse { message: Some(Payload(vec![1])) }),
-            Ok(MessageStreamResponse { message: Some(Payload(vec![2])) }),
+            Ok(MessageStreamResponse {
+                message: Some(Payload(vec![1])),
+            }),
+            Ok(MessageStreamResponse {
+                message: Some(Payload(vec![2])),
+            }),
         ]);
 
         let reconnect_forwarded = Arc::new(AtomicUsize::new(0));
@@ -665,7 +662,9 @@ mod tests {
             reconnect_forwarded_clone.store(forwarded, Ordering::SeqCst);
             async move {
                 Some(tokio_stream::iter(vec![
-                    Ok(MessageStreamResponse { message: Some(Payload(vec![3])) }),
+                    Ok(MessageStreamResponse {
+                        message: Some(Payload(vec![3])),
+                    }),
                     Ok(MessageStreamResponse {
                         message: Some(EndOfStream(proto::EndOfStream {})),
                     }),
