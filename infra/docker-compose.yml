@@ -172,6 +172,7 @@ services:
       service: gpu0
 
   # Fulfiller Service
+  # DOMAIN: set to SPN_MAINNET_V1_DOMAIN for mainnet, defaults to SPN_SEPOLIA_V1_DOMAIN
   fulfiller:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.0.3
     environment:
@@ -179,7 +180,7 @@ services:
       - FULFILLER_LOG_FORMAT=Pretty
       - FULFILLER_CLUSTER_ARTIFACT_STORE=redis
       - FULFILLER_VERSION=sp1-v6.0.0
-      - FULFILLER_DOMAIN=SPN_SEPOLIA_V1_DOMAIN
+      - FULFILLER_DOMAIN=${DOMAIN:-SPN_SEPOLIA_V1_DOMAIN}
       - FULFILLER_CLUSTER_REDIS_NODES=redis://:redispassword@redis:6379/0
       - FULFILLER_METRICS_ADDR=0.0.0.0:9090
       - FULFILLER_RPC_GRPC_ADDR=${RPC_GRPC_ADDR}
@@ -195,7 +196,7 @@ services:
     environment:
       - BIDDER_LOG_FORMAT=Pretty
       - BIDDER_VERSION=sp1-v6.0.0
-      - BIDDER_DOMAIN=SPN_SEPOLIA_V1_DOMAIN
+      - BIDDER_DOMAIN=${DOMAIN:-SPN_SEPOLIA_V1_DOMAIN}
       - BIDDER_METRICS_ADDR=0.0.0.0:9090
       - BIDDER_RPC_GRPC_ADDR=${RPC_GRPC_ADDR}
       - BIDDER_SP1_PRIVATE_KEY=${SP1_PRIVATE_KEY}
