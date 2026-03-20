@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch, Mutex};
-use tokio_stream::StreamExt;
+use tokio_stream::{Stream, StreamExt};
 use tonic::transport::Channel;
 use tonic::Status;
 
@@ -471,6 +471,76 @@ impl WorkerClient for WorkerServiceClient {
         Ok(SubscriberBuilder::new(self.clone(), sub_tx, res_rx))
     }
 
+    async fn subscribe_task_messages(
+        &self,
+        task_id: &TaskId,
+    ) -> anyhow::Result<mpsc::UnboundedReceiver<Vec<u8>>> {
+        let request = proto::SubscribeTaskMessagesRequest {
+            worker_id: self.worker_id.clone(),
+            task_id: task_id.to_string(),
+            start_offset: 0,
+        };
+        let response = backoff::future::retry(self.backoff.clone(), || async {
+            self.client
+                .clone()
+                .subscribe_task_messages(request.clone())
+                .await
+                .map_err(status_to_backoff_error)
+        })
+        .await?;
+        let inbound = response.into_inner();
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let client = self.client.clone();
+        let backoff = self.backoff.clone();
+        tokio::spawn(async move {
+            drive_message_stream(inbound, tx, move |forwarded| {
+                let backoff = backoff.clone();
+                let client = client.clone();
+                let mut request = request.clone();
+                request.start_offset = forwarded as u64;
+                async move {
+                    match backoff::future::retry(backoff, || async {
+                        client
+                            .clone()
+                            .subscribe_task_messages(request.clone())
+                            .await
+                            .map_err(status_to_backoff_error)
+                    })
+                    .await
+                    {
+                        Ok(response) => Some(response.into_inner()),
+                        Err(e) => {
+                            tracing::error!("Failed to reconnect task message stream: {:?}", e);
+                            None
+                        }
+                    }
+                }
+            })
+            .await;
+        });
+
+        Ok(rx)
+    }
+
+    async fn send_task_message(&self, task_id: &TaskId, payload: Vec<u8>) -> anyhow::Result<()> {
+        let request = proto::SendTaskMessageRequest {
+            worker_id: self.worker_id.clone(),
+            task_id: task_id.to_string(),
+            payload,
+        };
+        let backoff = self.backoff.clone();
+        backoff::future::retry(backoff, || async {
+            self.client
+                .clone()
+                .send_task_message(request.clone())
+                .await
+                .map_err(status_to_backoff_error)
+        })
+        .await?;
+        Ok(())
+    }
+
     async fn complete_proof(
         &self,
         proof_id: ProofId,
@@ -519,5 +589,94 @@ impl WorkerClient for WorkerServiceClient {
             }
         }
         Ok(())
+    }
+}
+
+async fn drive_message_stream<S, F, Fut>(
+    mut inbound: S,
+    tx: mpsc::UnboundedSender<Vec<u8>>,
+    reconnect: F,
+) where
+    S: Stream<Item = Result<proto::MessageStreamResponse, tonic::Status>> + Unpin,
+    F: Fn(usize) -> Fut,
+    Fut: std::future::Future<Output = Option<S>>,
+{
+    let mut forwarded: usize = 0;
+    'outer: loop {
+        while let Some(msg) = inbound.next().await {
+            match msg {
+                Ok(resp) => match resp.message {
+                    Some(proto::message_stream_response::Message::Payload(data)) => {
+                        forwarded += 1;
+                        if tx.send(data).is_err() {
+                            break 'outer;
+                        }
+                    }
+                    Some(proto::message_stream_response::Message::EndOfStream(_)) | None => {
+                        break 'outer;
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("Task message stream error, reconnecting: {:?}", e);
+                    if let Some(new_stream) = reconnect(forwarded).await {
+                        inbound = new_stream;
+                        continue 'outer;
+                    }
+                    break 'outer;
+                }
+            }
+        }
+        tracing::warn!("stream ended without EndOfStream, reconnecting");
+        if let Some(new_stream) = reconnect(forwarded).await {
+            inbound = new_stream;
+            continue 'outer;
+        }
+        break;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sp1_cluster_common::proto::{self, MessageStreamResponse};
+
+    #[tokio::test]
+    async fn reconnects_on_clean_stream_close() {
+        use proto::message_stream_response::Message::{EndOfStream, Payload};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let stream1 = tokio_stream::iter(vec![
+            Ok(MessageStreamResponse {
+                message: Some(Payload(vec![1])),
+            }),
+            Ok(MessageStreamResponse {
+                message: Some(Payload(vec![2])),
+            }),
+        ]);
+
+        let reconnect_forwarded = Arc::new(AtomicUsize::new(0));
+        let reconnect_forwarded_clone = reconnect_forwarded.clone();
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        drive_message_stream(stream1, tx, move |forwarded| {
+            reconnect_forwarded_clone.store(forwarded, Ordering::SeqCst);
+            async move {
+                Some(tokio_stream::iter(vec![
+                    Ok(MessageStreamResponse {
+                        message: Some(Payload(vec![3])),
+                    }),
+                    Ok(MessageStreamResponse {
+                        message: Some(EndOfStream(proto::EndOfStream {})),
+                    }),
+                ]))
+            }
+        })
+        .await;
+
+        assert_eq!(reconnect_forwarded.load(Ordering::SeqCst), 2);
+        assert_eq!(rx.recv().await, Some(vec![1]));
+        assert_eq!(rx.recv().await, Some(vec![2]));
+        assert_eq!(rx.recv().await, Some(vec![3]));
+        assert!(rx.recv().await.is_none());
     }
 }

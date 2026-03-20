@@ -1,4 +1,5 @@
 mod controller;
+mod core_execute;
 mod execute_only;
 mod finalize;
 mod prove_shard;
