@@ -165,6 +165,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
                     log::error!("MarkerDeferredRecord is only a marker task");
                     Ok(TaskMetadata::default())
                 }
+                TaskType::CoreExecute => self.process_sp1_core_execute(task).await,
                 TaskType::ExecuteOnly => self.process_sp1_execute_only(task).await,
                 TaskType::UnspecifiedTaskType => {
                     log::error!("Unspecified task type");
