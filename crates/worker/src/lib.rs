@@ -183,7 +183,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
                 start_time.elapsed().as_millis() as f64,
             );
             m.increment_tasks_processed(task_type.as_str_name().to_string());
-            if let Ok(Some(busy_time)) = result.as_ref().map(|r| r.gpu_time) {
+            if let Ok(Some(busy_time)) = result.as_ref().map(|r| r.gpu_ms) {
                 m.gpu_busy_time.increment(busy_time);
             }
         });

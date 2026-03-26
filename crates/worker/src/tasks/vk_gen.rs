@@ -30,7 +30,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
             .run_sp1_util_vkey_map_controller(raw_task_request)
             .await?;
 
-        Ok(TaskMetadata { gpu_time: None })
+        Ok(TaskMetadata { gpu_ms: None })
     }
 }
 
@@ -48,6 +48,6 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
 
         run_vk_generation(vk_worker, raw_task_request, client)
             .await
-            .map(|_| TaskMetadata { gpu_time: None })
+            .map(|_| TaskMetadata { gpu_ms: None })
     }
 }

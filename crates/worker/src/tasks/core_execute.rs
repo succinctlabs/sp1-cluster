@@ -17,6 +17,6 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
         let raw_task_request = worker_task_to_raw_task_request(data, None);
         let request = CoreExecuteTaskRequest::from_raw(raw_task_request)?;
         self.worker.controller().execute(task_id, request).await?;
-        Ok(TaskMetadata { gpu_time: None })
+        Ok(TaskMetadata { gpu_ms: None })
     }
 }
