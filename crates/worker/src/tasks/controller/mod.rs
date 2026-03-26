@@ -46,6 +46,6 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
             )
             .await?;
 
-        Ok(TaskMetadata { gpu_time: None })
+        Ok(TaskMetadata { gpu_ms: None })
     }
 }
