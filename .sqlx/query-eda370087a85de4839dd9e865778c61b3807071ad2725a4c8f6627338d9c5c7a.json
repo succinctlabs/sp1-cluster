@@ -102,6 +102,11 @@
         "ordinal": 19,
         "name": "extra_data",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 20,
+        "name": "scheduled_by",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -129,6 +134,7 @@
       false,
       false,
       false,
+      true,
       true
     ]
   },

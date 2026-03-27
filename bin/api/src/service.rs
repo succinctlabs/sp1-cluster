@@ -35,6 +35,7 @@ struct DbProofRequest {
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
     extra_data: Option<String>,
+    scheduled_by: Option<String>,
 }
 
 impl DbProofRequest {
@@ -62,6 +63,7 @@ impl DbProofRequest {
             created_at: self.created_at.unix_timestamp() as u64,
             updated_at: self.updated_at.unix_timestamp() as u64,
             extra_data: self.extra_data,
+            scheduled_by: self.scheduled_by,
         }
     }
 }
@@ -88,7 +90,7 @@ impl ClusterService for ClusterServiceImpl {
         info!("Creating proof request with ID: {}", req.proof_id);
 
         // Insert the proof request into the database
-        let result = sqlx::query!("INSERT INTO proof_requests (id, proof_status, requester, stdin_artifact_id, program_artifact_id, options_artifact_id, proof_artifact_id, cycle_limit, deadline, gas_limit, handled, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+        let result = sqlx::query!("INSERT INTO proof_requests (id, proof_status, requester, stdin_artifact_id, program_artifact_id, options_artifact_id, proof_artifact_id, cycle_limit, deadline, gas_limit, handled, metadata, scheduled_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
             req.proof_id,
             ProofRequestStatus::Pending as i16,
             &req.requester,
@@ -101,6 +103,7 @@ impl ClusterService for ClusterServiceImpl {
             req.gas_limit as i64,
             false,
             "null".to_string(),
+            req.scheduled_by.as_ref(),
         )
         .execute(&*self.db_pool)
         .await;
@@ -291,6 +294,12 @@ impl ClusterService for ClusterServiceImpl {
 
         if let Some(handled) = req.handled {
             query.push(" AND handled = ").push_bind(handled);
+        }
+
+        if let Some(ref scheduled_by) = req.scheduled_by {
+            query
+                .push(" AND scheduled_by = ")
+                .push_bind(scheduled_by.clone());
         }
 
         let limit = req.limit.unwrap_or(10).min(1000);
