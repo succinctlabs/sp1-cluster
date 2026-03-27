@@ -29,6 +29,10 @@ pub struct FulfillerSettings {
     /// Probability (0.0-1.0) of processing a request. Default is 1.0 (100%).
     #[serde(default = "default_request_probability")]
     pub request_probability: f64,
+    /// Identifies this fulfiller instance. When set, requests are tagged on creation and
+    /// filtered on submit/fail, preventing cross-submission when multiple fulfillers share
+    /// a coordinator. Set via EXECUTOR_NAME or FULFILLER_NAME env var.
+    pub name: Option<String>,
 }
 
 fn default_request_probability() -> f64 {
