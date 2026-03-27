@@ -87,6 +87,7 @@ pub async fn create_request<A: ArtifactClient>(
             deadline: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs(),
             cycle_limit: u64::MAX,
             gas_limit: u64::MAX,
+            scheduled_by: None,
         })
         .await?;
 

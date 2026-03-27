@@ -95,6 +95,7 @@ pub async fn run_fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentN
         true,
         settings.disable_fulfillment,
         settings.request_probability,
+        settings.name.clone(),
     );
     let fulfiller = Arc::new(fulfiller);
 
