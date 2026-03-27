@@ -27,8 +27,16 @@ extraEnvFrom: []
 
 # Volume configuration
 volumes:
+  - name: shared-memory
+    emptyDir:
+      medium: Memory
+      # Optionally, you can set an explicit size limit:
+      # sizeLimit: 32Gi
+      # We omit sizeLimit here, so that the maximum shared memory can use the entire memory limit of the pod.
 
 volumeMounts:
+  - name: shared-memory
+    mountPath: /dev/shm
 
 resources:
   requests: {}

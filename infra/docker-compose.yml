@@ -68,6 +68,7 @@ services:
     volumes:
       - ${HOME}/.sp1/circuits:/root/.sp1/circuits
     command: ["/bin/sh", "-c", "/node"]
+    shm_size: 48G
     deploy:
       resources:
         limits:
