@@ -52,6 +52,10 @@ pub struct Fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork
     disable_fulfillment: bool,
     /// Probability (0.0-1.0) of processing a request. Default is 1.0 (100%).
     request_probability: f64,
+    /// Identifies this fulfiller instance. When set, requests are tagged on creation and
+    /// filtered on submit/fail, preventing cross-submission when multiple fulfillers share
+    /// a coordinator.
+    name: Option<String>,
 }
 
 impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N> {
@@ -68,6 +72,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         copy_artifacts: bool,
         disable_fulfillment: bool,
         request_probability: f64,
+        name: Option<String>,
     ) -> Self {
         Self {
             network,
@@ -81,6 +86,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             copy_artifacts,
             disable_fulfillment,
             request_probability,
+            name,
         }
     }
 
@@ -130,6 +136,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                 limit: Some(REQUEST_LIMIT),
                 minimum_deadline: Some(time_now()),
                 handled: Some(false),
+                scheduled_by: self.name.clone(),
                 ..Default::default()
             })
             .map_err(|e| anyhow!("failed to get requests: {}", e))
@@ -265,6 +272,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                 limit: Some(REQUEST_LIMIT),
                 minimum_deadline: Some(time_now()),
                 handled: Some(false),
+                scheduled_by: self.name.clone(),
                 ..Default::default()
             })
             .map_err(|e| anyhow!("failed to get requests: {}", e))
@@ -607,6 +615,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                 deadline,
                 cycle_limit: request.cycle_limit(),
                 gas_limit: request.gas_limit(),
+                scheduled_by: self.name.clone(),
             })
             .map_err(|e| anyhow!("failed to create proof request: {}", e))
             .await?;
