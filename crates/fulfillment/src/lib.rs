@@ -91,7 +91,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 
     /// Runs the fulfiller loop.
     pub async fn run(self: Arc<Self>) -> Result<()> {
-        info!("starting the fulfiller with refresh interval {:?}", self.refresh_interval);
+        info!("starting the fulfiller with refresh interval {}s", self.refresh_interval.as_secs());
 
         // Get the prover.
         // TODO: Use backoff here.
