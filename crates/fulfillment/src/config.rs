@@ -33,10 +33,18 @@ pub struct FulfillerSettings {
     /// filtered on submit/fail, preventing cross-submission when multiple fulfillers share
     /// a coordinator. Set via EXECUTOR_NAME or FULFILLER_NAME env var.
     pub name: Option<String>,
+    /// How often (in seconds) the fulfiller polls for new/completed requests.
+    /// Lower values reduce E2E latency but increase query volume.
+    #[serde(default = "default_refresh_interval_sec")]
+    pub refresh_interval_sec: u64,
 }
 
 fn default_request_probability() -> f64 {
     1.0
+}
+
+fn default_refresh_interval_sec() -> u64 {
+    3
 }
 
 impl FulfillerSettings {

@@ -23,11 +23,6 @@ pub mod metrics;
 pub mod network;
 pub mod run;
 
-/// How long to wait between checking for requesters to start proving on and fulfilling proofs.
-///
-/// Lower values will result in faster E2E latency for the user, but more outgoing requests to the
-/// cluster.
-const REFRESH_INTERVAL_SEC: u64 = 3;
 /// The maximum number of requests to handle in a single refresh loop.
 const REQUEST_LIMIT: u32 = 1000;
 /// The error strings that should trigger a VERIFICATION_KEY_MISMATCH error.
@@ -56,6 +51,8 @@ pub struct Fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork
     /// filtered on submit/fail, preventing cross-submission when multiple fulfillers share
     /// a coordinator.
     name: Option<String>,
+    /// How often the fulfiller polls for new/completed requests.
+    refresh_interval: Duration,
 }
 
 impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N> {
@@ -73,6 +70,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         disable_fulfillment: bool,
         request_probability: f64,
         name: Option<String>,
+        refresh_interval_sec: u64,
     ) -> Self {
         Self {
             network,
@@ -87,12 +85,16 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             disable_fulfillment,
             request_probability,
             name,
+            refresh_interval: Duration::from_secs(refresh_interval_sec),
         }
     }
 
     /// Runs the fulfiller loop.
     pub async fn run(self: Arc<Self>) -> Result<()> {
-        info!("starting the fulfiller");
+        info!(
+            "starting the fulfiller with refresh interval {}s",
+            self.refresh_interval.as_secs()
+        );
 
         // Get the prover.
         // TODO: Use backoff here.
@@ -121,7 +123,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                 self.metrics.main_loop_errors.increment(1);
             }
             // Wait for the next interval.
-            sleep(Duration::from_secs(REFRESH_INTERVAL_SEC)).await;
+            sleep(self.refresh_interval).await;
         }
     }
 
