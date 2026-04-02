@@ -44,7 +44,7 @@ fn default_request_probability() -> f64 {
 }
 
 fn default_refresh_interval_sec() -> u64 {
-    1
+    3
 }
 
 impl FulfillerSettings {
