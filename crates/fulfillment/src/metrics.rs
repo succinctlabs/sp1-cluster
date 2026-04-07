@@ -48,4 +48,10 @@ pub struct FulfillerMetrics {
 
     /// The current number of schedulable proof requests found in the last check.
     pub schedulable_requests: Gauge,
+
+    /// The current number of unexecuted, unexpired requests in the network.
+    pub network_unexecuted_requests: Gauge,
+
+    /// The current number of unexecuted, unexpired requests in the cluster.
+    pub cluster_unexecuted_requests: Gauge,
 }
