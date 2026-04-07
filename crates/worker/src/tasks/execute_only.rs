@@ -71,7 +71,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
                 // Non-zero exit code means the guest program panicked.
                 ExecutionResult {
                     status: ExecutionStatus::Failed as i32,
-                    failure_cause: ExecuteFailureCause::UnspecifiedExecutionFailureCause as i32,
+                    failure_cause: ExecuteFailureCause::HaltWithNonZeroExitCode as i32,
                     cycles: execution_report.total_instruction_count(),
                     gas: execution_report.gas().unwrap_or(0),
                     public_values_hash: vec![],
