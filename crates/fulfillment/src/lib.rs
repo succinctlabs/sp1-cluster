@@ -527,7 +527,9 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         // Schedule the requests in parallel for each fulfiller.
         let mut join_set = JoinSet::new();
         let cluster_requests_len = cluster_requests_resp.len();
-        self.metrics.cluster_unexecuted_requests.set(cluster_requests_len as f64);
+        self.metrics
+            .cluster_unexecuted_requests
+            .set(cluster_requests_len as f64);
         let cluster_requests: HashSet<_> =
             cluster_requests_resp.into_iter().map(|r| r.id).collect();
         let cluster_requests = Arc::new(cluster_requests);
@@ -549,7 +551,9 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             total_network += network_count;
             total_scheduled += scheduled_count;
         }
-        self.metrics.network_unexecuted_requests.set(total_network as f64);
+        self.metrics
+            .network_unexecuted_requests
+            .set(total_network as f64);
         tracing::info!(
             "scheduled {} requests, {} in cluster",
             total_scheduled,
