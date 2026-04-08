@@ -524,27 +524,20 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             .map(|v| v.clone().into_iter().map(|a| a.to_vec()).collect())
             .unwrap_or(vec![prover.to_vec()]);
 
+        // Count unexecuted requests (pending + not yet handled by coordinator).
+        let unexecuted_count = cluster_requests_resp
+            .iter()
+            .filter(|r| r.proof_status == ProofRequestStatus::Pending as i32 && !r.handled)
+            .count();
+        self.metrics
+            .cluster_unexecuted_requests
+            .set(unexecuted_count as f64);
+
         // Schedule the requests in parallel for each fulfiller.
         let mut join_set = JoinSet::new();
         let cluster_requests: HashSet<_> =
             cluster_requests_resp.into_iter().map(|r| r.id).collect();
         let cluster_requests = Arc::new(cluster_requests);
-
-        // Count unexecuted requests in the cluster (pending + not yet handled by coordinator).
-        let unexecuted_requests = self
-            .cluster
-            .get_proof_requests(ProofRequestListRequest {
-                proof_status: vec![ProofRequestStatus::Pending.into()],
-                handled: Some(false),
-                minimum_deadline: Some(time_now()),
-                limit: Some(REQUEST_LIMIT),
-                ..Default::default()
-            })
-            .map_err(|e| anyhow!("failed to get unexecuted requests: {}", e))
-            .await?;
-        self.metrics
-            .cluster_unexecuted_requests
-            .set(unexecuted_requests.len() as f64);
         for address in fulfiller_addresses {
             let self_clone = self.clone();
             let address = address.clone();
@@ -559,7 +552,8 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         let mut total_network = 0;
         let mut total_scheduled = 0;
         while let Some(result) = join_set.join_next().await {
-            let (network_count, scheduled_count) = result.unwrap()?;
+            let (network_count, scheduled_count) =
+                result.map_err(|e| anyhow!("schedule task panicked: {e}"))??;
             total_network += network_count;
             total_scheduled += scheduled_count;
         }
