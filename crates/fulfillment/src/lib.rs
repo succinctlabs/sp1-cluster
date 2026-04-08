@@ -526,13 +526,25 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 
         // Schedule the requests in parallel for each fulfiller.
         let mut join_set = JoinSet::new();
-        let cluster_requests_len = cluster_requests_resp.len();
-        self.metrics
-            .cluster_unexecuted_requests
-            .set(cluster_requests_len as f64);
         let cluster_requests: HashSet<_> =
             cluster_requests_resp.into_iter().map(|r| r.id).collect();
         let cluster_requests = Arc::new(cluster_requests);
+
+        // Count unexecuted requests in the cluster (pending + not yet handled by coordinator).
+        let unexecuted_requests = self
+            .cluster
+            .get_proof_requests(ProofRequestListRequest {
+                proof_status: vec![ProofRequestStatus::Pending.into()],
+                handled: Some(false),
+                minimum_deadline: Some(time_now()),
+                limit: Some(REQUEST_LIMIT),
+                ..Default::default()
+            })
+            .map_err(|e| anyhow!("failed to get unexecuted requests: {}", e))
+            .await?;
+        self.metrics
+            .cluster_unexecuted_requests
+            .set(unexecuted_requests.len() as f64);
         for address in fulfiller_addresses {
             let self_clone = self.clone();
             let address = address.clone();
@@ -557,7 +569,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         tracing::info!(
             "scheduled {} requests, {} in cluster",
             total_scheduled,
-            cluster_requests_len
+            cluster_requests.len()
         );
 
         Ok(())
