@@ -7985,7 +7985,7 @@ dependencies = [
 
 [[package]]
 name = "sp1-cluster-artifact"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "anyhow",
  "async-scoped",
@@ -8010,7 +8010,7 @@ dependencies = [
 
 [[package]]
 name = "sp1-cluster-bidder"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "alloy",
  "alloy-signer-local",
@@ -8056,7 +8056,7 @@ dependencies = [
 
 [[package]]
 name = "sp1-cluster-common"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "backoff",
  "chrono",
@@ -8114,7 +8114,7 @@ dependencies = [
 
 [[package]]
 name = "sp1-cluster-fulfiller"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "alloy-primitives",
  "alloy-signer-local",
@@ -8142,7 +8142,7 @@ dependencies = [
 
 [[package]]
 name = "sp1-cluster-fulfillment"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "alloy-primitives",
  "alloy-signer-local",
@@ -8201,7 +8201,7 @@ dependencies = [
 
 [[package]]
 name = "sp1-cluster-utils"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "eyre",
  "sp1-cluster-artifact",
@@ -8214,7 +8214,7 @@ dependencies = [
 
 [[package]]
 name = "sp1-cluster-worker"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "anyhow",
  "async-channel",
