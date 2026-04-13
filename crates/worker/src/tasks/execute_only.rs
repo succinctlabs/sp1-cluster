@@ -57,7 +57,10 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
             SP1ExecutorConfig::default(),
         )
         .await
-        .map_err(|e| ExecutionError::Other(e.to_string()));
+        .map_err(|e| {
+            e.downcast::<ExecutionError>()
+                .unwrap_or_else(|e| ExecutionError::Other(e.to_string()))
+        });
 
         let result_obj = match execution_result {
             Ok((pv, _, execution_report)) if execution_report.exit_code == 0 => ExecutionResult {
