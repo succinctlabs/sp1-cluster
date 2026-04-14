@@ -46,5 +46,5 @@ lazy_static! {
     /// Task weight for core execute task.
     pub static ref CORE_EXECUTE_WEIGHT: usize = std::env::var("WORKER_CORE_EXECUTE_WEIGHT")
         .map(|s| s.parse().unwrap())
-        .unwrap_or(4);
+        .unwrap_or(32);
 }
