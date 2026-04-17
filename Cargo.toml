@@ -37,9 +37,9 @@ p3-field = "=0.3.2-succinct"
 p3-matrix = "=0.3.2-succinct"
 
 # SPN
-spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-artifacts = { path = "../network/crates/network/artifacts" }
 spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
-spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
+spn-network-types = { path = "../network/crates/types/network", features = ["network"] }
 spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
 
 # SP1
@@ -147,16 +147,17 @@ opt-level = 3
 opt-level = 3
 
 # Picks up sp1#2713; drop once v6.1.1+ is released.
+# Pointing at local sp1 checkout so sp1-prover-types picks up PrivateStdin.
 [patch.crates-io]
-sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
+sp1-core-executor = { path = "../sp1/crates/core/executor" }
+sp1-core-machine = { path = "../sp1/crates/core/machine" }
+sp1-hypercube = { path = "../sp1/crates/hypercube" }
+sp1-primitives = { path = "../sp1/crates/primitives" }
+sp1-prover = { path = "../sp1/crates/prover" }
+sp1-prover-types = { path = "../sp1/crates/prover-types" }
+sp1-recursion-circuit = { path = "../sp1/crates/recursion/circuit" }
+sp1-recursion-compiler = { path = "../sp1/crates/recursion/compiler" }
+sp1-recursion-executor = { path = "../sp1/crates/recursion/executor" }
+sp1-sdk = { path = "../sp1/crates/sdk" }
 sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
 sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }

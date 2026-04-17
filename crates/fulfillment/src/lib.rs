@@ -613,10 +613,21 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                 ArtifactType::Program,
             )
             .await?;
+
+            // For private stdin, the public URI is empty and the artifact key
+            // is under the private-stdins/ prefix. Fetch a presigned URL and
+            // use the matching ArtifactType so the cluster-side S3 key lines
+            // up with the network-side key.
+            let stdin_fetch_uri = self.network.fetch_stdin_uri(&request, &self.signer).await?;
+            let stdin_artifact_type = if request.stdin_private() {
+                ArtifactType::PrivateStdin
+            } else {
+                ArtifactType::Stdin
+            };
             self.copy_artifact(
                 stdin_artifact_id.clone(),
-                request.stdin_public_uri(),
-                ArtifactType::Stdin,
+                &stdin_fetch_uri,
+                stdin_artifact_type,
             )
             .await?;
         }
