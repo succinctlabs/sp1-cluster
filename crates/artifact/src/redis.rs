@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -5,12 +7,34 @@ use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions};
 use deadpool_redis::{Config, Connection as RedisConnection, Pool, PoolConfig, Runtime};
 use sp1_cluster_common::util::backoff_retry;
-use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType};
+use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType, ShardPermit};
+use tokio::sync::{OnceCell, Semaphore};
 use tokio::task::JoinSet;
 use tracing::{instrument, Instrument};
 
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
+
+/// Conservative upper bound on a single shard artifact's size, used to derive
+/// the per-node permit count from `maxmemory`. Real trace chunks are typically
+/// 50-200 MB compressed; 250 MB includes headroom for outliers.
+///
+/// Override via `PROVE_SHARD_MAX_BYTES`.
+const DEFAULT_SHARD_MAX_BYTES: u64 = 250 * 1024 * 1024;
+
+/// Fraction of a Redis node's `maxmemory` budgeted for in-flight shard
+/// artifacts. The remaining 25% absorbs proof outputs, reduce intermediates,
+/// allocator overhead, and the occasional outlier shard.
+const MEMORY_BUDGET_FRACTION: f64 = 0.75;
+
+/// Floor on permit count per shard node. Applied when `maxmemory` is small
+/// or unreadable — prevents wedging the pipeline with zero permits.
+const MIN_PERMITS_PER_NODE: usize = 4;
+
+/// Fallback `maxmemory` (4 GB) used when `CONFIG GET maxmemory` fails or
+/// returns 0 (unlimited). Yields a conservative permit count until a real
+/// reading is available.
+const FALLBACK_MAXMEMORY_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// FNV-1a hash
 #[inline]
@@ -30,12 +54,15 @@ fn get_connection_idx(id: &str, num_redis_nodes: usize) -> usize {
 pub struct RedisArtifactClient {
     pub connection_pools: Vec<Pool>,
     backoff: ExponentialBackoff,
+    /// One permit pool per Redis shard node. Lazily sized on first use from
+    /// `CONFIG GET maxmemory`; one permit represents one worst-case shard.
+    node_semaphores: Arc<Vec<OnceCell<Arc<Semaphore>>>>,
 }
 
 impl RedisArtifactClient {
     pub fn new(node_ips: Vec<String>, pool_max_size: usize) -> Self {
         tracing::info!("initializing redis pool");
-        let pools = node_ips
+        let pools: Vec<_> = node_ips
             .iter()
             .map(|url| {
                 let mut config = Config::from_url(url);
@@ -48,10 +75,84 @@ impl RedisArtifactClient {
             .with_max_interval(Duration::from_secs(1))
             .with_max_elapsed_time(Some(Duration::from_secs(1)))
             .build();
+        let node_semaphores = Arc::new((0..pools.len()).map(|_| OnceCell::new()).collect());
         Self {
             connection_pools: pools,
             backoff,
+            node_semaphores,
         }
+    }
+
+    /// Return the per-node shard semaphore, initializing it on first call.
+    async fn node_semaphore(&self, idx: usize) -> Arc<Semaphore> {
+        self.node_semaphores[idx]
+            .get_or_init(|| async move {
+                let permits = self.compute_permits_for_node(idx).await;
+                Arc::new(Semaphore::new(permits))
+            })
+            .await
+            .clone()
+    }
+
+    /// Query `CONFIG GET maxmemory` on shard `idx` and derive the permit count.
+    /// Falls back to a sensible default if the query fails or returns 0.
+    async fn compute_permits_for_node(&self, idx: usize) -> usize {
+        let maxmemory = match self.query_maxmemory(idx).await {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                tracing::warn!(
+                    shard = idx,
+                    fallback_bytes = FALLBACK_MAXMEMORY_BYTES,
+                    "Redis reports maxmemory=0 (unlimited); using fallback for permit sizing"
+                );
+                FALLBACK_MAXMEMORY_BYTES
+            }
+            Err(e) => {
+                tracing::warn!(
+                    shard = idx,
+                    error = %e,
+                    fallback_bytes = FALLBACK_MAXMEMORY_BYTES,
+                    "CONFIG GET maxmemory failed; using fallback for permit sizing"
+                );
+                FALLBACK_MAXMEMORY_BYTES
+            }
+        };
+        let max_shard_bytes = std::env::var("PROVE_SHARD_MAX_BYTES")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(DEFAULT_SHARD_MAX_BYTES);
+        let budget = (maxmemory as f64 * MEMORY_BUDGET_FRACTION) as u64;
+        let permits = ((budget / max_shard_bytes) as usize).max(MIN_PERMITS_PER_NODE);
+        tracing::info!(
+            shard = idx,
+            maxmemory_bytes = maxmemory,
+            max_shard_bytes,
+            budget_fraction = MEMORY_BUDGET_FRACTION,
+            permits,
+            "ProveShard permit pool sized"
+        );
+        permits
+    }
+
+    /// Query `CONFIG GET maxmemory` on a specific shard node. Returns `Ok(None)`
+    /// when Redis reports `maxmemory=0` (unlimited — can't compute a permit
+    /// count). Returns `Err` on any I/O or protocol error.
+    async fn query_maxmemory(&self, idx: usize) -> Result<Option<u64>> {
+        let mut conn = self.connection_pools[idx]
+            .get()
+            .await
+            .map_err(|e| anyhow!("pool get: {e}"))?;
+        let config: HashMap<String, String> = deadpool_redis::redis::cmd("CONFIG")
+            .arg("GET")
+            .arg("maxmemory")
+            .query_async(&mut *conn)
+            .await
+            .map_err(|e| anyhow!("CONFIG GET maxmemory: {e}"))?;
+        Ok(config
+            .get("maxmemory")
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|&v| v > 0))
     }
 
     async fn get_redis_connection(
@@ -240,6 +341,26 @@ impl RedisArtifactClient {
 }
 
 impl ArtifactClient for RedisArtifactClient {
+    /// Reserve a shard slot on the Redis node that will host `artifact`.
+    /// Blocks when the node's permit pool is exhausted. The returned
+    /// [`ShardPermit`] must be held until the artifact is consumed/deleted.
+    async fn acquire_shard_permit(&self, artifact: &impl ArtifactId) -> ShardPermit {
+        let num_nodes = self.connection_pools.len();
+        if num_nodes == 0 {
+            return ShardPermit::noop();
+        }
+        let idx = get_connection_idx(artifact.id(), num_nodes);
+        let sem = self.node_semaphore(idx).await;
+        match sem.acquire_owned().await {
+            Ok(permit) => ShardPermit::new(permit),
+            Err(_) => {
+                // Semaphore closed: fail-open rather than wedge the producer.
+                tracing::warn!(shard = idx, "semaphore closed, releasing unbounded permit");
+                ShardPermit::noop()
+            }
+        }
+    }
+
     #[instrument(name = "upload", level = "debug", fields(id = artifact.id()), skip(self, artifact, data))]
     async fn upload_raw(
         &self,
