@@ -146,17 +146,18 @@ opt-level = 3
 [profile.dev.build-override]
 opt-level = 3
 
-# Picks up sp1#2713; drop once v6.1.1+ is released.
+# Picks up sp1#2721 (ArtifactClient::wait_for_upload_headroom backpressure hook)
+# on top of sp1#2713. Drop once these land in a tagged sp1 release.
 [patch.crates-io]
-sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }
+sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }
+sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "fc92022" }

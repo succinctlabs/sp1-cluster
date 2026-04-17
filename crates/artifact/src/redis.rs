@@ -1,8 +1,12 @@
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
-use deadpool_redis::redis::{AsyncCommands, HashFieldExpirationOptions, SetExpiry, SetOptions};
+use deadpool_redis::redis::{
+    AsyncCommands, HashFieldExpirationOptions, InfoDict, SetExpiry, SetOptions,
+};
 use deadpool_redis::{Config, Connection as RedisConnection, Pool, PoolConfig, Runtime};
 use sp1_cluster_common::util::backoff_retry;
 use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType};
@@ -11,6 +15,19 @@ use tracing::{instrument, Instrument};
 
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
+
+/// Start blocking uploads once Redis crosses this fraction of its memory limit.
+/// The 20% slack absorbs overshoot and consumer-side writes we don't gate.
+const HEADROOM_THRESHOLD: f64 = 0.80;
+
+/// Sleep between re-checks while a producer is blocked.
+const HEADROOM_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How long a cached memory reading stays valid. Collapses concurrent polls.
+const HEADROOM_CACHE_TTL: Duration = Duration::from_millis(500);
+
+/// Fail-open deadline. We'd rather overshoot than stall on a broken Redis.
+const HEADROOM_MAX_WAIT: Duration = Duration::from_secs(60);
 
 /// FNV-1a hash
 #[inline]
@@ -26,16 +43,21 @@ fn get_connection_idx(id: &str, num_redis_nodes: usize) -> usize {
     hash % num_redis_nodes
 }
 
+/// One `(poll_time, used/limit)` slot per shard node. See `HEADROOM_CACHE_TTL`.
+type HeadroomCache = Arc<Vec<RwLock<Option<(Instant, f64)>>>>;
+
 #[derive(Clone)]
 pub struct RedisArtifactClient {
     pub connection_pools: Vec<Pool>,
     backoff: ExponentialBackoff,
+    /// Avoids polling Redis on every upload; see [`Self::wait_for_upload_headroom`].
+    headroom_cache: HeadroomCache,
 }
 
 impl RedisArtifactClient {
     pub fn new(node_ips: Vec<String>, pool_max_size: usize) -> Self {
         tracing::info!("initializing redis pool");
-        let pools = node_ips
+        let pools: Vec<_> = node_ips
             .iter()
             .map(|url| {
                 let mut config = Config::from_url(url);
@@ -48,10 +70,53 @@ impl RedisArtifactClient {
             .with_max_interval(Duration::from_secs(1))
             .with_max_elapsed_time(Some(Duration::from_secs(1)))
             .build();
+        let headroom_cache = Arc::new((0..pools.len()).map(|_| RwLock::new(None)).collect());
         Self {
             connection_pools: pools,
             backoff,
+            headroom_cache,
         }
+    }
+
+    /// Query shard `idx` for its `used_memory / maxmemory` fraction.
+    /// Callers should treat errors as fail-open.
+    async fn poll_shard_memory_fraction(&self, idx: usize) -> Result<f64> {
+        let mut conn = self.connection_pools[idx]
+            .get()
+            .await
+            .map_err(|e| anyhow!("failed to get redis connection for headroom poll: {e}"))?;
+
+        let info: InfoDict = deadpool_redis::redis::cmd("INFO")
+            .arg("memory")
+            .query_async(&mut *conn)
+            .await
+            .map_err(|e| anyhow!("INFO memory failed: {e}"))?;
+
+        let config: HashMap<String, String> = deadpool_redis::redis::cmd("CONFIG")
+            .arg("GET")
+            .arg("maxmemory")
+            .query_async(&mut *conn)
+            .await
+            .map_err(|e| anyhow!("CONFIG GET maxmemory failed: {e}"))?;
+
+        let used: u64 = info
+            .get("used_memory")
+            .ok_or_else(|| anyhow!("used_memory missing from INFO memory"))?;
+
+        // Prefer explicit maxmemory; fall back to total_system_memory if unset.
+        // Filter both arms to reject zero — dividing by zero would produce NaN and
+        // silently bypass the threshold check on the caller side.
+        let limit: u64 = config
+            .get("maxmemory")
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|&v| v > 0)
+            .or_else(|| info.get::<u64>("total_system_memory"))
+            .filter(|&v| v > 0)
+            .ok_or_else(|| {
+                anyhow!("cannot determine memory limit: maxmemory=0 and no total_system_memory")
+            })?;
+
+        Ok(used as f64 / limit as f64)
     }
 
     async fn get_redis_connection(
@@ -240,6 +305,72 @@ impl RedisArtifactClient {
 }
 
 impl ArtifactClient for RedisArtifactClient {
+    /// Block until the shard hosting `artifact` is below [`HEADROOM_THRESHOLD`].
+    ///
+    /// Re-introduces distributed-pipeline backpressure: awaiting here propagates
+    /// upstream through `SendSpliceWorker::call` to the executor's shard emitter.
+    /// Fails open (returns without error) on any Redis error or after
+    /// [`HEADROOM_MAX_WAIT`] — the trait contract forbids propagating failures.
+    async fn wait_for_upload_headroom(&self, artifact: &impl ArtifactId) {
+        let num_nodes = self.connection_pools.len();
+        if num_nodes == 0 {
+            return;
+        }
+        let idx = get_connection_idx(artifact.id(), num_nodes);
+        let start = Instant::now();
+
+        loop {
+            if start.elapsed() >= HEADROOM_MAX_WAIT {
+                tracing::warn!(
+                    shard = idx,
+                    waited = ?start.elapsed(),
+                    "redis upload backpressure: fail-open after MAX_WAIT"
+                );
+                return;
+            }
+
+            // Scoped read: guard must drop before any `.await` below.
+            let cached_fraction = {
+                let guard = self.headroom_cache[idx].read().unwrap();
+                guard
+                    .filter(|(last, _)| last.elapsed() < HEADROOM_CACHE_TTL)
+                    .map(|(_, frac)| frac)
+            };
+
+            let fraction = if let Some(frac) = cached_fraction {
+                frac
+            } else {
+                match self.poll_shard_memory_fraction(idx).await {
+                    Ok(frac) => {
+                        let mut guard = self.headroom_cache[idx].write().unwrap();
+                        *guard = Some((Instant::now(), frac));
+                        frac
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            shard = idx,
+                            error = %e,
+                            "redis upload backpressure: poll failed, fail-open"
+                        );
+                        return;
+                    }
+                }
+            };
+
+            if fraction < HEADROOM_THRESHOLD {
+                return;
+            }
+
+            tracing::debug!(
+                shard = idx,
+                fraction,
+                threshold = HEADROOM_THRESHOLD,
+                "redis upload backpressure: waiting for headroom"
+            );
+            tokio::time::sleep(HEADROOM_POLL_INTERVAL).await;
+        }
+    }
+
     #[instrument(name = "upload", level = "debug", fields(id = artifact.id()), skip(self, artifact, data))]
     async fn upload_raw(
         &self,
