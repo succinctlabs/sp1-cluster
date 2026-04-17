@@ -1171,6 +1171,18 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                     )));
                 }
             }
+            // Deliver a terminal TaskResult to each task's subscribers so they drain
+            // via the normal completion path once the proof is gone.
+            for task in proof.tasks.values() {
+                if !task.subscribers.is_empty() {
+                    self.notify_subscribers(
+                        &task.subscribers,
+                        proof_id.clone(),
+                        task.id.clone(),
+                        TaskStatus::FailedFatal,
+                    );
+                }
+            }
             for task in proof.tasks.values() {
                 if task.status == TaskStatus::Running {
                     if let Some(worker_id) = &task.worker {
@@ -1377,15 +1389,18 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 .await;
             let proof = state.proofs.get_mut(&proof_id);
             if proof.is_none() {
-                let _ = tx.send(ServerSubMessage {
-                    msg_id: "msg".create_type_id::<V7>().to_string(),
-                    message: Some(server_sub_message::Message::UnknownTask(
-                        proto::UnknownTask {
-                            proof_id: proof_id.clone(),
-                            task_id: task_ids.first().unwrap().clone(),
-                        },
-                    )),
-                });
+                // Emit UnknownTask for every stale task_id the subscriber sent.
+                for task_id in &task_ids {
+                    let _ = tx.send(ServerSubMessage {
+                        msg_id: "msg".create_type_id::<V7>().to_string(),
+                        message: Some(server_sub_message::Message::UnknownTask(
+                            proto::UnknownTask {
+                                proof_id: proof_id.clone(),
+                                task_id: task_id.clone(),
+                            },
+                        )),
+                    });
+                }
                 return Ok(());
             }
             let proof = proof.unwrap();
