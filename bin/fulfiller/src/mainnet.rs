@@ -265,6 +265,49 @@ impl FulfillmentNetwork for MainnetFulfiller {
             .await?;
         Ok(bytes.into())
     }
+
+    async fn fetch_stdin_uri(
+        &self,
+        request: &Self::NetworkRequest,
+        signer: &NetworkSigner,
+    ) -> Result<String> {
+        if !request.stdin_private() {
+            return Ok(request.stdin_public_uri().to_string());
+        }
+
+        let nonce = self
+            .network
+            .clone()
+            .get_nonce(spn_network_types::GetNonceRequest {
+                address: signer.address().to_vec(),
+            })
+            .await?
+            .into_inner()
+            .nonce;
+
+        let request_id_bytes = hex::decode(request.request_id())
+            .map_err(|e| anyhow::anyhow!("failed to decode request_id: {}", e))?;
+
+        let body = spn_network_types::GetStdinUriRequestBody {
+            nonce,
+            request_id: request_id_bytes,
+            domain: Vec::new(),
+        };
+
+        let get_stdin_uri_req = spn_network_types::GetStdinUriRequest {
+            format: spn_network_types::MessageFormat::Binary.into(),
+            signature: signer.sign_message(&body.encode_to_vec()).await?.into(),
+            body: Some(body),
+        };
+
+        let response = self
+            .network
+            .clone()
+            .get_stdin_uri(get_stdin_uri_req)
+            .await?
+            .into_inner();
+        Ok(response.stdin_uri)
+    }
 }
 
 pub struct NetworkProofRequest(pub spn_network_types::ProofRequest);
@@ -308,5 +351,9 @@ impl NetworkRequest for NetworkProofRequest {
 
     fn stdin_public_uri(&self) -> &str {
         &self.0.stdin_public_uri
+    }
+
+    fn stdin_private(&self) -> bool {
+        self.0.stdin_private
     }
 }
