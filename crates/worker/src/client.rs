@@ -351,7 +351,20 @@ impl WorkerClient for WorkerServiceClient {
                                             break;
                                         }
                                         Some(server_sub_message::Message::UnknownTask(unknown_task)) => {
-                                            panic!("Unknown task {} {}", unknown_task.task_id, unknown_task.proof_id);
+                                            // Report the task as fatally failed and keep serving the subscriber's
+                                            // other tasks.
+                                            tracing::error!(
+                                                "Received UnknownTask from coordinator: task={} proof={}",
+                                                unknown_task.task_id,
+                                                unknown_task.proof_id,
+                                            );
+                                            let mut lock = tasks_set.lock().await;
+                                            lock.remove(&unknown_task.task_id);
+                                            drop(lock);
+                                            let _ = res_tx.send((
+                                                TaskId::new(unknown_task.task_id),
+                                                proto::TaskStatus::FailedFatal,
+                                            ));
                                         }
                                         Some(server_sub_message::Message::ServerHeartbeat(_)) => {
                                             // Send empty UpdateSub message to keep the subscriber alive.
