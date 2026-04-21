@@ -1,17 +1,14 @@
 //! Integration tests for [`ProveShardGate`] backed by a real Redis.
 //!
-//! These tests are gated behind `#[ignore]` so they only run when explicitly
-//! invoked (e.g. from CI) with a Redis instance reachable at `REDIS_URL`
-//! (default `redis://127.0.0.1:6379/`). Run with:
+//! `#[ignore]`'d by default — run with:
 //!
 //! ```sh
 //! cargo test --release -p sp1-cluster-artifact --test prove_shard_gate -- \
 //!     --ignored --test-threads=1
 //! ```
 //!
-//! CI launches a `redis:7-alpine` service with `--maxmemory 200mb`, sets
-//! `PROVE_SHARD_MAX_BYTES=50000000` so the per-node pool floors to 4 permits
-//! (`MIN_PERMITS_PER_NODE`).
+//! Vanilla Redis (no `maxmemory`) gives the floor pool of 4 permits.
+//! Scenario 3 sets a 50 MB cap to exercise the OOM-prevention path.
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
@@ -27,8 +24,6 @@ use sp1_prover_types::{
 };
 use tokio::sync::{mpsc, watch, Mutex};
 
-const PAYLOAD_BYTES: usize = 10_000_000;
-
 fn redis_url() -> String {
     std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".into())
 }
@@ -37,6 +32,31 @@ async fn reset_redis(url: &str) -> Result<()> {
     let client = redis::Client::open(url)?;
     let mut conn = client.get_multiplexed_async_connection().await?;
     let _: () = redis::cmd("FLUSHALL").query_async(&mut conn).await?;
+    // Hermetic per-test: clear any maxmemory left over from a prior scenario.
+    let _: () = redis::cmd("CONFIG")
+        .arg("SET")
+        .arg("maxmemory")
+        .arg("0")
+        .query_async(&mut conn)
+        .await?;
+    Ok(())
+}
+
+async fn set_maxmemory(url: &str, bytes: u64) -> Result<()> {
+    let client = redis::Client::open(url)?;
+    let mut conn = client.get_multiplexed_async_connection().await?;
+    let _: () = redis::cmd("CONFIG")
+        .arg("SET")
+        .arg("maxmemory")
+        .arg(bytes.to_string())
+        .query_async(&mut conn)
+        .await?;
+    let _: () = redis::cmd("CONFIG")
+        .arg("SET")
+        .arg("maxmemory-policy")
+        .arg("noeviction")
+        .query_async(&mut conn)
+        .await?;
     Ok(())
 }
 
@@ -55,7 +75,7 @@ fn dummy_context(proof_id: &str) -> TaskContext {
     }
 }
 
-/// Flush Redis and build (artifact_client, worker_client, gate) for `proof_id`.
+/// Reset Redis and build (artifact_client, worker_client, gate) for `proof_id`.
 async fn setup(
     proof_id: &str,
     completion_delay: Duration,
@@ -78,7 +98,6 @@ async fn setup(
     (artifact_client, worker_client, gate)
 }
 
-/// Submit a ProveShard task with a single input artifact and the proof's dummy context.
 async fn submit_shard(worker: &MockWorkerClient, proof_id: &str, input: Artifact) -> TaskId {
     worker
         .submit_task(
@@ -93,7 +112,6 @@ async fn submit_shard(worker: &MockWorkerClient, proof_id: &str, input: Artifact
         .expect("submit_task")
 }
 
-/// Assert that `fut` completes within `timeout`, panicking with `msg` otherwise.
 async fn assert_completes<F: std::future::Future>(
     timeout: Duration,
     msg: &str,
@@ -104,61 +122,19 @@ async fn assert_completes<F: std::future::Future>(
         .unwrap_or_else(|_| panic!("{msg}"))
 }
 
-/// Scenario 1 — single producer full lifecycle.
+/// Scenario 1 — gate drop aborts pending release tasks, permits reclaim.
 ///
-/// Acquire → upload → submit → consumer auto-completes → permit released.
+/// 4 permits handed to `schedule_release` tasks whose mock consumer never
+/// completes. Dropping the gate must abort them; otherwise `wait_task` hangs
+/// forever on a closed subscriber and the permits leak.
 #[tokio::test]
 #[ignore = "requires Redis (set REDIS_URL or run with CI services block)"]
-async fn scenario_1_lifecycle() {
+async fn scenario_1_gate_drop_reclaims_permits() {
     let proof_id = "test-proof-1";
-    let (artifact_client, worker_client, gate) = setup(proof_id, Duration::from_millis(300)).await;
-
-    let record: Artifact = "s1-record-0".to_string().into();
-    let permit = gate.acquire(&record).await;
-    artifact_client
-        .upload_raw(
-            &record,
-            ArtifactType::UnspecifiedArtifactType,
-            random_bytes(PAYLOAD_BYTES),
-        )
-        .await
-        .ok();
-    let task_id = submit_shard(&worker_client, proof_id, record).await;
-    gate.schedule_release(task_id, permit);
-
-    // Fill the pool with 3 holds so the final probe acquire can only succeed
-    // if `schedule_release` actually returned the original permit to the pool.
-    let mut filler = Vec::new();
-    for i in 0..3 {
-        let a: Artifact = format!("s1-filler-{i}").into();
-        filler.push(gate.acquire(&a).await);
-    }
-
-    // Consumer auto-completes after 300ms; give schedule_release time to fire.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    let probe: Artifact = "s1-probe".to_string().into();
-    assert_completes(
-        Duration::from_millis(500),
-        "permit not released after task completion",
-        gate.acquire(&probe),
-    )
-    .await;
-}
-
-/// Scenario 2 — gate drop aborts pending release tasks, permits reclaim.
-///
-/// All 4 permits are handed to `schedule_release` tasks whose mock consumer
-/// never completes (30s delay). Dropping the gate must abort those tasks so
-/// the permits drop, otherwise the subscriber leak would hang them forever.
-#[tokio::test]
-#[ignore = "requires Redis (set REDIS_URL or run with CI services block)"]
-async fn scenario_2_gate_drop_reclaims_permits() {
-    let proof_id = "test-proof-2";
     let (artifact_client, worker_client, gate) = setup(proof_id, Duration::from_secs(30)).await;
 
     for i in 0..4 {
-        let record: Artifact = format!("s2-record-{i}").into();
+        let record: Artifact = format!("s1-record-{i}").into();
         let permit = gate.acquire(&record).await;
         let task_id = submit_shard(&worker_client, proof_id, record).await;
         gate.schedule_release(task_id, permit);
@@ -167,7 +143,7 @@ async fn scenario_2_gate_drop_reclaims_permits() {
     drop(gate);
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let probe: Artifact = "s2-probe".to_string().into();
+    let probe: Artifact = "s1-probe".to_string().into();
     assert_completes(
         Duration::from_millis(500),
         "permits not reclaimed after gate drop",
@@ -176,61 +152,52 @@ async fn scenario_2_gate_drop_reclaims_permits() {
     .await;
 }
 
-/// Scenario 3 — `FailedRetryable` must NOT release the permit; `Succeeded` does.
+/// Scenario 2 — `FailedRetryable` holds the permit; `Succeeded` releases.
 ///
-/// Locks in the retry-loop contract in [`ProveShardGate::schedule_release`]:
-/// only `Succeeded` / `FailedFatal` release the permit. On `FailedRetryable`
-/// the coordinator is re-queuing the same `task_id`, so the record artifact
-/// is still live in Redis and its permit must stay held until a truly
-/// terminal status arrives.
+/// Locks in the retry-loop contract: only truly terminal statuses release.
 #[tokio::test]
 #[ignore = "requires Redis (set REDIS_URL or run with CI services block)"]
-async fn scenario_3_failed_retryable_holds_permit() {
-    let proof_id = "test-proof-3";
-    // Long auto-completion delay — we drive status transitions manually.
+async fn scenario_2_failed_retryable_holds_permit() {
+    let proof_id = "test-proof-2";
+    // Long auto-completion delay so we can drive transitions manually.
     let (_artifact_client, worker_client, gate) = setup(proof_id, Duration::from_secs(30)).await;
 
-    // Acquire permit A and hand it to schedule_release.
-    let record_a: Artifact = "s3-record-a".to_string().into();
+    let record_a: Artifact = "s2-record-a".to_string().into();
     let permit_a = gate.acquire(&record_a).await;
     let task_a = submit_shard(&worker_client, proof_id, record_a).await;
     gate.schedule_release(task_a.clone(), permit_a);
 
-    // Let the spawned release task call wait_task and register task_a in the
+    // Yield enough for the spawned release task to register task_a in the
     // subscriber's request_map before we broadcast.
     for _ in 0..10 {
         tokio::task::yield_now().await;
     }
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Drain the rest of the pool (4 - 1 = 3 fillers).
+    // Drain the rest of the pool (3 fillers).
     let mut fillers = Vec::new();
     for i in 0..3 {
-        let a: Artifact = format!("s3-filler-{i}").into();
+        let a: Artifact = format!("s2-filler-{i}").into();
         fillers.push(gate.acquire(&a).await);
     }
 
-    // Transition task A to FailedRetryable — gate's retry loop should keep
-    // the permit held.
     worker_client
         .transition(&task_a, TaskStatus::FailedRetryable)
         .await;
     tokio::time::sleep(Duration::from_millis(800)).await;
 
-    // Drop fillers (frees 3 slots), reacquire 3 (hold them this time so the
-    // pool stays at 3/4 used by us + 1/4 still held by permit A).
+    // 3 refills should succeed; 4th must block — permit A still held.
     drop(fillers);
     let mut refills = Vec::new();
     for i in 0..3 {
-        let a: Artifact = format!("s3-refill-{i}").into();
+        let a: Artifact = format!("s2-refill-{i}").into();
         refills.push(
             tokio::time::timeout(Duration::from_millis(100), gate.acquire(&a))
                 .await
                 .expect("refill blocked"),
         );
     }
-    // 4th probe must block: permit A is still held by schedule_release.
-    let blocked_probe: Artifact = "s3-blocked-probe".to_string().into();
+    let blocked_probe: Artifact = "s2-blocked-probe".to_string().into();
     let blocked =
         tokio::time::timeout(Duration::from_millis(500), gate.acquire(&blocked_probe)).await;
     assert!(
@@ -238,17 +205,76 @@ async fn scenario_3_failed_retryable_holds_permit() {
         "permit A released on FailedRetryable — should still be held"
     );
 
-    // Transition task A to Succeeded — gate breaks out of loop, drops permit.
     worker_client
         .transition(&task_a, TaskStatus::Succeeded)
         .await;
-    let recovered: Artifact = "s3-recovered-probe".to_string().into();
+    let recovered: Artifact = "s2-recovered-probe".to_string().into();
     assert_completes(
         Duration::from_millis(500),
         "permit A not released after Succeeded transition",
         gate.acquire(&recovered),
     )
     .await;
+}
+
+/// Scenario 3 — gated workload survives a tight Redis cap (no OOM).
+///
+/// 50 producers × 5 MB (250 MB demand) against a 50 MB `noeviction` cap.
+/// Each producer: acquire → upload → submit → delete → mark Succeeded.
+/// Without the gate this would OOM.
+#[tokio::test]
+#[ignore = "requires Redis (set REDIS_URL or run with CI services block)"]
+async fn scenario_3_no_oom_under_pressure_with_gate() {
+    let url = redis_url();
+    reset_redis(&url).await.expect("redis reset");
+    set_maxmemory(&url, 50 * 1024 * 1024)
+        .await
+        .expect("set maxmemory");
+
+    let proof_id = "test-proof-3";
+    let artifact_client = RedisArtifactClient::new(vec![url.clone()], 10);
+    let worker_client = MockWorkerClient::new(Duration::from_secs(60));
+    let gate = Arc::new(
+        ProveShardGate::new(
+            artifact_client.clone(),
+            worker_client.clone(),
+            ProofId::new(proof_id),
+        )
+        .await
+        .expect("gate construction"),
+    );
+    let artifact_client = Arc::new(artifact_client);
+    let payload = Arc::new(random_bytes(5 * 1024 * 1024));
+
+    let mut handles = Vec::new();
+    for pid in 0..50 {
+        let ac = artifact_client.clone();
+        let wc = worker_client.clone();
+        let g = gate.clone();
+        let p = payload.clone();
+        handles.push(tokio::spawn(async move {
+            let record: Artifact = format!("s3-record-{pid}").into();
+            let permit = g.acquire(&record).await;
+            ac.upload_raw(&record, ArtifactType::UnspecifiedArtifactType, (*p).clone())
+                .await
+                .map_err(|e| format!("producer {pid} upload OOM: {e}"))?;
+            let task_id = submit_shard(&wc, proof_id, record.clone()).await;
+            g.schedule_release(task_id.clone(), permit);
+            // Stand in for the consumer: delete the artifact, mark task done.
+            ac.delete(&record, ArtifactType::UnspecifiedArtifactType)
+                .await
+                .ok();
+            wc.transition(&task_id, TaskStatus::Succeeded).await;
+            Ok::<_, String>(())
+        }));
+    }
+
+    for (i, h) in handles.into_iter().enumerate() {
+        match h.await.unwrap() {
+            Ok(()) => {}
+            Err(e) => panic!("scenario 3 OOM at producer {i}: {e}"),
+        }
+    }
 }
 
 // ─── Mock WorkerClient ──────────────────────────────────────────────────────
