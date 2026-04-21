@@ -21,7 +21,6 @@ jobs:
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       REDIS_URL: redis://localhost:6379
-      PROVE_SHARD_MAX_BYTES: "50000000"
     services:
       redis:
         image: redis:7-alpine
@@ -32,7 +31,6 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 5
-          --entrypoint "redis-server --maxmemory 200mb --maxmemory-policy noeviction"
     steps:
       - name: Checkout repository and submodules
         uses: actions/checkout@v4
