@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -95,7 +94,7 @@ impl RedisArtifactClient {
             .clone()
     }
 
-    /// Query `CONFIG GET maxmemory` on shard `idx` and derive the permit count.
+    /// Derive the permit count from `maxmemory` on shard `idx`.
     /// Returns [`MIN_PERMITS_PER_NODE`] if the query fails, times out, or
     /// reports `maxmemory=0` (unlimited) — we don't fabricate a maxmemory we
     /// can't measure.
@@ -116,7 +115,7 @@ impl RedisArtifactClient {
                         shard = idx,
                         error = %e,
                         permits = MIN_PERMITS_PER_NODE,
-                        "CONFIG GET maxmemory failed; falling back to floor"
+                        "maxmemory query failed; falling back to floor"
                     );
                     return MIN_PERMITS_PER_NODE;
                 }
@@ -125,7 +124,7 @@ impl RedisArtifactClient {
                         shard = idx,
                         timeout_secs = MAXMEMORY_QUERY_TIMEOUT.as_secs(),
                         permits = MIN_PERMITS_PER_NODE,
-                        "CONFIG GET maxmemory timed out; falling back to floor"
+                        "maxmemory query timed out; falling back to floor"
                     );
                     return MIN_PERMITS_PER_NODE;
                 }
@@ -148,23 +147,27 @@ impl RedisArtifactClient {
         permits
     }
 
-    /// Query `CONFIG GET maxmemory` on a specific shard node. Returns `Ok(None)`
-    /// when Redis reports `maxmemory=0` (unlimited — can't compute a permit
-    /// count). Returns `Err` on any I/O or protocol error.
+    /// Read `maxmemory` from `INFO memory` on a specific shard node. Returns
+    /// `Ok(None)` when Redis reports `maxmemory=0` (unlimited — can't compute
+    /// a permit count). Returns `Err` on any I/O or protocol error.
+    ///
+    /// Uses `INFO memory` rather than `CONFIG GET maxmemory` because managed
+    /// Redis (AWS ElastiCache, MemoryDB) blocks `CONFIG` for security.
     async fn query_maxmemory(&self, idx: usize) -> Result<Option<u64>> {
         let mut conn = self.connection_pools[idx]
             .get()
             .await
             .map_err(|e| anyhow!("pool get: {e}"))?;
-        let config: HashMap<String, String> = deadpool_redis::redis::cmd("CONFIG")
-            .arg("GET")
-            .arg("maxmemory")
+        let info: String = deadpool_redis::redis::cmd("INFO")
+            .arg("memory")
             .query_async(&mut *conn)
             .await
-            .map_err(|e| anyhow!("CONFIG GET maxmemory: {e}"))?;
-        Ok(config
-            .get("maxmemory")
-            .and_then(|s| s.parse::<u64>().ok())
+            .map_err(|e| anyhow!("INFO memory: {e}"))?;
+        // `INFO memory` returns CRLF-separated `key:value` lines.
+        Ok(info
+            .lines()
+            .find_map(|line| line.strip_prefix("maxmemory:"))
+            .and_then(|v| v.trim().parse::<u64>().ok())
             .filter(|&v| v > 0))
     }
 
