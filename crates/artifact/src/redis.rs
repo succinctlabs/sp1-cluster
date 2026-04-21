@@ -171,7 +171,9 @@ impl RedisArtifactClient {
                     let hash_key = format!("{key}:chunks");
                     let _: usize = conn.hset(&hash_key, chunk_idx, chunk).await?;
                     if !matches!(artifact_type, ArtifactType::Program) {
-                        let _: bool = conn.expire(&hash_key, ARTIFACT_TIMEOUT_SECONDS as i64).await?;
+                        let _: bool = conn
+                            .expire(&hash_key, ARTIFACT_TIMEOUT_SECONDS as i64)
+                            .await?;
                     }
                     Ok::<(), anyhow::Error>(())
                 });
