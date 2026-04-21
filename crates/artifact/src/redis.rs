@@ -22,9 +22,9 @@ const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
 const DEFAULT_SHARD_MAX_BYTES: u64 = 250 * 1024 * 1024;
 
 /// Fraction of a Redis node's `maxmemory` budgeted for in-flight shard
-/// artifacts. The remaining 25% absorbs proof outputs, reduce intermediates,
+/// artifacts. The remaining 20% absorbs proof outputs, reduce intermediates,
 /// allocator overhead, and the occasional outlier shard.
-const MEMORY_BUDGET_FRACTION: f64 = 0.75;
+const MEMORY_BUDGET_FRACTION: f64 = 0.8;
 
 /// Floor on permit count per shard node. Applied when `maxmemory` is small,
 /// unreadable, or unbounded — prevents wedging the pipeline with zero permits
@@ -154,6 +154,13 @@ impl RedisArtifactClient {
     /// Uses `INFO memory` rather than `CONFIG GET maxmemory` because managed
     /// Redis (AWS ElastiCache, MemoryDB) blocks `CONFIG` for security.
     async fn query_maxmemory(&self, idx: usize) -> Result<Option<u64>> {
+        let (_used, max) = self.query_memory(idx).await?;
+        Ok(max.filter(|&v| v > 0))
+    }
+
+    /// Return `(used_memory, maxmemory)` from `INFO memory` on shard `idx`.
+    /// Either field is `None` if the line is missing / unparseable.
+    async fn query_memory(&self, idx: usize) -> Result<(Option<u64>, Option<u64>)> {
         let mut conn = self.connection_pools[idx]
             .get()
             .await
@@ -163,12 +170,61 @@ impl RedisArtifactClient {
             .query_async(&mut *conn)
             .await
             .map_err(|e| anyhow!("INFO memory: {e}"))?;
-        // `INFO memory` returns CRLF-separated `key:value` lines.
-        Ok(info
-            .lines()
-            .find_map(|line| line.strip_prefix("maxmemory:"))
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .filter(|&v| v > 0))
+        let parse = |key: &str| {
+            info.lines()
+                .find_map(|line| line.strip_prefix(key))
+                .and_then(|v| v.trim().parse::<u64>().ok())
+        };
+        Ok((parse("used_memory:"), parse("maxmemory:")))
+    }
+
+    /// Admission check: reject an upload when the target shard is already
+    /// over the memory budget. Prevents callers (fulfiller, controller,
+    /// reduce workers) from OOM-looping when Redis is full. Returns a
+    /// retryable [`backoff::Error`] on rejection — callers backoff while
+    /// in-flight artifacts drain (via consumer deletes or TTL).
+    ///
+    /// Fail-open on `INFO memory` errors: admission shouldn't block uploads
+    /// on a transient query failure. If Redis really is full the upload will
+    /// error at the write stage.
+    ///
+    /// Cheap: one `INFO memory` round-trip per upload, not per chunk.
+    async fn check_admission(
+        &self,
+        key: &str,
+        incoming_bytes: u64,
+    ) -> Result<(), backoff::Error<anyhow::Error>> {
+        let idx = get_connection_idx(key, self.connection_pools.len());
+        let (used, max) = match self.query_memory(idx).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!(shard = idx, error = %e, "admission INFO memory failed; fail-open");
+                return Ok(());
+            }
+        };
+        let (Some(used), Some(max)) = (used, max) else {
+            // INFO parse miss — no admission limit.
+            return Ok(());
+        };
+        if max == 0 {
+            // maxmemory=0 means unlimited — no admission limit.
+            return Ok(());
+        }
+        let budget = (max as f64 * MEMORY_BUDGET_FRACTION) as u64;
+        if used.saturating_add(incoming_bytes) > budget {
+            tracing::warn!(
+                shard = idx,
+                used,
+                max,
+                budget,
+                incoming = incoming_bytes,
+                "Redis near capacity; rejecting upload"
+            );
+            return Err(backoff::Error::transient(anyhow!(
+                "Redis shard {idx} near capacity: used={used} budget={budget} incoming={incoming_bytes}"
+            )));
+        }
+        Ok(())
     }
 
     async fn get_redis_connection(
@@ -258,6 +314,13 @@ impl RedisArtifactClient {
         key: &str,
         serialized: &[u8],
     ) -> Result<(), backoff::Error<anyhow::Error>> {
+        // Admission control: reject if the target shard is already over
+        // budget. Complements `ProveShardGate` (which throttles the prover's
+        // ProveShard producer) by protecting the fulfiller's initial upload
+        // path and any other callers. Re-checked on each backoff retry, so a
+        // draining Redis will eventually admit the upload.
+        self.check_admission(key, serialized.len() as u64).await?;
+
         let mut conn = self.get_redis_connection(key).await?;
         let now = std::time::Instant::now();
         let key = key.to_string();
