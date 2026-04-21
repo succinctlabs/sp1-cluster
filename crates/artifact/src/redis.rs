@@ -27,18 +27,14 @@ const DEFAULT_SHARD_MAX_BYTES: u64 = 250 * 1024 * 1024;
 /// allocator overhead, and the occasional outlier shard.
 const MEMORY_BUDGET_FRACTION: f64 = 0.75;
 
-/// Floor on permit count per shard node. Applied when `maxmemory` is small
-/// or unreadable — prevents wedging the pipeline with zero permits.
+/// Floor on permit count per shard node. Applied when `maxmemory` is small,
+/// unreadable, or unbounded — prevents wedging the pipeline with zero permits
+/// and serves as the safe fallback when we can't compute a real pool size.
 const MIN_PERMITS_PER_NODE: usize = 4;
 
-/// Fallback `maxmemory` (4 GB) used when `CONFIG GET maxmemory` fails or
-/// returns 0 (unlimited). Yields a conservative permit count until a real
-/// reading is available.
-const FALLBACK_MAXMEMORY_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-
 /// Bound on the first-acquire `CONFIG GET maxmemory` round-trip. If Redis
-/// hangs we fall back to [`FALLBACK_MAXMEMORY_BYTES`] rather than stalling
-/// every shard upload behind a single uncached config query.
+/// hangs we fall back to [`MIN_PERMITS_PER_NODE`] rather than stalling every
+/// shard upload behind a single uncached config query.
 const MAXMEMORY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// FNV-1a hash
@@ -100,42 +96,40 @@ impl RedisArtifactClient {
     }
 
     /// Query `CONFIG GET maxmemory` on shard `idx` and derive the permit count.
-    /// Falls back to a sensible default if the query fails or returns 0.
+    /// Returns [`MIN_PERMITS_PER_NODE`] if the query fails, times out, or
+    /// reports `maxmemory=0` (unlimited) — we don't fabricate a maxmemory we
+    /// can't measure.
     async fn compute_permits_for_node(&self, idx: usize) -> usize {
-        let maxmemory = match tokio::time::timeout(
-            MAXMEMORY_QUERY_TIMEOUT,
-            self.query_maxmemory(idx),
-        )
-        .await
-        {
-            Ok(Ok(Some(v))) => v,
-            Ok(Ok(None)) => {
-                tracing::warn!(
-                    shard = idx,
-                    fallback_bytes = FALLBACK_MAXMEMORY_BYTES,
-                    "Redis reports maxmemory=0 (unlimited); using fallback for permit sizing"
-                );
-                FALLBACK_MAXMEMORY_BYTES
-            }
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    shard = idx,
-                    error = %e,
-                    fallback_bytes = FALLBACK_MAXMEMORY_BYTES,
-                    "CONFIG GET maxmemory failed; using fallback for permit sizing"
-                );
-                FALLBACK_MAXMEMORY_BYTES
-            }
-            Err(_) => {
-                tracing::warn!(
-                    shard = idx,
-                    timeout_secs = MAXMEMORY_QUERY_TIMEOUT.as_secs(),
-                    fallback_bytes = FALLBACK_MAXMEMORY_BYTES,
-                    "CONFIG GET maxmemory timed out; using fallback for permit sizing"
-                );
-                FALLBACK_MAXMEMORY_BYTES
-            }
-        };
+        let maxmemory =
+            match tokio::time::timeout(MAXMEMORY_QUERY_TIMEOUT, self.query_maxmemory(idx)).await {
+                Ok(Ok(Some(v))) => v,
+                Ok(Ok(None)) => {
+                    tracing::warn!(
+                        shard = idx,
+                        permits = MIN_PERMITS_PER_NODE,
+                        "Redis reports maxmemory=0 (unlimited); falling back to floor"
+                    );
+                    return MIN_PERMITS_PER_NODE;
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        shard = idx,
+                        error = %e,
+                        permits = MIN_PERMITS_PER_NODE,
+                        "CONFIG GET maxmemory failed; falling back to floor"
+                    );
+                    return MIN_PERMITS_PER_NODE;
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        shard = idx,
+                        timeout_secs = MAXMEMORY_QUERY_TIMEOUT.as_secs(),
+                        permits = MIN_PERMITS_PER_NODE,
+                        "CONFIG GET maxmemory timed out; falling back to floor"
+                    );
+                    return MIN_PERMITS_PER_NODE;
+                }
+            };
         let max_shard_bytes = std::env::var("PROVE_SHARD_MAX_BYTES")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())

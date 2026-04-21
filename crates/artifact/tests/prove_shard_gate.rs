@@ -59,7 +59,11 @@ fn dummy_context(proof_id: &str) -> TaskContext {
 async fn setup(
     proof_id: &str,
     completion_delay: Duration,
-) -> (RedisArtifactClient, MockWorkerClient, ProveShardGate<RedisArtifactClient, MockWorkerClient>) {
+) -> (
+    RedisArtifactClient,
+    MockWorkerClient,
+    ProveShardGate<RedisArtifactClient, MockWorkerClient>,
+) {
     let url = redis_url();
     reset_redis(&url).await.expect("redis reset");
     let artifact_client = RedisArtifactClient::new(vec![url], 10);
@@ -75,11 +79,7 @@ async fn setup(
 }
 
 /// Submit a ProveShard task with a single input artifact and the proof's dummy context.
-async fn submit_shard(
-    worker: &MockWorkerClient,
-    proof_id: &str,
-    input: Artifact,
-) -> TaskId {
+async fn submit_shard(worker: &MockWorkerClient, proof_id: &str, input: Artifact) -> TaskId {
     worker
         .submit_task(
             TaskType::ProveShard,
@@ -94,7 +94,11 @@ async fn submit_shard(
 }
 
 /// Assert that `fut` completes within `timeout`, panicking with `msg` otherwise.
-async fn assert_completes<F: std::future::Future>(timeout: Duration, msg: &str, fut: F) -> F::Output {
+async fn assert_completes<F: std::future::Future>(
+    timeout: Duration,
+    msg: &str,
+    fut: F,
+) -> F::Output {
     tokio::time::timeout(timeout, fut)
         .await
         .unwrap_or_else(|_| panic!("{msg}"))
@@ -107,13 +111,16 @@ async fn assert_completes<F: std::future::Future>(timeout: Duration, msg: &str, 
 #[ignore = "requires Redis (set REDIS_URL or run with CI services block)"]
 async fn scenario_1_lifecycle() {
     let proof_id = "test-proof-1";
-    let (artifact_client, worker_client, gate) =
-        setup(proof_id, Duration::from_millis(300)).await;
+    let (artifact_client, worker_client, gate) = setup(proof_id, Duration::from_millis(300)).await;
 
     let record: Artifact = "s1-record-0".to_string().into();
     let permit = gate.acquire(&record).await;
     artifact_client
-        .upload_raw(&record, ArtifactType::UnspecifiedArtifactType, random_bytes(PAYLOAD_BYTES))
+        .upload_raw(
+            &record,
+            ArtifactType::UnspecifiedArtifactType,
+            random_bytes(PAYLOAD_BYTES),
+        )
         .await
         .ok();
     let task_id = submit_shard(&worker_client, proof_id, record).await;
@@ -148,8 +155,7 @@ async fn scenario_1_lifecycle() {
 #[ignore = "requires Redis (set REDIS_URL or run with CI services block)"]
 async fn scenario_2_gate_drop_reclaims_permits() {
     let proof_id = "test-proof-2";
-    let (artifact_client, worker_client, gate) =
-        setup(proof_id, Duration::from_secs(30)).await;
+    let (artifact_client, worker_client, gate) = setup(proof_id, Duration::from_secs(30)).await;
 
     for i in 0..4 {
         let record: Artifact = format!("s2-record-{i}").into();
@@ -182,8 +188,7 @@ async fn scenario_2_gate_drop_reclaims_permits() {
 async fn scenario_3_failed_retryable_holds_permit() {
     let proof_id = "test-proof-3";
     // Long auto-completion delay — we drive status transitions manually.
-    let (_artifact_client, worker_client, gate) =
-        setup(proof_id, Duration::from_secs(30)).await;
+    let (_artifact_client, worker_client, gate) = setup(proof_id, Duration::from_secs(30)).await;
 
     // Acquire permit A and hand it to schedule_release.
     let record_a: Artifact = "s3-record-a".to_string().into();
@@ -226,11 +231,8 @@ async fn scenario_3_failed_retryable_holds_permit() {
     }
     // 4th probe must block: permit A is still held by schedule_release.
     let blocked_probe: Artifact = "s3-blocked-probe".to_string().into();
-    let blocked = tokio::time::timeout(
-        Duration::from_millis(500),
-        gate.acquire(&blocked_probe),
-    )
-    .await;
+    let blocked =
+        tokio::time::timeout(Duration::from_millis(500), gate.acquire(&blocked_probe)).await;
     assert!(
         blocked.is_err(),
         "permit A released on FailedRetryable — should still be held"
