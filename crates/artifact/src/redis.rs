@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
-use deadpool_redis::redis::{AsyncCommands, HashFieldExpirationOptions, SetExpiry, SetOptions};
+use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions};
 use deadpool_redis::{Config, Connection as RedisConnection, Pool, PoolConfig, Runtime};
 use sp1_cluster_common::util::backoff_retry;
 use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType};
@@ -160,21 +160,21 @@ impl RedisArtifactClient {
             let chunks = serialized.chunks(CHUNK_SIZE);
             let mut join_set = JoinSet::new();
 
-            // Upload chunks in parallel
+            // HSET + EXPIRE, not HSETEX: HSETEX needs Redis 8+ (ElastiCache
+            // tops out at 7.1). Whole-hash TTL ≡ per-field here — one artifact
+            // per hash, all chunks expire together.
             for (chunk_idx, chunk) in chunks.enumerate() {
                 let key = key.clone();
-                let id_clone = key.to_string();
                 let chunk = chunk.to_vec();
-                let mut conn = self.get_redis_connection(&id_clone).await?;
+                let mut conn = self.get_redis_connection(&key).await?;
                 join_set.spawn(async move {
-                    let mut options = HashFieldExpirationOptions::default();
+                    let hash_key = format!("{key}:chunks");
+                    let _: usize = conn.hset(&hash_key, chunk_idx, chunk).await?;
                     if !matches!(artifact_type, ArtifactType::Program) {
-                        options = options.set_expiration(SetExpiry::EX(ARTIFACT_TIMEOUT_SECONDS));
+                        let _: bool = conn
+                            .expire(&hash_key, ARTIFACT_TIMEOUT_SECONDS as i64)
+                            .await?;
                     }
-
-                    let _: usize = conn
-                        .hset_ex(format!("{key}:chunks"), &options, &[(chunk_idx, chunk)])
-                        .await?;
                     Ok::<(), anyhow::Error>(())
                 });
             }
