@@ -28,4 +28,9 @@ tokio.workspace = true
 tracing.workspace = true
 zstd.workspace = true
 
+[dev-dependencies]
+rand = { workspace = true }
+redis = { version = "1.2", features = ["tokio-comp"] }
+sp1-prover = { workspace = true }
+
 [build-dependencies]

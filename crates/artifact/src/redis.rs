@@ -36,6 +36,11 @@ const MIN_PERMITS_PER_NODE: usize = 4;
 /// reading is available.
 const FALLBACK_MAXMEMORY_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
+/// Bound on the first-acquire `CONFIG GET maxmemory` round-trip. If Redis
+/// hangs we fall back to [`FALLBACK_MAXMEMORY_BYTES`] rather than stalling
+/// every shard upload behind a single uncached config query.
+const MAXMEMORY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// FNV-1a hash
 #[inline]
 fn hash_string(s: &str) -> usize {
@@ -97,9 +102,14 @@ impl RedisArtifactClient {
     /// Query `CONFIG GET maxmemory` on shard `idx` and derive the permit count.
     /// Falls back to a sensible default if the query fails or returns 0.
     async fn compute_permits_for_node(&self, idx: usize) -> usize {
-        let maxmemory = match self.query_maxmemory(idx).await {
-            Ok(Some(v)) => v,
-            Ok(None) => {
+        let maxmemory = match tokio::time::timeout(
+            MAXMEMORY_QUERY_TIMEOUT,
+            self.query_maxmemory(idx),
+        )
+        .await
+        {
+            Ok(Ok(Some(v))) => v,
+            Ok(Ok(None)) => {
                 tracing::warn!(
                     shard = idx,
                     fallback_bytes = FALLBACK_MAXMEMORY_BYTES,
@@ -107,12 +117,21 @@ impl RedisArtifactClient {
                 );
                 FALLBACK_MAXMEMORY_BYTES
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(
                     shard = idx,
                     error = %e,
                     fallback_bytes = FALLBACK_MAXMEMORY_BYTES,
                     "CONFIG GET maxmemory failed; using fallback for permit sizing"
+                );
+                FALLBACK_MAXMEMORY_BYTES
+            }
+            Err(_) => {
+                tracing::warn!(
+                    shard = idx,
+                    timeout_secs = MAXMEMORY_QUERY_TIMEOUT.as_secs(),
+                    fallback_bytes = FALLBACK_MAXMEMORY_BYTES,
+                    "CONFIG GET maxmemory timed out; using fallback for permit sizing"
                 );
                 FALLBACK_MAXMEMORY_BYTES
             }

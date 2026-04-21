@@ -1,0 +1,95 @@
+name: Integration
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+  workflow_dispatch:
+
+jobs:
+  redis-gate:
+    name: ProveShardGate (Redis)
+    runs-on:
+      [
+        "runs-on",
+        "runner=16cpu-linux-x64",
+        "run-id=${{ github.run_id }}",
+        "spot=false",
+        "tag=integration",
+      ]
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      REDIS_URL: redis://localhost:6379
+      PROVE_SHARD_MAX_BYTES: "50000000"
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+          --entrypoint "redis-server --maxmemory 200mb --maxmemory-policy noeviction"
+    steps:
+      - name: Checkout repository and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PRIVATE_PULL_TOKEN }}
+
+      - name: Install protoc
+        run: |
+          PROTOC_ZIP=protoc-29.4-linux-x86_64.zip
+          curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v29.4/$PROTOC_ZIP
+          sudo unzip -o $PROTOC_ZIP -d /usr/local bin/protoc
+          sudo unzip -o $PROTOC_ZIP -d /usr/local 'include/*'
+          rm -f $PROTOC_ZIP
+
+      - name: Setup GCC
+        uses: Dup4/actions-setup-gcc@v1
+        with:
+          version: latest
+
+      - name: rust-cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+            ~/.rustup/
+          key: rust-integration-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: rust-integration-
+
+      - name: Setup Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Setup private git access
+        run: |
+          git config --global --replace-all url."https://${PRIVATE_PULL_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global --add url."https://${PRIVATE_PULL_TOKEN}@github.com/".insteadOf "git@github.com:"
+        env:
+          PRIVATE_PULL_TOKEN: ${{ secrets.PRIVATE_PULL_TOKEN }}
+
+      - name: Run gate integration tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: >-
+            --release
+            -p sp1-cluster-artifact
+            --test prove_shard_gate
+            --
+            --ignored
+            --test-threads=1
+        env:
+          CARGO_INCREMENTAL: 1
