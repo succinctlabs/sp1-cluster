@@ -15,11 +15,11 @@ const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
 
 /// Conservative upper bound on a single shard artifact's size, used to derive
-/// the per-node permit count from `maxmemory`. Real trace chunks are typically
-/// 50-200 MB compressed; 250 MB includes headroom for outliers.
+/// the per-node permit count from `maxmemory`. Observed p99.9 on sepolia
+/// workloads is ~16 MB compressed; 20 MB covers the tail with ~25% headroom.
 ///
 /// Override via `PROVE_SHARD_MAX_BYTES`.
-const DEFAULT_SHARD_MAX_BYTES: u64 = 250 * 1024 * 1024;
+const DEFAULT_SHARD_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
 /// Fraction of a Redis node's `maxmemory` budgeted for in-flight shard
 /// artifacts. The remaining 20% absorbs proof outputs, reduce intermediates,
@@ -35,6 +35,19 @@ const MIN_PERMITS_PER_NODE: usize = 4;
 /// hangs we fall back to [`MIN_PERMITS_PER_NODE`] rather than stalling every
 /// shard upload behind a single uncached config query.
 const MAXMEMORY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Admission blocks the caller until Redis drops below budget. Poll interval
+/// for the budget re-check loop.
+const ADMISSION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Safety cap on how long admission waits for the budget to open up. If
+/// Redis stays over budget this long, something is fundamentally stuck
+/// (producer > consumer with no path to recovery) — fail permanently so
+/// the caller surfaces the error rather than hanging forever.
+const ADMISSION_MAX_WAIT: Duration = Duration::from_secs(30 * 60);
+
+/// Emit a progress log line at most this often while waiting on admission.
+const ADMISSION_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 /// FNV-1a hash
 #[inline]
@@ -178,53 +191,91 @@ impl RedisArtifactClient {
         Ok((parse("used_memory:"), parse("maxmemory:")))
     }
 
-    /// Admission check: reject an upload when the target shard is already
-    /// over the memory budget. Prevents callers (fulfiller, controller,
-    /// reduce workers) from OOM-looping when Redis is full. Returns a
-    /// retryable [`backoff::Error`] on rejection — callers backoff while
-    /// in-flight artifacts drain (via consumer deletes or TTL).
+    /// Admission check: block the caller until the target shard has room
+    /// for this upload under the memory budget. Real backpressure — pauses
+    /// the producer (splice worker / fulfiller) rather than failing it, so
+    /// consumers can drain the backlog and the pipeline recovers on its own.
     ///
-    /// Fail-open on `INFO memory` errors: admission shouldn't block uploads
-    /// on a transient query failure. If Redis really is full the upload will
-    /// error at the write stage.
+    /// Returns `Ok(())` as soon as `used + incoming ≤ budget`. Polls every
+    /// [`ADMISSION_POLL_INTERVAL`] while waiting. Caps total wait at
+    /// [`ADMISSION_MAX_WAIT`] and returns a permanent error past that —
+    /// something is fundamentally stuck if Redis stays full that long.
     ///
-    /// Cheap: one `INFO memory` round-trip per upload, not per chunk.
+    /// Fail-open on `INFO memory` errors or parse misses: a transient query
+    /// failure should not block uploads. If Redis really is full the upload
+    /// itself will error at the write stage.
+    ///
+    /// Cheap when admitted: one `INFO memory` round-trip, no poll loop.
     async fn check_admission(
         &self,
         key: &str,
         incoming_bytes: u64,
     ) -> Result<(), backoff::Error<anyhow::Error>> {
         let idx = get_connection_idx(key, self.connection_pools.len());
-        let (used, max) = match self.query_memory(idx).await {
-            Ok(pair) => pair,
-            Err(e) => {
-                tracing::warn!(shard = idx, error = %e, "admission INFO memory failed; fail-open");
+        let start = std::time::Instant::now();
+        let mut last_log = start;
+        let mut waiting = false;
+        loop {
+            let (used, max) = match self.query_memory(idx).await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    tracing::warn!(shard = idx, error = %e, "admission INFO memory failed; fail-open");
+                    return Ok(());
+                }
+            };
+            let (Some(used), Some(max)) = (used, max) else {
+                // INFO parse miss — no admission limit.
+                return Ok(());
+            };
+            if max == 0 {
+                // maxmemory=0 means unlimited — no admission limit.
                 return Ok(());
             }
-        };
-        let (Some(used), Some(max)) = (used, max) else {
-            // INFO parse miss — no admission limit.
-            return Ok(());
-        };
-        if max == 0 {
-            // maxmemory=0 means unlimited — no admission limit.
-            return Ok(());
+            let budget = (max as f64 * MEMORY_BUDGET_FRACTION) as u64;
+            if used.saturating_add(incoming_bytes) <= budget {
+                if waiting {
+                    tracing::info!(
+                        shard = idx,
+                        waited_ms = start.elapsed().as_millis() as u64,
+                        "admission cleared; upload resumed"
+                    );
+                }
+                return Ok(());
+            }
+
+            let elapsed = start.elapsed();
+            if elapsed > ADMISSION_MAX_WAIT {
+                tracing::error!(
+                    shard = idx,
+                    used,
+                    max,
+                    budget,
+                    incoming = incoming_bytes,
+                    waited_secs = elapsed.as_secs(),
+                    "admission wait cap exceeded; failing upload"
+                );
+                return Err(backoff::Error::permanent(anyhow!(
+                    "Redis shard {idx} admission wait > {:?}: used={used} budget={budget} incoming={incoming_bytes}",
+                    ADMISSION_MAX_WAIT
+                )));
+            }
+
+            // Log on first wait, then throttle to ADMISSION_LOG_INTERVAL.
+            if !waiting || last_log.elapsed() >= ADMISSION_LOG_INTERVAL {
+                tracing::warn!(
+                    shard = idx,
+                    used,
+                    max,
+                    budget,
+                    incoming = incoming_bytes,
+                    waited_ms = elapsed.as_millis() as u64,
+                    "Redis near capacity; blocking upload (backpressure)"
+                );
+                last_log = std::time::Instant::now();
+            }
+            waiting = true;
+            tokio::time::sleep(ADMISSION_POLL_INTERVAL).await;
         }
-        let budget = (max as f64 * MEMORY_BUDGET_FRACTION) as u64;
-        if used.saturating_add(incoming_bytes) > budget {
-            tracing::warn!(
-                shard = idx,
-                used,
-                max,
-                budget,
-                incoming = incoming_bytes,
-                "Redis near capacity; rejecting upload"
-            );
-            return Err(backoff::Error::transient(anyhow!(
-                "Redis shard {idx} near capacity: used={used} budget={budget} incoming={incoming_bytes}"
-            )));
-        }
-        Ok(())
     }
 
     async fn get_redis_connection(
@@ -314,13 +365,9 @@ impl RedisArtifactClient {
         key: &str,
         serialized: &[u8],
     ) -> Result<(), backoff::Error<anyhow::Error>> {
-        // Admission control: reject if the target shard is already over
-        // budget. Complements `ProveShardGate` (which throttles the prover's
-        // ProveShard producer) by protecting the fulfiller's initial upload
-        // path and any other callers. Re-checked on each backoff retry, so a
-        // draining Redis will eventually admit the upload.
-        self.check_admission(key, serialized.len() as u64).await?;
-
+        // Admission is checked in `upload_to_transport` before this call,
+        // outside the `TRANSFER_TIMEOUT` wrapper — admission waits are
+        // bounded by `ADMISSION_MAX_WAIT`, not the per-upload timeout.
         let mut conn = self.get_redis_connection(key).await?;
         let now = std::time::Instant::now();
         let key = key.to_string();
@@ -375,13 +422,24 @@ impl RedisArtifactClient {
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl RedisArtifactClient {
-    /// Shared upload helper: backoff + timeout around par_upload_file.
+    /// Shared upload helper: admission-wait, then backoff + timeout around
+    /// the actual upload. Admission is outside the per-attempt timeout so
+    /// that backpressure waits (minutes) don't trigger timeout failures.
     async fn upload_to_transport(
         &self,
         artifact_type: ArtifactType,
         artifact_id: &str,
         data: &[u8],
     ) -> Result<()> {
+        // Block until the target shard has room. Returns immediately when
+        // admitted; loops internally when over budget. Hard-capped at
+        // ADMISSION_MAX_WAIT to surface truly stuck producers.
+        self.check_admission(artifact_id, data.len() as u64)
+            .await
+            .map_err(|e| match e {
+                backoff::Error::Permanent(e) | backoff::Error::Transient { err: e, .. } => e,
+            })?;
+
         backoff_retry(self.backoff.clone(), || async {
             match tokio::time::timeout(
                 TRANSFER_TIMEOUT,
