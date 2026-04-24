@@ -58,6 +58,73 @@ The gateway binds two ports: gRPC on `GATEWAY_GRPC_ADDR` (default `0.0.0.0:50061
 and HTTP on `GATEWAY_HTTP_ADDR` (default `0.0.0.0:8081`). SDK clients hit both —
 make sure both are reachable from the caller.
 
+## Testing against the local docker-compose stack
+
+The repo ships [`infra/docker-compose.local.yml`](../../infra/docker-compose.local.yml)
+which stands up the full cluster (Postgres + Redis + `api` + coordinator + one
+CPU and GPU node, plus Grafana Alloy for traces) on a shared Docker network. The
+`api`'s gRPC port is published on `127.0.0.1:50051` and Redis on
+`127.0.0.1:6379` — exactly what the gateway needs.
+
+1. Bring up the stack. Drop `gpu0` if you don't have an NVIDIA runtime; the
+   gateway only needs `redis`, `postgresql`, `api`, and optionally a
+   coordinator + worker for a full prove round-trip:
+
+   ```bash
+   cd infra
+   # minimum to exercise the gateway's request-submission path:
+   docker compose -f docker-compose.local.yml up -d redis postgresql api coordinator cpu-node
+   # or, with GPU, the full stack:
+   # docker compose -f docker-compose.local.yml up -d
+   ```
+
+2. Wait for `api` to finish migrations (a few seconds on first boot):
+
+   ```bash
+   docker compose -f docker-compose.local.yml logs -f api
+   ```
+
+3. Run the gateway natively against the stack:
+
+   ```bash
+   GATEWAY_CLUSTER_RPC=http://127.0.0.1:50051 \
+   GATEWAY_ARTIFACT_STORE=redis \
+   GATEWAY_REDIS_NODES=redis://:redispassword@127.0.0.1:6379/0 \
+   GATEWAY_PUBLIC_HTTP_URL=http://127.0.0.1:8081 \
+   cargo run -p sp1-cluster-network-gateway
+   ```
+
+4. Smoke-check:
+
+   ```bash
+   curl http://127.0.0.1:8081/healthz                       # -> OK
+   grpcurl -plaintext 127.0.0.1:50061 list                  # lists ProverNetwork + ArtifactStore
+   ```
+
+5. Drive it with `sp1-sdk` — point `ProverClient` at the gateway, **not** the
+   api's `:50051`:
+
+   ```rust
+   let client = ProverClient::builder()
+       .network()
+       .rpc_url("http://127.0.0.1:50061")
+       .network_mode(NetworkMode::Reserved)
+       .build();
+   ```
+
+Iteration tip: keep the docker-compose stack up and only restart `cargo run
+-p sp1-cluster-network-gateway` between changes. Teardown when done:
+
+```bash
+docker compose -f infra/docker-compose.local.yml down
+```
+
+With the default `auth_mode=none`, the SDK's private key only needs to be
+parseable by `NetworkSigner`; the gateway doesn't check it. Without a GPU
+worker, proof requests land in `Pending` and stay there — that's enough to
+verify the wire contract end-to-end but you'll need a worker (CPU or GPU) in
+the compose stack for a full prove round-trip.
+
 ## Configuration
 
 All flags are also environment variables with the `GATEWAY_` prefix.
