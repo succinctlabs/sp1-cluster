@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,7 +8,7 @@ use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions};
 use deadpool_redis::{Config, Connection as RedisConnection, Pool, PoolConfig, Runtime};
 use sp1_cluster_common::util::backoff_retry;
 use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType, ShardPermit};
-use tokio::sync::{OnceCell, Semaphore};
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tokio::task::JoinSet;
 use tracing::{instrument, Instrument};
 
@@ -21,25 +22,18 @@ const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
 /// Override via `PROVE_SHARD_MAX_BYTES`.
 const DEFAULT_SHARD_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
-// Two thresholds, two failure modes. The gap between them is the drainer
-// lane that consumer writes use to release Redis memory; collapse them and
-// the pipeline deadlocks (consumer can't upload its output → can't delete
-// its input → Redis stays pinned → producer also blocks).
-const SCHEDULER_HEADROOM: f64 = 0.20; // permit-pool sizing floor
-const SAFETY_MARGIN: f64 = 0.05; // admission-block OOM cliff
-const _: () = assert!(SAFETY_MARGIN < SCHEDULER_HEADROOM);
-
-const MEMORY_BUDGET_FRACTION: f64 = 1.0 - SCHEDULER_HEADROOM;
-const ADMISSION_BLOCK_FRACTION: f64 = 1.0 - SAFETY_MARGIN;
+/// Admission budget as fraction of `maxmemory`. Reservation is atomic so
+/// no overshoot possible; remaining 30% is headroom for allocator bloat.
+const MEMORY_BUDGET_FRACTION: f64 = 0.70;
 
 /// Floor on permit count per shard node. Applied when `maxmemory` is small,
 /// unreadable, or unbounded — prevents wedging the pipeline with zero permits
 /// and serves as the safe fallback when we can't compute a real pool size.
 const MIN_PERMITS_PER_NODE: usize = 4;
 
-/// Bound on the first-acquire `CONFIG GET maxmemory` round-trip. If Redis
-/// hangs we fall back to [`MIN_PERMITS_PER_NODE`] rather than stalling every
-/// shard upload behind a single uncached config query.
+/// Bound on the first-acquire `INFO memory` round-trip. If Redis hangs we
+/// fall back to [`MIN_PERMITS_PER_NODE`] rather than stalling every shard
+/// upload behind a single uncached query.
 const MAXMEMORY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Admission re-check interval while blocked.
@@ -66,13 +60,52 @@ fn get_connection_idx(id: &str, num_redis_nodes: usize) -> usize {
     hash % num_redis_nodes
 }
 
+/// Per-node admission state. Serializes the check-then-reserve so
+/// concurrent callers can't collectively overshoot `maxmemory × budget`.
+///
+/// `in_flight` covers the TOCTOU gap between reserve and Redis-visible
+/// write: incremented under `decide` (async, spans INFO), decremented by
+/// [`AdmissionGuard::drop`] (sync) — hence the atomic.
+#[derive(Default)]
+struct Admission {
+    decide: Mutex<()>,
+    in_flight: AtomicU64,
+}
+
+/// RAII token from [`RedisArtifactClient::check_admission`]; must outlive
+/// the upload so reserved bytes remain counted until the write lands (or
+/// fails). Dropping early under-counts `in_flight`.
+///
+/// `None` = no-op on fail-open paths (INFO failed, `maxmemory=0`).
+pub struct AdmissionGuard {
+    inner: Option<Reservation>,
+}
+
+struct Reservation {
+    admission: Arc<Vec<Admission>>,
+    idx: usize,
+    bytes: u64,
+}
+
+impl Drop for AdmissionGuard {
+    fn drop(&mut self) {
+        if let Some(r) = self.inner.take() {
+            r.admission[r.idx]
+                .in_flight
+                .fetch_sub(r.bytes, Ordering::Release);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RedisArtifactClient {
     pub connection_pools: Vec<Pool>,
     backoff: ExponentialBackoff,
     /// One permit pool per Redis shard node. Lazily sized on first use from
-    /// `CONFIG GET maxmemory`; one permit represents one worst-case shard.
+    /// `INFO memory` (maxmemory); one permit represents one worst-case shard.
     node_semaphores: Arc<Vec<OnceCell<Arc<Semaphore>>>>,
+    /// One admission state per Redis shard node.
+    admission: Arc<Vec<Admission>>,
 }
 
 impl RedisArtifactClient {
@@ -92,10 +125,12 @@ impl RedisArtifactClient {
             .with_max_elapsed_time(Some(Duration::from_secs(1)))
             .build();
         let node_semaphores = Arc::new((0..pools.len()).map(|_| OnceCell::new()).collect());
+        let admission = Arc::new((0..pools.len()).map(|_| Admission::default()).collect());
         Self {
             connection_pools: pools,
             backoff,
             node_semaphores,
+            admission,
         }
     }
 
@@ -114,37 +149,29 @@ impl RedisArtifactClient {
     /// Returns [`MIN_PERMITS_PER_NODE`] if the query fails, times out, or
     /// reports `maxmemory=0` (unlimited) — we don't fabricate a maxmemory we
     /// can't measure.
+    ///
+    /// Uses `INFO memory` rather than `CONFIG GET maxmemory` because managed
+    /// Redis (AWS ElastiCache, MemoryDB) blocks `CONFIG` for security.
     async fn compute_permits_for_node(&self, idx: usize) -> usize {
-        let maxmemory =
-            match tokio::time::timeout(MAXMEMORY_QUERY_TIMEOUT, self.query_maxmemory(idx)).await {
-                Ok(Ok(Some(v))) => v,
-                Ok(Ok(None)) => {
-                    tracing::warn!(
-                        shard = idx,
-                        permits = MIN_PERMITS_PER_NODE,
-                        "Redis reports maxmemory=0 (unlimited); falling back to floor"
-                    );
-                    return MIN_PERMITS_PER_NODE;
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!(
-                        shard = idx,
-                        error = %e,
-                        permits = MIN_PERMITS_PER_NODE,
-                        "maxmemory query failed; falling back to floor"
-                    );
-                    return MIN_PERMITS_PER_NODE;
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        shard = idx,
-                        timeout_secs = MAXMEMORY_QUERY_TIMEOUT.as_secs(),
-                        permits = MIN_PERMITS_PER_NODE,
-                        "maxmemory query timed out; falling back to floor"
-                    );
-                    return MIN_PERMITS_PER_NODE;
-                }
-            };
+        let query = tokio::time::timeout(MAXMEMORY_QUERY_TIMEOUT, self.query_memory(idx)).await;
+        let maxmemory = match query {
+            Ok(Ok((_, Some(v)))) if v > 0 => v,
+            Ok(Ok(_)) => {
+                tracing::warn!(
+                    shard = idx,
+                    "Redis maxmemory=0 or missing; using permit floor"
+                );
+                return MIN_PERMITS_PER_NODE;
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(shard = idx, error = %e, "maxmemory query failed; using permit floor");
+                return MIN_PERMITS_PER_NODE;
+            }
+            Err(_) => {
+                tracing::warn!(shard = idx, "maxmemory query timed out; using permit floor");
+                return MIN_PERMITS_PER_NODE;
+            }
+        };
         let max_shard_bytes = std::env::var("PROVE_SHARD_MAX_BYTES")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
@@ -161,17 +188,6 @@ impl RedisArtifactClient {
             "ProveShard permit pool sized"
         );
         permits
-    }
-
-    /// Read `maxmemory` from `INFO memory` on a specific shard node. Returns
-    /// `Ok(None)` when Redis reports `maxmemory=0` (unlimited — can't compute
-    /// a permit count). Returns `Err` on any I/O or protocol error.
-    ///
-    /// Uses `INFO memory` rather than `CONFIG GET maxmemory` because managed
-    /// Redis (AWS ElastiCache, MemoryDB) blocks `CONFIG` for security.
-    async fn query_maxmemory(&self, idx: usize) -> Result<Option<u64>> {
-        let (_used, max) = self.query_memory(idx).await?;
-        Ok(max.filter(|&v| v > 0))
     }
 
     /// Return `(used_memory, maxmemory)` from `INFO memory` on shard `idx`.
@@ -194,35 +210,41 @@ impl RedisArtifactClient {
         Ok((parse("used_memory:"), parse("maxmemory:")))
     }
 
-    /// Block until the target shard can accept this upload under
-    /// [`ADMISSION_BLOCK_FRACTION`] of `maxmemory`. Returns immediately
-    /// when admitted; polls [`ADMISSION_POLL_INTERVAL`] while waiting;
-    /// capped at [`ADMISSION_MAX_WAIT`]. Fail-open on `INFO` errors.
-    async fn check_admission(
-        &self,
-        key: &str,
-        incoming_bytes: u64,
-    ) -> Result<(), backoff::Error<anyhow::Error>> {
+    /// Atomically reserve `incoming_bytes`. Blocks until
+    /// `used + in_flight + incoming <= budget`, serialized per shard by
+    /// [`Admission::decide`]. Caller must hold the returned guard until
+    /// the write lands or fails — early drop corrupts `in_flight`.
+    ///
+    /// Capped by [`ADMISSION_MAX_WAIT`]. Fail-open on INFO errors.
+    async fn check_admission(&self, key: &str, incoming_bytes: u64) -> Result<AdmissionGuard> {
         let idx = get_connection_idx(key, self.connection_pools.len());
+        let admission = &self.admission[idx];
+        let noop = || AdmissionGuard { inner: None };
         let start = std::time::Instant::now();
         let mut last_log = start;
         let mut waiting = false;
         loop {
+            // Serialize the check-then-reserve so concurrent callers see
+            // each other's reservations via `in_flight` before committing.
+            let guard = admission.decide.lock().await;
             let (used, max) = match self.query_memory(idx).await {
-                Ok(pair) => pair,
+                Ok((Some(used), Some(max))) if max > 0 => (used, max),
+                Ok(_) => return Ok(noop()), // unlimited / parse miss
                 Err(e) => {
                     tracing::warn!(shard = idx, error = %e, "admission INFO memory failed; fail-open");
-                    return Ok(());
+                    return Ok(noop());
                 }
             };
-            let (Some(used), Some(max)) = (used, max) else {
-                return Ok(()); // parse miss — no limit
-            };
-            if max == 0 {
-                return Ok(()); // maxmemory=0 → unlimited
-            }
-            let budget = (max as f64 * ADMISSION_BLOCK_FRACTION) as u64;
-            if used.saturating_add(incoming_bytes) <= budget {
+            let budget = (max as f64 * MEMORY_BUDGET_FRACTION) as u64;
+            let in_flight = admission.in_flight.load(Ordering::Acquire);
+            let projected = used
+                .saturating_add(in_flight)
+                .saturating_add(incoming_bytes);
+            if projected <= budget {
+                admission
+                    .in_flight
+                    .fetch_add(incoming_bytes, Ordering::AcqRel);
+                drop(guard);
                 if waiting {
                     tracing::info!(
                         shard = idx,
@@ -230,8 +252,15 @@ impl RedisArtifactClient {
                         "admission cleared; upload resumed"
                     );
                 }
-                return Ok(());
+                return Ok(AdmissionGuard {
+                    inner: Some(Reservation {
+                        admission: Arc::clone(&self.admission),
+                        idx,
+                        bytes: incoming_bytes,
+                    }),
+                });
             }
+            drop(guard);
 
             let elapsed = start.elapsed();
             if elapsed > ADMISSION_MAX_WAIT {
@@ -240,23 +269,24 @@ impl RedisArtifactClient {
                     used,
                     max,
                     budget,
+                    in_flight,
                     incoming = incoming_bytes,
                     waited_secs = elapsed.as_secs(),
                     "admission wait cap exceeded; failing upload"
                 );
-                return Err(backoff::Error::permanent(anyhow!(
-                    "Redis shard {idx} admission wait > {:?}: used={used} budget={budget} incoming={incoming_bytes}",
+                return Err(anyhow!(
+                    "Redis shard {idx} admission wait > {:?}: used={used} in_flight={in_flight} budget={budget} incoming={incoming_bytes}",
                     ADMISSION_MAX_WAIT
-                )));
+                ));
             }
 
-            // First wait, then throttled by ADMISSION_LOG_INTERVAL.
             if !waiting || last_log.elapsed() >= ADMISSION_LOG_INTERVAL {
                 tracing::warn!(
                     shard = idx,
                     used,
                     max,
                     budget,
+                    in_flight,
                     incoming = incoming_bytes,
                     waited_ms = elapsed.as_millis() as u64,
                     "Redis near capacity; blocking upload (backpressure)"
@@ -411,18 +441,20 @@ impl RedisArtifactClient {
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl RedisArtifactClient {
-    /// Admission-wait (outside TRANSFER_TIMEOUT), then backoff+timeout upload.
+    /// Admission-wait, then backoff+timeout upload.
+    ///
+    /// Admission sits outside `TRANSFER_TIMEOUT` so minute-long block-waits
+    /// don't trip the per-attempt 60s timeout. Retries reuse the initial
+    /// admit (blocking for minutes on a transient upload error is worse).
     async fn upload_to_transport(
         &self,
         artifact_type: ArtifactType,
         artifact_id: &str,
         data: &[u8],
     ) -> Result<()> {
-        self.check_admission(artifact_id, data.len() as u64)
-            .await
-            .map_err(|e| match e {
-                backoff::Error::Permanent(e) | backoff::Error::Transient { err: e, .. } => e,
-            })?;
+        // `_guard` binds to scope end (holds until write completes).
+        // Bare `_` would drop immediately — re-introducing the TOCTOU bug.
+        let _guard = self.check_admission(artifact_id, data.len() as u64).await?;
 
         backoff_retry(self.backoff.clone(), || async {
             match tokio::time::timeout(
