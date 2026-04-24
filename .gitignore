@@ -30,3 +30,6 @@ copybara.jar
 values-*.yaml
 !values-example.yaml
 .worktrees/
+
+# Local agent documents
+.claude/local/**
