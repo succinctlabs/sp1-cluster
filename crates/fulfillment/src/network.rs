@@ -24,6 +24,11 @@ pub trait NetworkRequest: Send + Sync + 'static {
     fn program_public_uri(&self) -> &str;
 
     fn stdin_public_uri(&self) -> &str;
+
+    /// Whether the stdin for this request is private. When true,
+    /// `stdin_public_uri` is empty and callers must fetch a presigned URL via
+    /// [`FulfillmentNetwork::fetch_stdin_uri`].
+    fn stdin_private(&self) -> bool;
 }
 
 #[async_trait]
@@ -87,6 +92,17 @@ pub trait FulfillmentNetwork: Send + Sync + 'static {
         uri: &str,
         artifact_type: ArtifactType,
     ) -> Result<Vec<u8>>;
+
+    /// Fetch a URI suitable for downloading the stdin of a request.
+    ///
+    /// Non-private requests simply return `stdin_public_uri`. Private requests
+    /// go through the authenticated `GetStdinUri` RPC and receive a short-lived
+    /// presigned URL.
+    async fn fetch_stdin_uri(
+        &self,
+        request: &Self::NetworkRequest,
+        signer: &NetworkSigner,
+    ) -> Result<String>;
 
     /// Whether to download proofs for fulfillment when submitting a request.
     ///
