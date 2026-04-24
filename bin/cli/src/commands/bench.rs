@@ -293,30 +293,42 @@ impl BenchCommand {
             .build()
             .await;
 
+        let t_setup = Instant::now();
         let pk = prover
             .setup(Elf::Dynamic(elf.into()))
             .await
             .map_err(|e| eyre::eyre!("setup failed: {e}"))?;
+        let setup_elapsed = t_setup.elapsed();
+        tracing::info!("Gateway setup: {:?}", setup_elapsed);
 
         let sp1_mode = sp1_proof_mode_from_proto(mode);
 
         let mut durations = Vec::with_capacity(count as usize);
         for i in 0..count {
-            let start = Instant::now();
+            let t_prove = Instant::now();
             let proof = prover
                 .prove(&pk, stdin.clone())
                 .strategy(FulfillmentStrategy::Reserved)
                 .mode(sp1_mode)
                 .await
                 .map_err(|e| eyre::eyre!("prove failed: {e}"))?;
-            let elapsed = start.elapsed();
+            let prove_elapsed = t_prove.elapsed();
 
+            let t_verify = Instant::now();
             prover
                 .verify(&proof, pk.verifying_key(), None)
                 .map_err(|e| eyre::eyre!("verify failed: {e}"))?;
+            let verify_elapsed = t_verify.elapsed();
 
-            tracing::info!("Gateway run {}/{} completed in {:?}", i + 1, count, elapsed);
-            durations.push(elapsed);
+            tracing::info!(
+                "Gateway run {}/{} timing: prove={:?} verify={:?} total={:?}",
+                i + 1,
+                count,
+                prove_elapsed,
+                verify_elapsed,
+                prove_elapsed + verify_elapsed
+            );
+            durations.push(prove_elapsed);
         }
         Ok(durations)
     }
