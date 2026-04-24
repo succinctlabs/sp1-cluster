@@ -92,23 +92,26 @@ async fn admission_admits_under_budget() {
     );
 }
 
-/// **Main test.** Admission blocks when Redis is over budget, and resumes
-/// when the budget opens up. Spawns a producer that tries to upload a large
-/// artifact while Redis is at capacity, waits for it to be blocking, then
-/// `FLUSHDB`s Redis to release the backpressure. The upload should finish
-/// promptly once admission clears.
+/// Regression test for the consumer-side deadlock: when Redis is above the
+/// permit-pool budget (80%) but below the admission block threshold (95%),
+/// consumer uploads (proof outputs, markers) must flow through. Otherwise
+/// GPU workers can't complete shards, artifacts never delete, and the
+/// pipeline deadlocks.
+///
+/// 500 MB cap × 0.95 = 475 MB block threshold. Seed 440 MB — above the
+/// 400 MB permit budget (80%) but below the 475 MB admission threshold.
+/// A consumer-sized ~800 KB upload should admit without blocking.
 #[tokio::test]
 #[ignore = "requires Redis at REDIS_URL"]
-async fn admission_blocks_and_resumes_on_drain() {
+async fn admission_admits_consumer_upload_in_reserve_slack() {
     let url = redis_url();
-    // 200 MB cap × 0.8 = 160 MB budget. Seed 6 × 20 MB (120 MB used) under
-    // budget, then a 60 MB upload pushes projected 180 MB > 160 MB budget.
-    reset(&url, 200 * 1024 * 1024).await.expect("reset");
+    reset(&url, 500 * 1024 * 1024).await.expect("reset");
+    let client = RedisArtifactClient::new(vec![url], 4);
 
-    let client = RedisArtifactClient::new(vec![url.clone()], 4);
-
-    // Seed: 6 × 20 MB — each well under CHUNK_SIZE so each is a single SET.
-    for i in 0..6 {
+    // Seed 440 MB — in the 80–95% "drainer lane" between permit-pool budget
+    // and admission block threshold. Admission must still admit small
+    // consumer-side uploads.
+    for i in 0..22 {
         let seed: Artifact = format!("seed-{i}").into();
         client
             .upload_raw(
@@ -120,8 +123,59 @@ async fn admission_blocks_and_resumes_on_drain() {
             .unwrap_or_else(|e| panic!("seed {i} rejected: {e:#}"));
     }
 
-    // Producer: a 60 MB upload that would push projected usage over budget —
-    // admission should block, not fail.
+    // Consumer-sized upload matching observed `normalize prove shard`
+    // proof-output p50 (~800 KB). Would block if admission used the 80%
+    // permit-pool budget instead of the 95% block threshold.
+    let t0 = Instant::now();
+    let small: Artifact = "consumer-output".to_string().into();
+    client
+        .upload_raw(
+            &small,
+            ArtifactType::UnspecifiedArtifactType,
+            bytes(800 * 1024),
+        )
+        .await
+        .expect("consumer upload in 80-95% drainer lane must admit");
+    assert!(
+        t0.elapsed() < Duration::from_secs(3),
+        "consumer upload took {:?} — admission blocked when it shouldn't have",
+        t0.elapsed()
+    );
+}
+
+/// **Main test.** Admission blocks when Redis is over budget, and resumes
+/// when the budget opens up. Spawns a producer that tries to upload a large
+/// artifact while Redis is at capacity, waits for it to be blocking, then
+/// `FLUSHDB`s Redis to release the backpressure. The upload should finish
+/// promptly once admission clears.
+#[tokio::test]
+#[ignore = "requires Redis at REDIS_URL"]
+async fn admission_blocks_and_resumes_on_drain() {
+    let url = redis_url();
+    // 1 GB cap × 0.95 = 950 MB block threshold. Seed 800 MB well below
+    // threshold, then a 200 MB upload pushes projected 1 GB past the
+    // 950 MB block threshold, triggering the wait loop. Larger cap avoids
+    // Redis allocator overhead pushing `used_memory` above the threshold
+    // prematurely (was flaky at 500 MB cap).
+    reset(&url, 1024 * 1024 * 1024).await.expect("reset");
+
+    let client = RedisArtifactClient::new(vec![url.clone()], 4);
+
+    // Seed: 40 × 20 MB = 800 MB — each under CHUNK_SIZE so single SET.
+    for i in 0..40 {
+        let seed: Artifact = format!("seed-{i}").into();
+        client
+            .upload_raw(
+                &seed,
+                ArtifactType::UnspecifiedArtifactType,
+                bytes(20 * 1024 * 1024),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("seed {i} rejected: {e:#}"));
+    }
+
+    // Producer: a 200 MB upload that pushes projected usage past the 95%
+    // block threshold — admission should block, not fail.
     let client_p = client.clone();
     let producer = tokio::spawn(async move {
         let a: Artifact = "blocked".to_string().into();
@@ -130,7 +184,7 @@ async fn admission_blocks_and_resumes_on_drain() {
             .upload_raw(
                 &a,
                 ArtifactType::UnspecifiedArtifactType,
-                bytes(60 * 1024 * 1024),
+                bytes(200 * 1024 * 1024),
             )
             .await
             .expect("producer should resume and succeed, not error");
