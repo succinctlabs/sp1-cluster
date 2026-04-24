@@ -148,15 +148,15 @@ opt-level = 3
 
 # Memory-permit companion: sp1 PR #2723.
 [patch.crates-io]
-sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
-sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
-sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
-sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
-sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
-sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
-sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
-sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
-sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
-sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
-sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
-sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "d58abaf" }
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
