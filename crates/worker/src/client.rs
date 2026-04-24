@@ -305,15 +305,14 @@ impl WorkerClient for WorkerServiceClient {
             proof_id: proof_id.to_string(),
             task_ids: Vec::new(),
         };
-        let response =
-            backoff::future::retry(retry::bounded(Duration::from_secs(10)), || async {
-                connection
-                    .clone()
-                    .open_sub(request.clone())
-                    .await
-                    .map_err(status_to_backoff_error)
-            })
-            .await?;
+        let response = backoff::future::retry(retry::bounded(Duration::from_secs(10)), || async {
+            connection
+                .clone()
+                .open_sub(request.clone())
+                .await
+                .map_err(status_to_backoff_error)
+        })
+        .await?;
 
         let mut inbound = response.into_inner();
         tokio::spawn({
