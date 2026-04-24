@@ -63,28 +63,31 @@ gateway and SDK-caller variables.
 
 ## Testing against the local docker-compose stack
 
-The repo ships [`infra/docker-compose.local.yml`](../../infra/docker-compose.local.yml)
-which stands up the full cluster (Postgres + Redis + `api` + coordinator + one
-CPU and GPU node, plus Grafana Alloy for traces) on a shared Docker network. The
-`api`'s gRPC port is published on `127.0.0.1:50051` and Redis on
-`127.0.0.1:6379` — exactly what the gateway needs.
+The canonical [`infra/docker-compose.yml`](../../infra/docker-compose.yml)
+stands up the full cluster (Postgres + Redis + `api` + coordinator + one
+CPU and GPU node) from prebuilt `ghcr.io/succinctlabs/sp1-cluster` images
+that track the latest release. `api`'s gRPC port is published on
+`127.0.0.1:50051` and Redis on `127.0.0.1:6379` — exactly what the gateway
+needs. The gateway is additive (new binary, no changes to `api` /
+`coordinator` / `node`), so those prebuilt images are fine for this test
+loop.
 
-1. Bring up the stack. Drop `gpu0` if you don't have an NVIDIA runtime; the
+1. Bring up the stack. Drop `gpu0` if you don't have an NVIDIA runtime — the
    gateway only needs `redis`, `postgresql`, `api`, and optionally a
    coordinator + worker for a full prove round-trip:
 
    ```bash
    cd infra
    # minimum to exercise the gateway's request-submission path:
-   docker compose -f docker-compose.local.yml up -d redis postgresql api coordinator cpu-node
+   docker compose up -d redis postgresql api coordinator cpu-node
    # or, with GPU, the full stack:
-   # docker compose -f docker-compose.local.yml up -d
+   # docker compose up -d
    ```
 
 2. Wait for `api` to finish migrations (a few seconds on first boot):
 
    ```bash
-   docker compose -f docker-compose.local.yml logs -f api
+   docker compose logs -f api
    ```
 
 3. Run the gateway natively against the stack:
@@ -136,7 +139,7 @@ Iteration tip: keep the docker-compose stack up and only restart `cargo run
 -p sp1-cluster-network-gateway` between changes. Teardown when done:
 
 ```bash
-docker compose -f infra/docker-compose.local.yml down
+docker compose -f infra/docker-compose.yml down
 ```
 
 With the default `auth_mode=none`, the SDK's private key only needs to be
@@ -144,6 +147,12 @@ parseable by `NetworkSigner`; the gateway doesn't check it. Without a GPU
 worker, proof requests land in `Pending` and stay there — that's enough to
 verify the wire contract end-to-end but you'll need a worker (CPU or GPU) in
 the compose stack for a full prove round-trip.
+
+> **Note:** there is also a [`docker-compose.local.yml`](../../infra/docker-compose.local.yml)
+> that builds images from the current checkout instead of pulling prebuilt
+> ones. It's been largely untouched across recent releases — reach for it only
+> if you need to test cluster-side changes on your branch. For the gateway
+> alone, the canonical compose above is simpler and strictly better.
 
 ## Configuration
 

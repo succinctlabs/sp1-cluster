@@ -6,8 +6,8 @@
 //! CI or during local hack-sessions doesn't block on it; run explicitly with:
 //!
 //! ```bash
-//! # one-time cluster bring-up
-//! docker compose -f infra/docker-compose.local.yml up -d redis postgresql api coordinator cpu-node gpu0
+//! # one-time cluster bring-up (canonical compose; pulls prebuilt images)
+//! docker compose -f infra/docker-compose.yml up -d redis postgresql api coordinator cpu-node gpu0
 //! # run the gateway in another shell (see bin/network-gateway/README.md)
 //!
 //! cargo test -p sp1-cluster-network-gateway --test docker_e2e -- --ignored --nocapture
