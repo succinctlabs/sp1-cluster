@@ -112,6 +112,23 @@ CPU and GPU node, plus Grafana Alloy for traces) on a shared Docker network. The
        .build();
    ```
 
+### Running the docker-e2e integration test
+
+With the stack + gateway both running, the full SDK-driven Fibonacci
+round-trip test at [tests/docker_e2e.rs](tests/docker_e2e.rs) will call
+`ProverClient::setup` → `prove(...).core()` → `verify(...)` against the
+gateway. It's `#[ignore]`'d so it only runs when asked:
+
+```bash
+cargo test -p sp1-cluster-network-gateway --test docker_e2e \
+  -- --ignored --nocapture
+```
+
+Env overrides: `GATEWAY_RPC_URL` (default `http://127.0.0.1:50061`),
+`NETWORK_PRIVATE_KEY` (any parseable key when `auth_mode=none`). Needs a
+GPU worker in the stack for reasonable latency; CPU-only will still
+complete but slowly.
+
 Iteration tip: keep the docker-compose stack up and only restart `cargo run
 -p sp1-cluster-network-gateway` between changes. Teardown when done:
 
