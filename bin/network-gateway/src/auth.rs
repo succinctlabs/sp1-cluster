@@ -72,12 +72,19 @@ mod tests {
     use alloy_signer_local::PrivateKeySigner;
 
     fn sign(message: &[u8], signer: &PrivateKeySigner) -> Vec<u8> {
-        signer.sign_message_sync(message).unwrap().as_bytes().to_vec()
+        signer
+            .sign_message_sync(message)
+            .unwrap()
+            .as_bytes()
+            .to_vec()
     }
 
     #[test]
     fn none_mode_returns_zero_address() {
-        let auth = Auth { mode: AuthMode::None, allowlist: Default::default() };
+        let auth = Auth {
+            mode: AuthMode::None,
+            allowlist: Default::default(),
+        };
         let addr = auth.authorize(b"anything", b"garbage").unwrap();
         assert_eq!(addr, Address::ZERO);
     }
@@ -89,14 +96,20 @@ mod tests {
         let msg = b"hello gateway";
         let sig = sign(msg, &signer);
 
-        let auth = Auth { mode: AuthMode::Verify, allowlist: Default::default() };
+        let auth = Auth {
+            mode: AuthMode::Verify,
+            allowlist: Default::default(),
+        };
         assert_eq!(auth.authorize(msg, &sig).unwrap(), expected);
     }
 
     #[test]
     fn verify_rejects_wrong_signature() {
         let msg = b"hello";
-        let auth = Auth { mode: AuthMode::Verify, allowlist: Default::default() };
+        let auth = Auth {
+            mode: AuthMode::Verify,
+            allowlist: Default::default(),
+        };
         let err = auth.authorize(msg, &[0u8; 65]).unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unauthenticated);
     }
@@ -108,9 +121,15 @@ mod tests {
         let msg = b"payload";
 
         let allowlist: HashSet<_> = std::iter::once(insider.address()).collect();
-        let auth = Auth { mode: AuthMode::Allowlist, allowlist };
+        let auth = Auth {
+            mode: AuthMode::Allowlist,
+            allowlist,
+        };
 
-        assert_eq!(auth.authorize(msg, &sign(msg, &insider)).unwrap(), insider.address());
+        assert_eq!(
+            auth.authorize(msg, &sign(msg, &insider)).unwrap(),
+            insider.address()
+        );
         let err = auth.authorize(msg, &sign(msg, &outsider)).unwrap_err();
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
     }
@@ -122,6 +141,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.len(), 2);
-        assert!(parsed.contains(&Address::from_str("0x0000000000000000000000000000000000000001").unwrap()));
+        assert!(parsed
+            .contains(&Address::from_str("0x0000000000000000000000000000000000000001").unwrap()));
     }
 }

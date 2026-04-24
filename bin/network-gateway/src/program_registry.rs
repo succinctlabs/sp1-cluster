@@ -26,10 +26,7 @@ pub async fn store<A: ArtifactClient>(
         .await
 }
 
-pub async fn load<A: ArtifactClient>(
-    client: &A,
-    vk_hash: &[u8],
-) -> Result<Option<ProgramSidecar>> {
+pub async fn load<A: ArtifactClient>(client: &A, vk_hash: &[u8]) -> Result<Option<ProgramSidecar>> {
     let id = sidecar_id(vk_hash);
     if !client
         .exists(&id, ArtifactType::UnspecifiedArtifactType)

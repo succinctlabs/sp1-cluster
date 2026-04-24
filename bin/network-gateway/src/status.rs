@@ -2,7 +2,9 @@ use sp1_cluster_common::proto as cluster_pb;
 use sp1_sdk::network::proto::base::types as sdk_pb;
 
 /// Map cluster `ProofRequestStatus` → SDK `FulfillmentStatus`.
-pub fn fulfillment_from_cluster(status: cluster_pb::ProofRequestStatus) -> sdk_pb::FulfillmentStatus {
+pub fn fulfillment_from_cluster(
+    status: cluster_pb::ProofRequestStatus,
+) -> sdk_pb::FulfillmentStatus {
     use cluster_pb::ProofRequestStatus as C;
     use sdk_pb::FulfillmentStatus as S;
     match status {
@@ -68,7 +70,10 @@ mod tests {
     fn fulfillment_mapping_exhaustive() {
         use cluster_pb::ProofRequestStatus as C;
         use sdk_pb::FulfillmentStatus as S;
-        assert_eq!(fulfillment_from_cluster(C::Unspecified), S::UnspecifiedFulfillmentStatus);
+        assert_eq!(
+            fulfillment_from_cluster(C::Unspecified),
+            S::UnspecifiedFulfillmentStatus
+        );
         assert_eq!(fulfillment_from_cluster(C::Pending), S::Requested);
         assert_eq!(fulfillment_from_cluster(C::Completed), S::Fulfilled);
         assert_eq!(fulfillment_from_cluster(C::Failed), S::Unfulfillable);
@@ -79,7 +84,10 @@ mod tests {
     fn execution_mapping_exhaustive() {
         use cluster_pb::ExecutionStatus as C;
         use sdk_pb::ExecutionStatus as S;
-        assert_eq!(execution_from_cluster(C::Unspecified), S::UnspecifiedExecutionStatus);
+        assert_eq!(
+            execution_from_cluster(C::Unspecified),
+            S::UnspecifiedExecutionStatus
+        );
         assert_eq!(execution_from_cluster(C::Unexecuted), S::Unexecuted);
         assert_eq!(execution_from_cluster(C::Executed), S::Executed);
         assert_eq!(execution_from_cluster(C::Failed), S::Unexecutable);
@@ -94,7 +102,10 @@ mod tests {
         assert_eq!(cluster_fulfillment_filter(S::Requested), vec![C::Pending]);
         assert!(cluster_fulfillment_filter(S::Assigned).is_empty());
         assert_eq!(cluster_fulfillment_filter(S::Fulfilled), vec![C::Completed]);
-        assert_eq!(cluster_fulfillment_filter(S::Unfulfillable), vec![C::Failed, C::Cancelled]);
+        assert_eq!(
+            cluster_fulfillment_filter(S::Unfulfillable),
+            vec![C::Failed, C::Cancelled]
+        );
     }
 
     #[test]
@@ -104,6 +115,9 @@ mod tests {
         assert!(cluster_execution_filter(S::UnspecifiedExecutionStatus).is_empty());
         assert_eq!(cluster_execution_filter(S::Unexecuted), vec![C::Unexecuted]);
         assert_eq!(cluster_execution_filter(S::Executed), vec![C::Executed]);
-        assert_eq!(cluster_execution_filter(S::Unexecutable), vec![C::Failed, C::Cancelled]);
+        assert_eq!(
+            cluster_execution_filter(S::Unexecutable),
+            vec![C::Failed, C::Cancelled]
+        );
     }
 }

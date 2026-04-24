@@ -58,6 +58,9 @@ The gateway binds two ports: gRPC on `GATEWAY_GRPC_ADDR` (default `0.0.0.0:50061
 and HTTP on `GATEWAY_HTTP_ADDR` (default `0.0.0.0:8081`). SDK clients hit both —
 make sure both are reachable from the caller.
 
+See [.env.example](./.env.example) for a copy-pasteable template covering both
+gateway and SDK-caller variables.
+
 ## Testing against the local docker-compose stack
 
 The repo ships [`infra/docker-compose.local.yml`](../../infra/docker-compose.local.yml)

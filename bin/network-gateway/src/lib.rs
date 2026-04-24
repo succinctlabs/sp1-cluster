@@ -37,7 +37,15 @@ where
             anyhow::anyhow!("failed to connect to cluster RPC {}: {e}", cfg.cluster_rpc)
         })?;
     let auth = build_auth(&cfg)?;
-    serve(cfg, client, cluster, auth, shutdown_signal(), shutdown_signal()).await
+    serve(
+        cfg,
+        client,
+        cluster,
+        auth,
+        shutdown_signal(),
+        shutdown_signal(),
+    )
+    .await
 }
 
 /// Serve both endpoints against pre-built cluster + auth state.

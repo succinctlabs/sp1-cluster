@@ -71,7 +71,10 @@ impl ClusterService for FakeCluster {
         // `download_raw` will zstd-decode back to raw bincode on GET. For the
         // in-memory backend the two layers are identity, so just upload the
         // already-bincoded proof bytes.
-        let proof_artifact_id = req.proof_artifact_id.clone().expect("proof_artifact_id set");
+        let proof_artifact_id = req
+            .proof_artifact_id
+            .clone()
+            .expect("proof_artifact_id set");
         self.artifacts
             .upload_raw(
                 &proof_artifact_id,
@@ -319,16 +322,25 @@ async fn e2e_register_program_request_proof_download() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(status.fulfillment_status, FulfillmentStatus::Fulfilled as i32);
+    assert_eq!(
+        status.fulfillment_status,
+        FulfillmentStatus::Fulfilled as i32
+    );
     let proof_uri = status.proof_uri.expect("proof_uri on Fulfilled");
-    assert!(proof_uri.starts_with(&public_http_url), "expected gateway URL, got {proof_uri}");
+    assert!(
+        proof_uri.starts_with(&public_http_url),
+        "expected gateway URL, got {proof_uri}"
+    );
 
     // 6) GET proof_uri — gateway `download_raw` zstd-decodes; InMemoryArtifactClient
     // is identity, so bytes come back as what we uploaded (raw bincode of the "proof").
     let got = http.get(&proof_uri).send().await.unwrap();
     assert!(got.status().is_success());
     let got_bytes = got.bytes().await.unwrap().to_vec();
-    assert_eq!(got_bytes, proof_bytes, "proof bytes must round-trip byte-for-byte");
+    assert_eq!(
+        got_bytes, proof_bytes,
+        "proof bytes must round-trip byte-for-byte"
+    );
 
     // ---- shutdown ----
     gw_grpc_shutdown_tx.send(()).ok();
@@ -350,7 +362,11 @@ async fn create_artifact_put(
         artifact_type: artifact_type as i32,
         ..Default::default()
     };
-    let resp = artifact_rpc.create_artifact(req).await.unwrap().into_inner();
+    let resp = artifact_rpc
+        .create_artifact(req)
+        .await
+        .unwrap()
+        .into_inner();
     // Mirror SDK's encoding: bincode then zstd level 3.
     let bincoded = bincode::serialize(raw).unwrap();
     let compressed = zstd::encode_all(bincoded.as_slice(), 3).unwrap();
@@ -366,11 +382,13 @@ async fn create_artifact_put(
 
 async fn wait_for_port(port: u16) {
     for _ in 0..50 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("port {port} never became ready");
 }
-

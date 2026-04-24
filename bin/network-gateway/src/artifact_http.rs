@@ -22,7 +22,10 @@ where
     A: ArtifactClient + CompressedUpload,
 {
     Router::new()
-        .route("/artifacts/{type_seg}/{id}", put(put_artifact::<A>).get(get_artifact::<A>))
+        .route(
+            "/artifacts/{type_seg}/{id}",
+            put(put_artifact::<A>).get(get_artifact::<A>),
+        )
         .with_state(state)
 }
 
@@ -34,8 +37,10 @@ async fn put_artifact<A>(
 where
     A: ArtifactClient + CompressedUpload,
 {
-    let artifact_type = parse_artifact_type_segment(&type_seg)
-        .ok_or((StatusCode::BAD_REQUEST, format!("unknown artifact type: {type_seg}")))?;
+    let artifact_type = parse_artifact_type_segment(&type_seg).ok_or((
+        StatusCode::BAD_REQUEST,
+        format!("unknown artifact type: {type_seg}"),
+    ))?;
 
     info!(id, ?artifact_type, size = body.len(), "PUT artifact");
     state
@@ -53,8 +58,10 @@ async fn get_artifact<A>(
 where
     A: ArtifactClient + CompressedUpload,
 {
-    let artifact_type = parse_artifact_type_segment(&type_seg)
-        .ok_or((StatusCode::BAD_REQUEST, format!("unknown artifact type: {type_seg}")))?;
+    let artifact_type = parse_artifact_type_segment(&type_seg).ok_or((
+        StatusCode::BAD_REQUEST,
+        format!("unknown artifact type: {type_seg}"),
+    ))?;
 
     info!(id, ?artifact_type, "GET artifact");
     let bytes = state
@@ -94,7 +101,9 @@ mod tests {
         let artifact = client.create_artifact().unwrap();
         let id = artifact.to_id();
 
-        let state = Arc::new(ArtifactHttpState { client: client.clone() });
+        let state = Arc::new(ArtifactHttpState {
+            client: client.clone(),
+        });
         let app = router(state);
 
         // PUT
@@ -119,9 +128,14 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(get_req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let got = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(got.as_ref(), zstd_body.as_slice(),
-            "InMemoryArtifactClient stores verbatim; bytes should match");
+        let got = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            got.as_ref(),
+            zstd_body.as_slice(),
+            "InMemoryArtifactClient stores verbatim; bytes should match"
+        );
 
         // Confirm the underlying zstd payload decodes back to the bincode input.
         let decoded = zstd::decode_all(got.as_ref()).unwrap();
@@ -143,4 +157,3 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
-

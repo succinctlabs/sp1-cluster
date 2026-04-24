@@ -21,7 +21,11 @@ pub struct ArtifactStoreImpl<A> {
 
 impl<A> ArtifactStoreImpl<A> {
     pub fn new(client: A, public_http_url: String, auth: Auth) -> Self {
-        Self { client, public_http_url, auth }
+        Self {
+            client,
+            public_http_url,
+            auth,
+        }
     }
 }
 
@@ -35,7 +39,9 @@ where
         request: Request<CreateArtifactRequest>,
     ) -> Result<Response<CreateArtifactResponse>, Status> {
         let req = request.into_inner();
-        let requester = self.auth.authorize(CREATE_ARTIFACT_MESSAGE, &req.signature)?;
+        let requester = self
+            .auth
+            .authorize(CREATE_ARTIFACT_MESSAGE, &req.signature)?;
         let artifact_type = proto_to_cluster_type(req.artifact_type);
 
         let artifact = self

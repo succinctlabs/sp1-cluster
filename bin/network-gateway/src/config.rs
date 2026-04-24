@@ -3,7 +3,10 @@ use clap::Parser;
 use crate::auth::AuthMode;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "network-gateway", about = "SDK-compatible gateway for sp1-cluster")]
+#[command(
+    name = "network-gateway",
+    about = "SDK-compatible gateway for sp1-cluster"
+)]
 pub struct Config {
     /// gRPC server bind address.
     #[arg(long, env = "GATEWAY_GRPC_ADDR", default_value = "0.0.0.0:50061")]
@@ -15,7 +18,11 @@ pub struct Config {
 
     /// Public base URL used to build artifact URIs returned to SDK clients.
     /// e.g. `http://gateway.internal:8081`.
-    #[arg(long, env = "GATEWAY_PUBLIC_HTTP_URL", default_value = "http://localhost:8081")]
+    #[arg(
+        long,
+        env = "GATEWAY_PUBLIC_HTTP_URL",
+        default_value = "http://localhost:8081"
+    )]
     pub public_http_url: String,
 
     /// ClusterService gRPC URL (the `bin/api` endpoint).
