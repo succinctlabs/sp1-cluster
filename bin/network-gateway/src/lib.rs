@@ -75,18 +75,27 @@ where
         .clone()
         .unwrap_or_else(|| alloy_primitives::U256::MAX.to_string());
 
+    // Tonic's 4 MiB default is too tight for SP1 verifying keys carried in
+    // `create_program`; bump to 64 MiB so the gRPC path is never the
+    // bottleneck. Artifact bodies go through the HTTP proxy, not gRPC.
+    const MAX_GRPC_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
+
     let artifact_store = ArtifactStoreServer::new(ArtifactStoreImpl::new(
         client.clone(),
         cfg.public_http_url.clone(),
         auth.clone(),
-    ));
+    ))
+    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE)
+    .max_encoding_message_size(MAX_GRPC_MESSAGE_SIZE);
     let prover_network = ProverNetworkServer::new(ProverNetworkImpl::new(
         client.clone(),
         cluster,
         cfg.public_http_url.clone(),
         balance_amount,
         auth,
-    ));
+    ))
+    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE)
+    .max_encoding_message_size(MAX_GRPC_MESSAGE_SIZE);
 
     let grpc_task = tokio::spawn(async move {
         info!("gRPC server listening on {grpc_addr}");

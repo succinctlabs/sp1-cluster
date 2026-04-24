@@ -55,20 +55,40 @@ pub fn artifact_id_from_uri(uri: &str) -> Option<&str> {
     }
 }
 
-/// Mint a fresh request id matching cluster convention: a typeid-prefixed UUIDv7.
+/// Maximum byte-length for a request id.
 ///
-/// The SDK treats `request_id` as opaque bytes and passes them back on every
-/// subsequent status poll. We store it as UTF-8 of the typeid string so that the
-/// cluster `proof_id` (see `proof_id_from_request_id`) reads like every other
-/// cluster-minted id (e.g. `req_01h...`).
+/// The SDK decodes the returned `request_id` via `B256::from_slice` (see
+/// `sp1/crates/sdk/src/network/prover.rs`), so it MUST be exactly 32 bytes.
+const REQUEST_ID_LEN: usize = 32;
+
+/// Mint a fresh 32-byte request id that keeps the cluster's typeid convention.
+///
+/// We generate a V7 typeid string (e.g. `req_01h...`, ~30 bytes of UTF-8) and
+/// zero-pad it to 32 bytes. The SDK round-trips those bytes on every subsequent
+/// poll; `proof_id_from_request_id` strips the trailing zeros so the cluster
+/// sees the typeid string verbatim.
 pub fn mint_request_id() -> Vec<u8> {
     use mti::prelude::{MagicTypeIdExt, V7};
-    "req".create_type_id::<V7>().to_string().into_bytes()
+    let typeid = "req".create_type_id::<V7>().to_string();
+    let mut buf = typeid.into_bytes();
+    assert!(
+        buf.len() <= REQUEST_ID_LEN,
+        "typeid unexpectedly exceeded {REQUEST_ID_LEN} bytes: {} bytes",
+        buf.len()
+    );
+    buf.resize(REQUEST_ID_LEN, 0);
+    buf
 }
 
-/// Cluster `proof_id` derived from an SDK request_id.
+/// Cluster `proof_id` derived from an SDK request_id — strips the zero padding
+/// added by `mint_request_id`.
 pub fn proof_id_from_request_id(request_id: &[u8]) -> String {
-    String::from_utf8_lossy(request_id).into_owned()
+    let end = request_id
+        .iter()
+        .rposition(|&b| b != 0)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    String::from_utf8_lossy(&request_id[..end]).into_owned()
 }
 
 #[cfg(test)]
@@ -76,11 +96,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn request_id_is_typeid_and_round_trips_to_proof_id() {
+    fn request_id_is_32_bytes_and_round_trips_to_typeid_proof_id() {
         let rid = mint_request_id();
-        let s = String::from_utf8(rid.clone()).expect("typeid is valid UTF-8");
-        assert!(s.starts_with("req_"), "expected typeid prefix, got {s}");
-        assert_eq!(proof_id_from_request_id(&rid), s);
+        assert_eq!(rid.len(), REQUEST_ID_LEN, "SDK requires exactly 32 bytes");
+
+        let proof_id = proof_id_from_request_id(&rid);
+        assert!(
+            proof_id.starts_with("req_"),
+            "expected typeid prefix, got {proof_id}"
+        );
+
+        // The zero-padded tail must be stripped before the cluster sees it.
+        assert!(!proof_id.contains('\0'));
+        assert!(proof_id.len() <= REQUEST_ID_LEN);
     }
 
     #[test]

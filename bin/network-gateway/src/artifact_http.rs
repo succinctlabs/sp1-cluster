@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::put,
@@ -21,11 +21,15 @@ pub fn router<A>(state: Arc<ArtifactHttpState<A>>) -> Router
 where
     A: ArtifactClient + CompressedUpload,
 {
+    // Axum's default 2 MiB request body limit is much smaller than a realistic
+    // SP1 ELF or stdin (hundreds of MB is common, e.g. the rsp bench). Lift
+    // the cap entirely — upstream backpressure comes from the artifact store.
     Router::new()
         .route(
             "/artifacts/{type_seg}/{id}",
             put(put_artifact::<A>).get(get_artifact::<A>),
         )
+        .layer(DefaultBodyLimit::disable())
         .with_state(state)
 }
 

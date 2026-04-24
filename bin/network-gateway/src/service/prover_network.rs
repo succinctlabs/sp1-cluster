@@ -537,21 +537,34 @@ where
         let req = request.into_inner();
         let sidecar = program_registry::load(&self.client, &req.vk_hash)
             .await
-            .map_err(|e| Status::internal(format!("sidecar load failed: {e}")))?;
+            .map_err(|e| Status::internal(format!("sidecar load failed: {e}")))?
+            .ok_or_else(|| {
+                // The SDK's `NetworkClient::get_program` treats ANY Ok response as
+                // "program already registered"; only a NotFound status routes it
+                // into the `create_program` branch. Returning a bare None here
+                // would cause the SDK to skip registration entirely and then fail
+                // `request_proof` with FailedPrecondition.
+                Status::not_found(format!(
+                    "program not registered for vk_hash {}",
+                    hex::encode(&req.vk_hash)
+                ))
+            })?;
 
-        let program = sidecar.map(|s| pb::Program {
+        let program = pb::Program {
             vk_hash: req.vk_hash.clone(),
-            vk: s.vk_bytes,
+            vk: sidecar.vk_bytes,
             program_uri: artifact_uri(
                 &self.public_http_url,
                 ArtifactType::Program,
-                &s.program_artifact_id,
+                &sidecar.program_artifact_id,
             ),
             name: None,
             owner: vec![],
             created_at: 0,
-        });
-        Ok(Response::new(pb::GetProgramResponse { program }))
+        };
+        Ok(Response::new(pb::GetProgramResponse {
+            program: Some(program),
+        }))
     }
 
     async fn create_program(
@@ -1441,16 +1454,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_program_unknown_vk_hash_returns_none() {
+    async fn get_program_unknown_vk_hash_returns_not_found() {
+        // The SDK's NetworkClient routes on NotFound to trigger create_program;
+        // any Ok response is treated as "already registered". See
+        // sp1/crates/sdk/src/network/client.rs:278.
         let svc = mk();
-        let resp = svc
+        let err = svc
             .get_program(Request::new(pb::GetProgramRequest {
                 vk_hash: vec![9, 9, 9],
             }))
             .await
-            .unwrap()
-            .into_inner();
-        assert!(resp.program.is_none());
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
     }
 
     #[tokio::test]

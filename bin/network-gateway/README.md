@@ -59,7 +59,17 @@ and HTTP on `GATEWAY_HTTP_ADDR` (default `0.0.0.0:8081`). SDK clients hit both �
 make sure both are reachable from the caller.
 
 See [.env.example](./.env.example) for a copy-pasteable template covering both
-gateway and SDK-caller variables.
+gateway and SDK-caller variables. The gateway binary (via `dotenv::dotenv()`)
+and the `docker_e2e` integration test both walk upward from cwd looking for a
+`.env`, so dropping it at the **repo root** works for both:
+
+```bash
+cp bin/network-gateway/.env.example .env
+# edit as needed, then `cargo run ...` or `cargo test --test docker_e2e ...`
+```
+
+If you'd rather keep it next to `.env.example`, a symlink works too —
+`dotenv`'s upward walk will resolve it the same way.
 
 ## Testing against the local docker-compose stack
 
@@ -118,22 +128,23 @@ loop.
        .build();
    ```
 
-### Running the docker-e2e integration test
+### Running the end-to-end bench
 
-With the stack + gateway both running, the full SDK-driven Fibonacci
-round-trip test at [tests/docker_e2e.rs](tests/docker_e2e.rs) will call
-`ProverClient::setup` → `prove(...).core()` → `verify(...)` against the
-gateway. It's `#[ignore]`'d so it only runs when asked:
+With the stack + gateway both running, you can drive the gateway with a real
+`sp1-sdk` `ProverClient` via the CLI's `bench gateway` subcommand. It
+downloads a canned program/stdin pair from S3 and runs `setup` → `prove` →
+`verify`, writing per-run timing to `data/bench_results.csv`:
 
 ```bash
-cargo test -p sp1-cluster-network-gateway --test docker_e2e \
-  -- --ignored --nocapture
+cargo run --release -p sp1-cluster-cli -- bench gateway v6/fibonacci-200k \
+  --rpc-url http://127.0.0.1:50061
 ```
 
 Env overrides: `GATEWAY_RPC_URL` (default `http://127.0.0.1:50061`),
-`NETWORK_PRIVATE_KEY` (any parseable key when `auth_mode=none`). Needs a
-GPU worker in the stack for reasonable latency; CPU-only will still
-complete but slowly.
+`NETWORK_PRIVATE_KEY` (any parseable key when `auth_mode=none`),
+`CLI_BENCH_S3_BUCKET` (default `sp1-testing-suite`). Requires the AWS CLI on
+`$PATH` for the S3 download step. A GPU worker in the stack makes the
+round-trip finish quickly; CPU-only will complete but slowly.
 
 Iteration tip: keep the docker-compose stack up and only restart `cargo run
 -p sp1-cluster-network-gateway` between changes. Teardown when done:
