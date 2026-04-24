@@ -1,6 +1,5 @@
 use crate::limiter::get_max_weight;
 use crate::utils::{current_context, task_metadata};
-use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
 use eyre::Result;
 use mti::prelude::{MagicTypeIdExt, V7};
 use rand::seq::IteratorRandom;
@@ -24,23 +23,49 @@ use tokio_stream::{Stream, StreamExt};
 use tonic::transport::Channel;
 use tonic::Status;
 
+/// Retry policies for gRPC calls on this client.
+///
+/// Every retry site must pick one of these explicitly. There is intentionally
+/// no shared default, so a new call site cannot silently inherit the wrong
+/// failure semantics — the exact footgun that caused the `open_sub` bug where
+/// an overridden `max_elapsed_time(None)` made `create_subscriber` never
+/// return `Err`, unreachable-ing the polling-failover path.
+///
+/// - [`retry::infinite`] — for calls that must ultimately succeed and whose
+///   transient failures are not a signal (heartbeat, reconnect, shutdown
+///   reports). Worker should ride out connectivity blips, not die.
+/// - [`retry::bounded`] — for calls whose failure is a signal the caller
+///   uses to change strategy (e.g. `open_sub` → fall back to polling). The
+///   bound lets `Err` surface.
+mod retry {
+    use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
+    use std::time::Duration;
+
+    const INITIAL_INTERVAL: Duration = Duration::from_millis(100);
+
+    pub(super) fn infinite() -> ExponentialBackoff {
+        ExponentialBackoffBuilder::new()
+            .with_initial_interval(INITIAL_INTERVAL)
+            .build()
+    }
+
+    pub(super) fn bounded(max_elapsed: Duration) -> ExponentialBackoff {
+        ExponentialBackoffBuilder::new()
+            .with_initial_interval(INITIAL_INTERVAL)
+            .with_max_elapsed_time(Some(max_elapsed))
+            .build()
+    }
+}
+
 #[derive(Clone)]
 pub struct WorkerServiceClient {
     pub client: InnerWorkerClient<Channel>,
     pub worker_id: String,
     pub worker_type: WorkerType,
-    pub backoff: ExponentialBackoff,
 }
 
 impl WorkerServiceClient {
     pub async fn new(addr: String, worker_id: String) -> Result<WorkerServiceClient> {
-        let backoff = ExponentialBackoffBuilder::new()
-            .with_initial_interval(Duration::from_millis(100))
-            .with_max_elapsed_time(Some(Duration::from_secs(10)))
-            .with_max_elapsed_time(None)
-            .build();
-
-        // Build the channel with backoff
         let channel = reconnect_with_backoff(&addr).await?;
 
         let client = InnerWorkerClient::new(channel.clone());
@@ -51,7 +76,6 @@ impl WorkerServiceClient {
             client,
             worker_id,
             worker_type,
-            backoff,
         })
     }
 
@@ -65,7 +89,8 @@ impl WorkerServiceClient {
             worker_type: self.worker_type as i32,
             max_weight: get_max_weight() as u32,
         };
-        let response = backoff_retry(self.backoff.clone(), || {
+        // Initial handshake with the server. Must succeed eventually.
+        let response = backoff_retry(retry::infinite(), || {
             let mut client = self.client.clone();
             let init_msg = init_msg.clone();
             async move { client.open(init_msg).await }
@@ -99,8 +124,8 @@ impl WorkerServiceClient {
     }
 
     pub async fn close(&self, request: CloseRequest) -> anyhow::Result<()> {
-        let backoff = self.backoff.clone();
-        backoff::future::retry(backoff, || async {
+        // Shutdown notification — must reach the server.
+        backoff::future::retry(retry::infinite(), || async {
             self.client
                 .clone()
                 .close(request.clone())
@@ -112,8 +137,8 @@ impl WorkerServiceClient {
     }
 
     pub async fn heartbeat(&self, request: HeartbeatRequest) -> Result<(), Status> {
-        let backoff = self.backoff.clone();
-        backoff::future::retry(backoff, || async {
+        // Liveness ping — ride out blips, don't let the worker die.
+        backoff::future::retry(retry::infinite(), || async {
             self.client
                 .clone()
                 .heartbeat(request.clone())
@@ -125,8 +150,8 @@ impl WorkerServiceClient {
     }
 
     pub async fn complete_task(&self, request: CompleteTaskRequest) -> anyhow::Result<()> {
-        let backoff = self.backoff.clone();
-        backoff::future::retry(backoff, || async {
+        // Completion report — must not be lost.
+        backoff::future::retry(retry::infinite(), || async {
             self.client
                 .clone()
                 .complete_task(request.clone())
@@ -138,8 +163,8 @@ impl WorkerServiceClient {
     }
 
     pub async fn fail_task(&self, request: FailTaskRequest) -> anyhow::Result<()> {
-        let backoff = self.backoff.clone();
-        backoff::future::retry(backoff, || async {
+        // Failure report — must not be lost.
+        backoff::future::retry(retry::infinite(), || async {
             self.client
                 .clone()
                 .fail_task(request.clone())
@@ -188,8 +213,8 @@ impl WorkerClient for WorkerServiceClient {
             }),
         };
 
-        let backoff = self.backoff.clone();
-        let response = backoff::future::retry(backoff, || async {
+        // Task submission — must land.
+        let response = backoff::future::retry(retry::infinite(), || async {
             self.client
                 .clone()
                 .create_task(request.clone())
@@ -288,29 +313,30 @@ impl WorkerClient for WorkerServiceClient {
 
         let (closed_tx, closed_rx) = watch::channel(false);
 
-        // open_sub (with backoff) once
+        // Initial open_sub is BOUNDED: a persistent failure must surface as
+        // `Err` so the caller can fall back to polling. The reconnect loop
+        // spawned below uses `infinite` — it stays alive across blips.
         let connection = self.client.clone();
-        let backoff = self.backoff.clone();
         let request = OpenSubRequest {
             sub_id: sub_id.clone(),
             proof_id: proof_id.to_string(),
             task_ids: Vec::new(),
         };
-        let response = backoff::future::retry(backoff.clone(), || async {
-            connection
-                .clone()
-                .open_sub(request.clone())
-                .await
-                .map_err(status_to_backoff_error)
-        })
-        .await?;
+        let response =
+            backoff::future::retry(retry::bounded(Duration::from_secs(10)), || async {
+                connection
+                    .clone()
+                    .open_sub(request.clone())
+                    .await
+                    .map_err(status_to_backoff_error)
+            })
+            .await?;
 
         let mut inbound = response.into_inner();
         tokio::spawn({
             let tasks_set = tasks_set.clone();
             let sub_id = sub_id.clone();
             let mut closed_rx = closed_rx.clone();
-            let backoff = backoff.clone();
             let connection = connection.clone();
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             let mut last_heartbeat = SystemTime::now();
@@ -329,7 +355,9 @@ impl WorkerClient for WorkerServiceClient {
                                         sub_id: sub_id.clone(),
                                         msg_id: msg.msg_id.clone(),
                                     };
-                                    let _ = backoff::future::retry(backoff.clone(), || async {
+                                    // Ack inside the subscriber task — infinite; failure here
+                                    // just skips an ack, not a signal path.
+                                    let _ = backoff::future::retry(retry::infinite(), || async {
                                         connection.clone().ack_sub(ack_request.clone())
                                             .await
                                             .map_err(status_to_backoff_error)
@@ -369,7 +397,6 @@ impl WorkerClient for WorkerServiceClient {
                                         Some(server_sub_message::Message::ServerHeartbeat(_)) => {
                                             // Send empty UpdateSub message to keep the subscriber alive.
                                             last_heartbeat = SystemTime::now();
-                                            let backoff = backoff.clone();
                                             // Use a random subset of up to 30 task_ids to ensure
                                             // these tasks are still being worked on (not disappeared
                                             // or failed) without overloading the server.
@@ -378,7 +405,8 @@ impl WorkerClient for WorkerServiceClient {
                                                 let mut rng = rand::rng();
                                                 lock.iter().cloned().choose_multiple(&mut rng, 30)
                                             };
-                                            if let Err(e) = backoff::future::retry(backoff, || {
+                                            // Heartbeat reply — infinite retry is fine here.
+                                            if let Err(e) = backoff::future::retry(retry::infinite(), || {
                                                 let request = UpdateSubRequest {
                                                     sub_id: sub_id.clone(),
                                                     task_ids: task_ids.clone(),
@@ -404,7 +432,9 @@ impl WorkerClient for WorkerServiceClient {
                                 }
                                 Err(e) => {
                                     tracing::error!("Connection error: {:?}", e);
-                                    match backoff::future::retry(backoff.clone(), || async {
+                                    // Reconnect inside the background task — infinite
+                                    // (contrast with the initial open_sub above).
+                                    match backoff::future::retry(retry::infinite(), || async {
                                         connection
                                             .clone()
                                             .open_sub(request.clone())
@@ -434,7 +464,8 @@ impl WorkerClient for WorkerServiceClient {
                         _ = interval.tick() => {
                             if last_heartbeat.elapsed().unwrap_or_default() > Duration::from_secs(10) {
                                 tracing::warn!("No heartbeats received from subscriber {}, reconnecting", sub_id);
-                                match backoff::future::retry(backoff.clone(), || async {
+                                // Heartbeat-stall reconnect — infinite.
+                                match backoff::future::retry(retry::infinite(), || async {
                                     connection
                                         .clone()
                                         .open_sub(request.clone())
@@ -493,7 +524,8 @@ impl WorkerClient for WorkerServiceClient {
             task_id: task_id.to_string(),
             start_offset: 0,
         };
-        let response = backoff::future::retry(self.backoff.clone(), || async {
+        // Initial subscribe — infinite (matches pre-existing behavior).
+        let response = backoff::future::retry(retry::infinite(), || async {
             self.client
                 .clone()
                 .subscribe_task_messages(request.clone())
@@ -505,15 +537,14 @@ impl WorkerClient for WorkerServiceClient {
 
         let (tx, rx) = mpsc::unbounded_channel();
         let client = self.client.clone();
-        let backoff = self.backoff.clone();
         tokio::spawn(async move {
             drive_message_stream(inbound, tx, move |forwarded| {
-                let backoff = backoff.clone();
                 let client = client.clone();
                 let mut request = request.clone();
                 request.start_offset = forwarded as u64;
                 async move {
-                    match backoff::future::retry(backoff, || async {
+                    // Stream reconnect — infinite.
+                    match backoff::future::retry(retry::infinite(), || async {
                         client
                             .clone()
                             .subscribe_task_messages(request.clone())
@@ -542,8 +573,8 @@ impl WorkerClient for WorkerServiceClient {
             task_id: task_id.to_string(),
             payload,
         };
-        let backoff = self.backoff.clone();
-        backoff::future::retry(backoff, || async {
+        // Task message — must land.
+        backoff::future::retry(retry::infinite(), || async {
             self.client
                 .clone()
                 .send_task_message(request.clone())
@@ -561,13 +592,13 @@ impl WorkerClient for WorkerServiceClient {
         status: proto::ProofRequestStatus,
         extra_data: impl Into<String> + Send,
     ) -> anyhow::Result<()> {
-        let backoff = self.backoff.clone();
         let extra_data: String = extra_data.into();
         let extra_data = if extra_data.is_empty() {
             None
         } else {
             Some(extra_data)
         };
+        // Proof-state reports — must land.
         match status {
             proto::ProofRequestStatus::Completed => {
                 let request = proto::CompleteProofRequest {
@@ -575,7 +606,7 @@ impl WorkerClient for WorkerServiceClient {
                     proof_id: proof_id.to_string(),
                     extra_data,
                 };
-                backoff::future::retry(backoff, || async {
+                backoff::future::retry(retry::infinite(), || async {
                     self.client
                         .clone()
                         .complete_proof(request.clone())
@@ -591,7 +622,7 @@ impl WorkerClient for WorkerServiceClient {
                     task_id: task_id.map(|t| t.to_string()),
                     extra_data,
                 };
-                backoff::future::retry(backoff, || async {
+                backoff::future::retry(retry::infinite(), || async {
                     self.client
                         .clone()
                         .fail_proof(request.clone())
