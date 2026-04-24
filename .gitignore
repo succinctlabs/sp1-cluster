@@ -7,6 +7,7 @@
 # Profile-guided optimization
 /tmp
 pgo-data.profdata
+data/**
 
 # MacOS nuisances
 .DS_Store
@@ -30,3 +31,6 @@ copybara.jar
 values-*.yaml
 !values-example.yaml
 .worktrees/
+
+# Local agent documents
+.claude/local/**

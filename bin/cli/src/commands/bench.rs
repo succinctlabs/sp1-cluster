@@ -11,7 +11,10 @@ use sp1_prover::worker::{
     ProofId, RawTaskRequest, RequesterId, SP1LightNode, TaskContext, WorkerClient,
 };
 use sp1_prover_types::Artifact;
-use sp1_sdk::{network::proto::types::ProofMode, SP1Stdin};
+use sp1_sdk::{
+    network::{proto::types::ProofMode, FulfillmentStrategy, NetworkMode},
+    Elf, ProveRequest, Prover, ProverClient, ProvingKey, SP1ProofMode, SP1Stdin,
+};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -50,6 +53,15 @@ pub fn parse_proof_mode(s: &str) -> Result<ProofMode> {
         .ok_or_else(|| eyre::eyre!("Invalid proof mode"))
 }
 
+fn sp1_proof_mode_from_proto(mode: ProofMode) -> SP1ProofMode {
+    match mode {
+        ProofMode::Compressed => SP1ProofMode::Compressed,
+        ProofMode::Plonk => SP1ProofMode::Plonk,
+        ProofMode::Groth16 => SP1ProofMode::Groth16,
+        ProofMode::Core | ProofMode::UnspecifiedProofMode => SP1ProofMode::Core,
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum BenchCommand {
     Fibonacci {
@@ -84,6 +96,37 @@ pub enum BenchCommand {
         param: String,
         #[clap(flatten)]
         common: CommonArgs,
+    },
+    /// Drive a `network-gateway` instance end-to-end with `sp1-sdk`'s ProverClient.
+    /// Downloads the program/stdin from S3 (same layout as the `s3` subcommand)
+    /// and calls `setup` + `prove` + `verify`, timing the round-trip.
+    Gateway {
+        /// S3 path to the program (e.g. "v6/fibonacci-200k").
+        s3_path: String,
+        #[arg(short, long, default_value = "")]
+        param: String,
+        /// S3 bucket to download from.
+        #[arg(long, env = "CLI_BENCH_S3_BUCKET", default_value = "sp1-testing-suite")]
+        bucket: String,
+        /// Gateway gRPC URL (same host+port the SDK's `rpc_url` would take).
+        #[arg(
+            long,
+            env = "GATEWAY_RPC_URL",
+            default_value = "http://127.0.0.1:50061"
+        )]
+        rpc_url: String,
+        /// NetworkSigner key. With `auth_mode=none` on the gateway any parseable
+        /// key works; the env var matches what `sp1-sdk`'s own builders read.
+        #[arg(
+            long,
+            env = "NETWORK_PRIVATE_KEY",
+            default_value = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        )]
+        private_key: String,
+        #[arg(short, long, default_value = "core", value_parser = parse_proof_mode)]
+        mode: ProofMode,
+        #[arg(short, long, default_value_t = 1)]
+        count: u32,
     },
 }
 
@@ -164,6 +207,38 @@ impl BenchCommand {
                 tracing::info!("Running execute-only benchmark for {:?}...", s3_path);
                 Self::run_execute_benchmark(elf, stdin, common).await?;
             }
+            BenchCommand::Gateway {
+                s3_path,
+                param,
+                bucket,
+                rpc_url,
+                private_key,
+                mode,
+                count,
+            } => {
+                tracing::info!("Downloading program from s3://{}/{}...", bucket, s3_path);
+                let (elf, stdin) = Self::download_from_s3(bucket, s3_path, param).await?;
+                tracing::info!(
+                    "Running gateway benchmark for {:?} ({} run(s), mode={:?}, rpc={})",
+                    s3_path,
+                    count,
+                    mode,
+                    rpc_url
+                );
+                let durations =
+                    Self::run_gateway_benchmark(elf, stdin, rpc_url, private_key, *mode, *count)
+                        .await?;
+                for duration in durations {
+                    if let Err(e) = Self::append_to_csv(
+                        &format!("gateway/{s3_path}"),
+                        s3_path,
+                        Some(param.as_str()),
+                        duration,
+                    ) {
+                        tracing::warn!("Failed to write to CSV: {}", e);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -200,6 +275,62 @@ impl BenchCommand {
             proof_ids.push((proof_id, elapsed));
         }
         Ok(proof_ids)
+    }
+
+    /// Drive `sp1-sdk` through the network-gateway, timing each prove call.
+    async fn run_gateway_benchmark(
+        elf: Vec<u8>,
+        stdin: SP1Stdin,
+        rpc_url: &str,
+        private_key: &str,
+        mode: ProofMode,
+        count: u32,
+    ) -> Result<Vec<Duration>> {
+        let prover = ProverClient::builder()
+            .network_for(NetworkMode::Reserved)
+            .rpc_url(rpc_url)
+            .private_key(private_key)
+            .build()
+            .await;
+
+        let t_setup = Instant::now();
+        let pk = prover
+            .setup(Elf::Dynamic(elf.into()))
+            .await
+            .map_err(|e| eyre::eyre!("setup failed: {e}"))?;
+        let setup_elapsed = t_setup.elapsed();
+        tracing::info!("Gateway setup: {:?}", setup_elapsed);
+
+        let sp1_mode = sp1_proof_mode_from_proto(mode);
+
+        let mut durations = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let t_prove = Instant::now();
+            let proof = prover
+                .prove(&pk, stdin.clone())
+                .strategy(FulfillmentStrategy::Reserved)
+                .mode(sp1_mode)
+                .await
+                .map_err(|e| eyre::eyre!("prove failed: {e}"))?;
+            let prove_elapsed = t_prove.elapsed();
+
+            let t_verify = Instant::now();
+            prover
+                .verify(&proof, pk.verifying_key(), None)
+                .map_err(|e| eyre::eyre!("verify failed: {e}"))?;
+            let verify_elapsed = t_verify.elapsed();
+
+            tracing::info!(
+                "Gateway run {}/{} timing: prove={:?} verify={:?} total={:?}",
+                i + 1,
+                count,
+                prove_elapsed,
+                verify_elapsed,
+                prove_elapsed + verify_elapsed
+            );
+            durations.push(prove_elapsed);
+        }
+        Ok(durations)
     }
 
     async fn download_from_s3(
