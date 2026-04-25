@@ -19,12 +19,18 @@ const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
 const DEFAULT_SHARD_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
 /// Admission ceiling as fraction of `maxmemory`; remainder is headroom for allocator bloat.
-const MEMORY_BUDGET_FRACTION: f64 = 0.70;
+pub const MEMORY_BUDGET_FRACTION: f64 = 0.80;
 
-/// Permit pool ceiling. Strictly less than `MEMORY_BUDGET_FRACTION`; the gap reserves
-/// room for non-permit-gated writes (proof outputs, markers) so they can land while
-/// the input pool is at saturation.
+/// Permit pool ceiling; gap below admission absorbs non-permit-gated writes.
 const INPUT_BUDGET_FRACTION: f64 = 0.50;
+
+const _: () = assert!(
+    INPUT_BUDGET_FRACTION < MEMORY_BUDGET_FRACTION,
+    "permit pool must reserve a gap below the admission ceiling"
+);
+
+/// Uploads ≤ this size bypass admission; bounded structurally by concurrent task count.
+const ADMISSION_BYPASS_BYTES: u64 = DEFAULT_SHARD_MAX_BYTES / 10;
 
 /// Floor when `maxmemory` is unreadable / 0 — prevents wedging the pipeline.
 const MIN_PERMITS_PER_NODE: usize = 4;
@@ -35,8 +41,7 @@ const MAXMEMORY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Admission re-check cadence while blocked.
 const ADMISSION_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Hard cap on admission wait — past this, fail fast so a stuck proof
-/// frees the cluster instead of stalling for tens of minutes.
+/// Hard cap on admission wait — past this, fail fast.
 const ADMISSION_MAX_WAIT: Duration = Duration::from_secs(2 * 60);
 
 /// Throttle for "blocking upload" warn logs while waiting.
@@ -67,6 +72,7 @@ struct Admission {
 
 /// RAII reservation token. Must outlive the upload so `in_flight` stays
 /// counted until the write lands; `None` is a no-op for fail-open paths.
+#[must_use = "AdmissionGuard must be held until the upload completes; binding to `_` reintroduces the TOCTOU bug"]
 pub struct AdmissionGuard {
     inner: Option<Reservation>,
 }
@@ -199,7 +205,11 @@ impl RedisArtifactClient {
     /// Reserve `incoming_bytes` against the admission budget. Blocks while
     /// `used + in_flight + incoming > budget`; caller must hold the guard
     /// until the write lands. Fail-open on INFO errors / unlimited mode.
+    /// Writes ≤ [`ADMISSION_BYPASS_BYTES`] skip the gate (see const docs).
     async fn check_admission(&self, key: &str, incoming_bytes: u64) -> Result<AdmissionGuard> {
+        if incoming_bytes <= ADMISSION_BYPASS_BYTES {
+            return Ok(AdmissionGuard { inner: None });
+        }
         let idx = get_connection_idx(key, self.connection_pools.len());
         let admission = &self.admission[idx];
         let noop = || AdmissionGuard { inner: None };

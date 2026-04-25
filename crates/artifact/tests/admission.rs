@@ -14,8 +14,7 @@ use sp1_cluster_artifact::redis::RedisArtifactClient;
 use sp1_prover_types::{Artifact, ArtifactClient, ArtifactType};
 
 const MB: usize = 1024 * 1024;
-/// Mirrors `RedisArtifactClient::MEMORY_BUDGET_FRACTION`.
-const MEMORY_BUDGET_PCT: u64 = 70;
+const MEMORY_BUDGET_PCT: u64 = (sp1_cluster_artifact::redis::MEMORY_BUDGET_FRACTION * 100.0) as u64;
 
 fn redis_url() -> String {
     std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".into())
