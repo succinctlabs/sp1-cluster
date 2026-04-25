@@ -127,6 +127,22 @@ pub enum BenchCommand {
         mode: ProofMode,
         #[arg(short, long, default_value_t = 1)]
         count: u32,
+        /// Skip the SDK's local simulation pass before submitting. The SDK
+        /// runs the entire program once on CPU just to populate cycle/gas
+        /// limits — that work is a duplicate of what cpu-node's CoreExecute
+        /// task does on the cluster side and adds 5-15s of bench-wall on
+        /// non-trivial programs. For a self-hosted gateway with no auction
+        /// or billing in the loop, the limits don't matter, so we send
+        /// u64::MAX and skip simulation by default.
+        #[arg(long, default_value_t = true)]
+        skip_simulation: bool,
+        /// Cycle limit to send when skip_simulation is set. Defaults to
+        /// u64::MAX (no cap) since the gateway doesn't bill or enforce.
+        #[arg(long, default_value_t = u64::MAX)]
+        cycle_limit: u64,
+        /// Gas limit to send when skip_simulation is set. Defaults to u64::MAX.
+        #[arg(long, default_value_t = u64::MAX)]
+        gas_limit: u64,
     },
 }
 
@@ -215,19 +231,32 @@ impl BenchCommand {
                 private_key,
                 mode,
                 count,
+                skip_simulation,
+                cycle_limit,
+                gas_limit,
             } => {
                 tracing::info!("Downloading program from s3://{}/{}...", bucket, s3_path);
                 let (elf, stdin) = Self::download_from_s3(bucket, s3_path, param).await?;
                 tracing::info!(
-                    "Running gateway benchmark for {:?} ({} run(s), mode={:?}, rpc={})",
+                    "Running gateway benchmark for {:?} ({} run(s), mode={:?}, rpc={}, skip_sim={})",
                     s3_path,
                     count,
                     mode,
-                    rpc_url
+                    rpc_url,
+                    skip_simulation,
                 );
-                let durations =
-                    Self::run_gateway_benchmark(elf, stdin, rpc_url, private_key, *mode, *count)
-                        .await?;
+                let durations = Self::run_gateway_benchmark(
+                    elf,
+                    stdin,
+                    rpc_url,
+                    private_key,
+                    *mode,
+                    *count,
+                    *skip_simulation,
+                    *cycle_limit,
+                    *gas_limit,
+                )
+                .await?;
                 for duration in durations {
                     if let Err(e) = Self::append_to_csv(
                         &format!("gateway/{s3_path}"),
@@ -278,6 +307,7 @@ impl BenchCommand {
     }
 
     /// Drive `sp1-sdk` through the network-gateway, timing each prove call.
+    #[allow(clippy::too_many_arguments)]
     async fn run_gateway_benchmark(
         elf: Vec<u8>,
         stdin: SP1Stdin,
@@ -285,6 +315,9 @@ impl BenchCommand {
         private_key: &str,
         mode: ProofMode,
         count: u32,
+        skip_simulation: bool,
+        cycle_limit: u64,
+        gas_limit: u64,
     ) -> Result<Vec<Duration>> {
         let prover = ProverClient::builder()
             .network_for(NetworkMode::Reserved)
@@ -306,10 +339,17 @@ impl BenchCommand {
         let mut durations = Vec::with_capacity(count as usize);
         for i in 0..count {
             let t_prove = Instant::now();
-            let proof = prover
+            let mut request = prover
                 .prove(&pk, stdin.clone())
                 .strategy(FulfillmentStrategy::Reserved)
-                .mode(sp1_mode)
+                .mode(sp1_mode);
+            if skip_simulation {
+                request = request
+                    .skip_simulation(true)
+                    .cycle_limit(cycle_limit)
+                    .gas_limit(gas_limit);
+            }
+            let proof = request
                 .await
                 .map_err(|e| eyre::eyre!("prove failed: {e}"))?;
             let prove_elapsed = t_prove.elapsed();
