@@ -15,35 +15,30 @@ use tracing::{instrument, Instrument};
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
 
-/// Conservative upper bound on a single shard artifact's size, used to derive
-/// the per-node permit count from `maxmemory`. Observed p99.9 on sepolia
-/// workloads is ~16 MB compressed; 20 MB covers the tail with ~25% headroom.
-///
-/// Override via `PROVE_SHARD_MAX_BYTES`.
+/// Conservative cap on a single shard artifact. Override via `PROVE_SHARD_MAX_BYTES`.
 const DEFAULT_SHARD_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
-/// Admission budget as fraction of `maxmemory`. Reservation is atomic so
-/// no overshoot possible; remaining 30% is headroom for allocator bloat.
+/// Admission ceiling as fraction of `maxmemory`. 30% headroom for allocator bloat.
 const MEMORY_BUDGET_FRACTION: f64 = 0.70;
 
-/// Floor on permit count per shard node. Applied when `maxmemory` is small,
-/// unreadable, or unbounded — prevents wedging the pipeline with zero permits
-/// and serves as the safe fallback when we can't compute a real pool size.
+/// Permit pool fraction. Gap below admission reserves room for non-permit-gated
+/// writes (proof outputs, markers); without it the input pool can saturate the
+/// admission ceiling and outputs deadlock.
+const INPUT_BUDGET_FRACTION: f64 = 0.50;
+
+/// Floor when `maxmemory` is unreadable / 0 — prevents wedging the pipeline.
 const MIN_PERMITS_PER_NODE: usize = 4;
 
-/// Bound on the first-acquire `INFO memory` round-trip. If Redis hangs we
-/// fall back to [`MIN_PERMITS_PER_NODE`] rather than stalling every shard
-/// upload behind a single uncached query.
+/// Bound on first-acquire `INFO memory`; falls back to the floor on timeout.
 const MAXMEMORY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Admission re-check interval while blocked.
-const ADMISSION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// Admission re-check cadence while blocked.
+const ADMISSION_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Hard cap on admission block time. Past this, fail permanently — Redis
-/// is stuck in a way backpressure can't recover from.
+/// Hard cap on admission wait — past this, fail permanently.
 const ADMISSION_MAX_WAIT: Duration = Duration::from_secs(30 * 60);
 
-/// Progress log throttle while blocked.
+/// Throttle for "blocking upload" warn logs while waiting.
 const ADMISSION_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 /// FNV-1a hash
@@ -177,13 +172,16 @@ impl RedisArtifactClient {
             .and_then(|s| s.parse::<u64>().ok())
             .filter(|&v| v > 0)
             .unwrap_or(DEFAULT_SHARD_MAX_BYTES);
-        let budget = (maxmemory as f64 * MEMORY_BUDGET_FRACTION) as u64;
-        let permits = ((budget / max_shard_bytes) as usize).max(MIN_PERMITS_PER_NODE);
+        // Permit pool sized against INPUT_BUDGET_FRACTION (< admission ceiling),
+        // so worst-case input fill leaves headroom for non-permit-gated writes.
+        let input_budget = (maxmemory as f64 * INPUT_BUDGET_FRACTION) as u64;
+        let permits = ((input_budget / max_shard_bytes) as usize).max(MIN_PERMITS_PER_NODE);
         tracing::info!(
             shard = idx,
             maxmemory_bytes = maxmemory,
             max_shard_bytes,
-            budget_fraction = MEMORY_BUDGET_FRACTION,
+            input_budget_fraction = INPUT_BUDGET_FRACTION,
+            admission_budget_fraction = MEMORY_BUDGET_FRACTION,
             permits,
             "ProveShard permit pool sized"
         );
