@@ -18,12 +18,12 @@ const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
 /// Conservative cap on a single shard artifact. Override via `PROVE_SHARD_MAX_BYTES`.
 const DEFAULT_SHARD_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
-/// Admission ceiling as fraction of `maxmemory`. 30% headroom for allocator bloat.
+/// Admission ceiling as fraction of `maxmemory`; remainder is headroom for allocator bloat.
 const MEMORY_BUDGET_FRACTION: f64 = 0.70;
 
-/// Permit pool fraction. Gap below admission reserves room for non-permit-gated
-/// writes (proof outputs, markers); without it the input pool can saturate the
-/// admission ceiling and outputs deadlock.
+/// Permit pool ceiling. Strictly less than `MEMORY_BUDGET_FRACTION`; the gap reserves
+/// room for non-permit-gated writes (proof outputs, markers) so they can land while
+/// the input pool is at saturation.
 const INPUT_BUDGET_FRACTION: f64 = 0.50;
 
 /// Floor when `maxmemory` is unreadable / 0 — prevents wedging the pipeline.
@@ -56,23 +56,17 @@ fn get_connection_idx(id: &str, num_redis_nodes: usize) -> usize {
     hash % num_redis_nodes
 }
 
-/// Per-node admission state. Serializes the check-then-reserve so
-/// concurrent callers can't collectively overshoot `maxmemory × budget`.
-///
-/// `in_flight` covers the TOCTOU gap between reserve and Redis-visible
-/// write: incremented under `decide` (async, spans INFO), decremented by
-/// [`AdmissionGuard::drop`] (sync) — hence the atomic.
+/// Per-node admission state. Mutex serializes the check-then-reserve;
+/// atomic carries reservations across the async-to-sync boundary
+/// (incremented under the lock, decremented in [`AdmissionGuard::drop`]).
 #[derive(Default)]
 struct Admission {
     decide: Mutex<()>,
     in_flight: AtomicU64,
 }
 
-/// RAII token from [`RedisArtifactClient::check_admission`]; must outlive
-/// the upload so reserved bytes remain counted until the write lands (or
-/// fails). Dropping early under-counts `in_flight`.
-///
-/// `None` = no-op on fail-open paths (INFO failed, `maxmemory=0`).
+/// RAII reservation token. Must outlive the upload so `in_flight` stays
+/// counted until the write lands; `None` is a no-op for fail-open paths.
 pub struct AdmissionGuard {
     inner: Option<Reservation>,
 }
@@ -141,13 +135,8 @@ impl RedisArtifactClient {
             .clone()
     }
 
-    /// Derive the permit count from `maxmemory` on shard `idx`.
-    /// Returns [`MIN_PERMITS_PER_NODE`] if the query fails, times out, or
-    /// reports `maxmemory=0` (unlimited) — we don't fabricate a maxmemory we
-    /// can't measure.
-    ///
-    /// Uses `INFO memory` rather than `CONFIG GET maxmemory` because managed
-    /// Redis (AWS ElastiCache, MemoryDB) blocks `CONFIG` for security.
+    /// Permit count for shard `idx`, derived from `maxmemory`. Falls back to
+    /// [`MIN_PERMITS_PER_NODE`] when `maxmemory` is unreadable or 0.
     async fn compute_permits_for_node(&self, idx: usize) -> usize {
         let query = tokio::time::timeout(MAXMEMORY_QUERY_TIMEOUT, self.query_memory(idx)).await;
         let maxmemory = match query {
@@ -173,8 +162,6 @@ impl RedisArtifactClient {
             .and_then(|s| s.parse::<u64>().ok())
             .filter(|&v| v > 0)
             .unwrap_or(DEFAULT_SHARD_MAX_BYTES);
-        // Permit pool sized against INPUT_BUDGET_FRACTION (< admission ceiling),
-        // so worst-case input fill leaves headroom for non-permit-gated writes.
         let input_budget = (maxmemory as f64 * INPUT_BUDGET_FRACTION) as u64;
         let permits = ((input_budget / max_shard_bytes) as usize).max(MIN_PERMITS_PER_NODE);
         tracing::info!(
@@ -209,12 +196,9 @@ impl RedisArtifactClient {
         Ok((parse("used_memory:"), parse("maxmemory:")))
     }
 
-    /// Atomically reserve `incoming_bytes`. Blocks until
-    /// `used + in_flight + incoming <= budget`, serialized per shard by
-    /// [`Admission::decide`]. Caller must hold the returned guard until
-    /// the write lands or fails — early drop corrupts `in_flight`.
-    ///
-    /// Capped by [`ADMISSION_MAX_WAIT`]. Fail-open on INFO errors.
+    /// Reserve `incoming_bytes` against the admission budget. Blocks while
+    /// `used + in_flight + incoming > budget`; caller must hold the guard
+    /// until the write lands. Fail-open on INFO errors / unlimited mode.
     async fn check_admission(&self, key: &str, incoming_bytes: u64) -> Result<AdmissionGuard> {
         let idx = get_connection_idx(key, self.connection_pools.len());
         let admission = &self.admission[idx];
@@ -223,8 +207,6 @@ impl RedisArtifactClient {
         let mut last_log = start;
         let mut waiting = false;
         loop {
-            // Serialize the check-then-reserve so concurrent callers see
-            // each other's reservations via `in_flight` before committing.
             let guard = admission.decide.lock().await;
             let (used, max) = match self.query_memory(idx).await {
                 Ok((Some(used), Some(max))) if max > 0 => (used, max),
@@ -384,8 +366,6 @@ impl RedisArtifactClient {
         key: &str,
         serialized: &[u8],
     ) -> Result<(), backoff::Error<anyhow::Error>> {
-        // Admission is checked in `upload_to_transport` outside the
-        // TRANSFER_TIMEOUT wrapper.
         let mut conn = self.get_redis_connection(key).await?;
         let now = std::time::Instant::now();
         let key = key.to_string();
@@ -405,9 +385,8 @@ impl RedisArtifactClient {
             let chunks = serialized.chunks(CHUNK_SIZE);
             let mut join_set = JoinSet::new();
 
-            // HSET + EXPIRE, not HSETEX: HSETEX needs Redis 8+ (ElastiCache
-            // tops out at 7.1). Whole-hash TTL ≡ per-field here — one artifact
-            // per hash, all chunks expire together.
+            // HSET + EXPIRE because HSETEX isn't available on managed Redis.
+            // One artifact = one hash, so whole-hash TTL ≡ per-field TTL.
             for (chunk_idx, chunk) in chunks.enumerate() {
                 let key = key.clone();
                 let chunk = chunk.to_vec();
@@ -440,19 +419,17 @@ impl RedisArtifactClient {
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl RedisArtifactClient {
-    /// Admission-wait, then backoff+timeout upload.
-    ///
-    /// Admission sits outside `TRANSFER_TIMEOUT` so minute-long block-waits
-    /// don't trip the per-attempt 60s timeout. Retries reuse the initial
-    /// admit (blocking for minutes on a transient upload error is worse).
+    /// Admit (block on backpressure), then backoff+timeout the actual write.
+    /// Admission sits outside `TRANSFER_TIMEOUT` so block-waits don't trip
+    /// the per-attempt timeout; retries reuse the initial reservation.
     async fn upload_to_transport(
         &self,
         artifact_type: ArtifactType,
         artifact_id: &str,
         data: &[u8],
     ) -> Result<()> {
-        // `_guard` binds to scope end (holds until write completes).
-        // Bare `_` would drop immediately — re-introducing the TOCTOU bug.
+        // `_guard` (not `_`) binds to scope end so the reservation is held
+        // for the full duration of the upload, not just the admission call.
         let _guard = self.check_admission(artifact_id, data.len() as u64).await?;
 
         backoff_retry(self.backoff.clone(), || async {
@@ -493,9 +470,8 @@ impl RedisArtifactClient {
 }
 
 impl ArtifactClient for RedisArtifactClient {
-    /// Reserve a shard slot on the Redis node that will host `artifact`.
-    /// Blocks when the node's permit pool is exhausted. The returned
-    /// [`ShardPermit`] must be held until the artifact is consumed/deleted.
+    /// Reserve a permit on the node that will host `artifact`. Held until
+    /// the artifact is deleted; release frees the slot for the next caller.
     async fn acquire_shard_permit(&self, artifact: &impl ArtifactId) -> ShardPermit {
         let num_nodes = self.connection_pools.len();
         if num_nodes == 0 {

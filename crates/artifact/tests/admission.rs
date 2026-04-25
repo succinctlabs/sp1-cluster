@@ -193,8 +193,8 @@ async fn output_admits_when_inputs_at_full_pool() {
     }
     eprintln!("acquired {} permits before saturation", permits.len());
 
-    // Tight per-upload timeout: if pool sizing is wrong, admission deadlocks
-    // and we fail fast instead of waiting 30 min for ADMISSION_MAX_WAIT.
+    // Tight per-upload timeout: surfaces a sizing regression as a fast
+    // panic instead of letting it cook until ADMISSION_MAX_WAIT.
     for i in 0..permits.len() {
         let a: Artifact = format!("input-{i}").into();
         tokio::time::timeout(
