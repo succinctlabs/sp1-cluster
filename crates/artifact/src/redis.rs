@@ -35,8 +35,9 @@ const MAXMEMORY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Admission re-check cadence while blocked.
 const ADMISSION_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Hard cap on admission wait — past this, fail permanently.
-const ADMISSION_MAX_WAIT: Duration = Duration::from_secs(30 * 60);
+/// Hard cap on admission wait — past this, fail fast so a stuck proof
+/// frees the cluster instead of stalling for tens of minutes.
+const ADMISSION_MAX_WAIT: Duration = Duration::from_secs(2 * 60);
 
 /// Throttle for "blocking upload" warn logs while waiting.
 const ADMISSION_LOG_INTERVAL: Duration = Duration::from_secs(10);
