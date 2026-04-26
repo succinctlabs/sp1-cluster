@@ -85,6 +85,11 @@ type ActiveTask = (TaskData, JoinHandle<()>, Instant);
 /// killed after running for 6 hours.
 const TASK_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 
+/// Drain bound: tasks still running at this point are cancelled mid-execution and
+/// reassigned by the coordinator on heartbeat timeout. Stays under ECS `stopTimeout`
+/// (3600s) so we exit cleanly instead of being SIGKILLed.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     std::env::set_var("PROVER_CORE_CACHE_SIZE", "1");
@@ -109,14 +114,20 @@ async fn main() -> Result<()> {
     metrics.num_gpu_workers.set(1.0);
 
     ctrlc::set_handler(move || {
-        let is_shutting_down = shutting_down_clone.load(Ordering::Relaxed);
-        if !is_shutting_down {
+        // Atomic CAS so two near-simultaneous signals can't both enter the first branch.
+        let was_first_signal = shutting_down_clone
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        if was_first_signal {
             println!(
                 "\nReceived signal, waiting for tasks to finish... (Ctrl+C again to force exit)"
             );
-            shutting_down_clone.store(true, Ordering::Relaxed);
-            shutdown_tx.send(true).unwrap();
-            metrics_shutdown_tx.send(()).unwrap();
+            // No receivers means `run_worker` already unwound — force-exit.
+            if shutdown_tx.send(true).is_err() {
+                eprintln!("shutdown channel closed; forcing exit");
+                std::process::exit(1);
+            }
+            let _ = metrics_shutdown_tx.send(());
         } else {
             std::process::exit(1);
         }
@@ -428,6 +439,8 @@ async fn run_worker<A: ArtifactClient>(
                 let mut last_heartbeat = Instant::now();
                 let mut heartbeat_ticker = tokio::time::interval(Duration::from_secs(5));
                 let mut closed = false;
+                let mut drain_started_at: Option<Instant> = None;
+                let mut last_drain_log_count: Option<usize> = None;
                 let tasks = tasks.clone();
                 loop {
                     tokio::select! {
@@ -562,6 +575,29 @@ async fn run_worker<A: ArtifactClient>(
                                 tracing::info!("Worker is closed and has no tasks, breaking out of loop");
                                 break;
                             }
+                            if let Some(started) = drain_started_at {
+                                let elapsed = started.elapsed();
+                                let in_flight = tasks.len();
+                                if elapsed > DRAIN_TIMEOUT {
+                                    let stuck: Vec<_> = tasks.iter().map(|e| e.key().clone()).collect();
+                                    tracing::warn!(
+                                        ?stuck,
+                                        "Drain timeout ({:?}) exceeded with {} task(s) still running; forcing exit",
+                                        DRAIN_TIMEOUT,
+                                        in_flight,
+                                    );
+                                    break;
+                                }
+                                // Log only on count change to avoid spamming every tick.
+                                if last_drain_log_count != Some(in_flight) {
+                                    tracing::info!(
+                                        "Draining: {} task(s) in flight, {:?} elapsed",
+                                        in_flight,
+                                        elapsed
+                                    );
+                                    last_drain_log_count = Some(in_flight);
+                                }
+                            }
                             if last_heartbeat.elapsed() > Duration::from_secs(10) {
                                 tracing::error!("Heartbeat timed out, reconnecting...");
                                 match worker_client.open().await {
@@ -626,12 +662,17 @@ async fn run_worker<A: ArtifactClient>(
                         }
                         _ = shutdown_rx.changed() => {
                             closed = true;
+                            drain_started_at = Some(Instant::now());
+                            // Stops new assignments; does not reassign in-flight (heartbeat timeout does).
                             if let Err(e) = worker_client.close(CloseRequest {
                                 worker_id: worker_id.clone(),
                             }).await {
                                 tracing::error!("Failed to close worker: {:?}", e);
                             }
-                            tracing::info!("Worker closed");
+                            tracing::info!(
+                                "Shutdown signal received; draining {} in-flight task(s)",
+                                tasks.len()
+                            );
                         }
                     }
                 }
