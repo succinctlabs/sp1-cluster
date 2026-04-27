@@ -13,8 +13,8 @@ use tracing::info;
 
 use crate::auth::Auth;
 use crate::ids::{
-    artifact_id_from_uri, artifact_uri, mint_request_id, proof_id_from_request_id,
-    program_artifact_id,
+    artifact_id_from_uri, artifact_uri, mint_request_id, program_artifact_id,
+    proof_id_from_request_id,
 };
 use crate::program_store::ProgramStore;
 use crate::status::{
@@ -1532,12 +1532,11 @@ mod tests {
         // Warm copy in cluster store under the deterministic id (so subsequent
         // request_proof calls can skip the upload).
         let det_id = program_artifact_id(&vk_hash);
-        assert!(
-            svc.client
-                .exists(&det_id, ArtifactType::Program)
-                .await
-                .unwrap()
-        );
+        assert!(svc
+            .client
+            .exists(&det_id, ArtifactType::Program)
+            .await
+            .unwrap());
         let warm_bytes = svc
             .client
             .download_raw(&det_id, ArtifactType::Program)
@@ -1546,12 +1545,11 @@ mod tests {
         assert_eq!(warm_bytes, elf);
 
         // Orphaned SDK-uploaded artifact is cleaned up.
-        assert!(
-            !svc.client
-                .exists(&orphan_artifact_id, ArtifactType::Program)
-                .await
-                .unwrap()
-        );
+        assert!(!svc
+            .client
+            .exists(&orphan_artifact_id, ArtifactType::Program)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

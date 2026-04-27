@@ -98,10 +98,13 @@ impl ProgramStore for FilesystemProgramStore {
     }
 }
 
+/// `(vk_bytes, elf_bytes)` keyed by `vk_hash`.
+type ProgramMap = std::collections::HashMap<Vec<u8>, (Vec<u8>, Vec<u8>)>;
+
 /// In-memory `ProgramStore` — useful for tests and for transient deployments
 /// where program durability across restarts isn't required.
 pub struct InMemoryProgramStore {
-    inner: tokio::sync::Mutex<std::collections::HashMap<Vec<u8>, (Vec<u8>, Vec<u8>)>>,
+    inner: tokio::sync::Mutex<ProgramMap>,
 }
 
 impl InMemoryProgramStore {
@@ -189,10 +192,7 @@ mod tests {
         let store = InMemoryProgramStore::new();
         let vk_hash = vec![0xaa; 4];
         assert!(!store.exists(&vk_hash).await.unwrap());
-        store
-            .put(&vk_hash, b"vk", b"elf")
-            .await
-            .unwrap();
+        store.put(&vk_hash, b"vk", b"elf").await.unwrap();
         let (vk, elf) = store.get(&vk_hash).await.unwrap().unwrap();
         assert_eq!(vk, b"vk");
         assert_eq!(elf, b"elf");
