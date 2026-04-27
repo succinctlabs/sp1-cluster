@@ -40,3 +40,7 @@ dependencies:
     repository: "file://../bidder"
     version: "*"
     condition: bidder.enabled
+  - name: network-gateway
+    repository: "file://../network-gateway"
+    version: "*"
+    condition: network-gateway.enabled

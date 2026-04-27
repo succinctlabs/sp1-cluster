@@ -193,6 +193,38 @@ fulfiller:
   # tolerations: []
   # affinity: {}
 
+network-gateway:
+  # The gateway terminates the SDK's ProverNetwork.Base + ArtifactStore RPCs
+  # and translates them into ClusterService calls — set enabled=true if you
+  # want to drive this cluster with sp1-sdk's NetworkProver.
+  enabled: false
+  extraEnv:
+    GATEWAY_GRPC_ADDR: 0.0.0.0:50061
+    GATEWAY_HTTP_ADDR: 0.0.0.0:8081
+    # MUST be set to a URL reachable BY THE SDK CLIENT, not by other pods.
+    # Example: https://gw.example.com
+    GATEWAY_PUBLIC_HTTP_URL: http://network-gateway-http:8081
+    GATEWAY_CLUSTER_RPC: http://api-grpc:50051
+    GATEWAY_ARTIFACT_STORE: redis
+    GATEWAY_REDIS_NODES:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: REDIS_NODES
+    # `memory` (default) keeps registered programs in process memory; switch
+    # to `fs` with a PVC mounted at /var/lib/sp1-gateway/programs for durable
+    # multi-restart behavior.
+    GATEWAY_PROGRAM_STORE: memory
+    # GATEWAY_AUTH_MODE: verify
+    # GATEWAY_AUTH_ALLOWLIST: 0xabc...,0xdef...
+  image:
+    tag: "base-v2.1.5"
+  imagePullSecrets:
+    - name: ghcr-secret
+  # nodeSelector: {}
+  # tolerations: []
+  # affinity: {}
+
 bidder:
   # The bidder is only necessary for bidding on proofs on the Prover Network.
   enabled: false

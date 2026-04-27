@@ -1,0 +1,8 @@
+apiVersion: v2
+name: network-gateway
+description: SDK-compatible ProverNetwork.Base + ArtifactStore gateway for self-hosted SP1 clusters.
+icon: https://testnet.succinct.xyz/images/succinct-arcade-logo.svg
+
+type: application
+
+version: 0.1.0

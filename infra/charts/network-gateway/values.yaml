@@ -1,0 +1,38 @@
+appName: network-gateway
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/succinctlabs/sp1-cluster
+  pullPolicy: IfNotPresent
+  tag: base-latest
+
+# Gateway exposes two ports: gRPC (50061) for the SDK's ProverNetwork +
+# ArtifactStore RPCs, and HTTP (8081) for artifact PUT/GET. Both are hit
+# directly by SDK callers. Wrap with an Ingress / TLS terminator when
+# exposing publicly.
+services:
+  - name: grpc
+    type: ClusterIP
+    port: 50061
+    targetPort: 50061
+  - name: http
+    type: ClusterIP
+    port: 8081
+    targetPort: 8081
+
+extraEnv: {}
+
+extraEnvFrom: []
+
+resources:
+  requests: {}
+  limits: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+imagePullSecrets: []

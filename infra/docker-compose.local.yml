@@ -134,6 +134,25 @@ services:
         - private_pull_token
     command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
 
+  network-gateway:
+    extends:
+      file: docker-compose.yml
+      service: network-gateway
+    image: sp1-cluster-local:network-gateway
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      secrets:
+        - private_pull_token
+    command: ["/bin/sh", "-c", "/network-gateway"]
+    environment:
+      - OTLP_ENDPOINT=http://alloy:4317
+      - RUST_LOG=info
+    depends_on:
+      - alloy
+      - api
+      - redis
+
   # gpu1:
   #   environment:
   #     - CUDA_VISIBLE_DEVICES=1
