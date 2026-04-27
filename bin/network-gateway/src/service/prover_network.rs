@@ -12,7 +12,10 @@ use tonic::{Request, Response, Status};
 use tracing::info;
 
 use crate::auth::Auth;
-use crate::ids::{artifact_id_from_uri, artifact_uri, mint_request_id, proof_id_from_request_id};
+use crate::ids::{
+    artifact_id_from_uri, artifact_uri, mint_request_id, proof_id_from_request_id,
+    program_artifact_id,
+};
 use crate::program_store::ProgramStore;
 use crate::status::{
     cluster_execution_filter, cluster_fulfillment_filter, execution_from_cluster,
@@ -171,37 +174,39 @@ where
 
         let requester = self.auth.authorize(&body.encode_to_vec(), &req.signature)?;
 
-        let (_vk_bytes, elf_bytes) = self
-            .program_store
-            .get(&body.vk_hash)
-            .await
-            .map_err(|e| Status::internal(format!("program store load failed: {e}")))?
-            .ok_or_else(|| {
-                Status::failed_precondition(format!(
-                    "program not registered for vk_hash {}",
-                    hex::encode(&body.vk_hash)
-                ))
-            })?;
-
         let stdin_artifact_id = artifact_id_from_uri(&body.stdin_uri)
             .ok_or_else(|| {
                 Status::invalid_argument(format!("invalid stdin_uri: {}", body.stdin_uri))
             })?
             .to_string();
 
-        // Re-upload the durable ELF into the cluster's ephemeral artifact store
-        // under a fresh id. The cluster pipeline ref-counts and may evict this
-        // artifact after the proof completes — that's fine because the
-        // authoritative copy lives in `program_store`.
-        let program_artifact = self
+        // Hot path: address the ELF by a deterministic id derived from vk_hash.
+        // While the cluster store still holds the bytes (Redis TTL = 4h), every
+        // subsequent prove() is a single `exists()` ping — no upload at all.
+        // Only on TTL miss do we re-upload from the durable `ProgramStore`.
+        let program_artifact_id = program_artifact_id(&body.vk_hash);
+        let warm = self
             .client
-            .create_artifact()
-            .map_err(|e| Status::internal(format!("create program artifact failed: {e}")))?;
-        let program_artifact_id = program_artifact.to_id();
-        self.client
-            .upload_raw(&program_artifact_id, ArtifactType::Program, elf_bytes)
+            .exists(&program_artifact_id, ArtifactType::Program)
             .await
-            .map_err(|e| Status::internal(format!("upload program artifact failed: {e}")))?;
+            .map_err(|e| Status::internal(format!("artifact exists check failed: {e}")))?;
+        if !warm {
+            let (_vk_bytes, elf_bytes) = self
+                .program_store
+                .get(&body.vk_hash)
+                .await
+                .map_err(|e| Status::internal(format!("program store load failed: {e}")))?
+                .ok_or_else(|| {
+                    Status::failed_precondition(format!(
+                        "program not registered for vk_hash {}",
+                        hex::encode(&body.vk_hash)
+                    ))
+                })?;
+            self.client
+                .upload_raw(&program_artifact_id, ArtifactType::Program, elf_bytes)
+                .await
+                .map_err(|e| Status::internal(format!("upload program artifact failed: {e}")))?;
+        }
 
         let request_id = mint_request_id();
         let proof_id = proof_id_from_request_id(&request_id);
@@ -603,8 +608,11 @@ where
 
         // The SDK uploads ELF bytes to the gateway's artifact store immediately
         // before calling `create_program`. Pull those bytes out of the ephemeral
-        // store and persist them in the durable program store keyed by vk_hash.
-        let program_artifact_id = artifact_id_from_uri(&body.program_uri)
+        // store and persist them in (1) the durable program store keyed by
+        // `vk_hash`, and (2) the cluster artifact store under a deterministic
+        // id so subsequent `request_proof` calls can skip the re-upload while
+        // the ELF is still warm.
+        let orphan_artifact_id = artifact_id_from_uri(&body.program_uri)
             .ok_or_else(|| {
                 Status::invalid_argument(format!(
                     "create_program: invalid program_uri {}",
@@ -615,7 +623,7 @@ where
 
         let elf_bytes = self
             .client
-            .download_raw(&program_artifact_id, ArtifactType::Program)
+            .download_raw(&orphan_artifact_id, ArtifactType::Program)
             .await
             .map_err(|e| {
                 Status::failed_precondition(format!(
@@ -623,15 +631,30 @@ where
                     body.program_uri
                 ))
             })?;
+        let elf_len = elf_bytes.len();
 
         self.program_store
             .put(&body.vk_hash, &body.vk, &elf_bytes)
             .await
             .map_err(|e| Status::internal(format!("program store put failed: {e}")))?;
 
+        let det_id = program_artifact_id(&body.vk_hash);
+        self.client
+            .upload_raw(&det_id, ArtifactType::Program, elf_bytes)
+            .await
+            .map_err(|e| Status::internal(format!("warm upload failed: {e}")))?;
+
+        // The SDK-uploaded artifact is now redundant — the authoritative copy
+        // lives in `ProgramStore` and the warm copy lives under `det_id`.
+        self.client
+            .try_delete(&orphan_artifact_id, ArtifactType::Program)
+            .await
+            .ok();
+
         info!(
             vk_hash = %hex::encode(&body.vk_hash),
-            elf_len = elf_bytes.len(),
+            elf_len,
+            program_artifact_id = det_id,
             %requester,
             "create_program"
         );
@@ -1463,14 +1486,14 @@ mod tests {
         let vk_hash = vec![0xaa, 0xbb, 0xcc, 0xdd];
         let vk = b"vk-blob".to_vec();
         let elf = b"\x7fELF fake program bytes".to_vec();
-        let program_artifact_id = "artifact_01abcdef".to_string();
-        let program_uri = format!("http://gw.test/artifacts/program/{program_artifact_id}");
+        let orphan_artifact_id = "artifact_01abcdef".to_string();
+        let program_uri = format!("http://gw.test/artifacts/program/{orphan_artifact_id}");
 
         // Mirror what the SDK does: stage the ELF in the gateway artifact store
         // before calling create_program, so the gateway can copy it into the
-        // durable program store.
+        // durable program store and warm the deterministic id.
         svc.client
-            .upload_raw(&program_artifact_id, ArtifactType::Program, elf.clone())
+            .upload_raw(&orphan_artifact_id, ArtifactType::Program, elf.clone())
             .await
             .unwrap();
 
@@ -1501,11 +1524,34 @@ mod tests {
             format!("http://gw.test/programs/{}", hex::encode(&vk_hash))
         );
 
-        // The durable store should hold the ELF independently of the cluster
-        // artifact's lifecycle.
+        // Durable copy in ProgramStore.
         let (got_vk, got_elf) = svc.program_store.get(&vk_hash).await.unwrap().unwrap();
         assert_eq!(got_vk, vk);
         assert_eq!(got_elf, elf);
+
+        // Warm copy in cluster store under the deterministic id (so subsequent
+        // request_proof calls can skip the upload).
+        let det_id = program_artifact_id(&vk_hash);
+        assert!(
+            svc.client
+                .exists(&det_id, ArtifactType::Program)
+                .await
+                .unwrap()
+        );
+        let warm_bytes = svc
+            .client
+            .download_raw(&det_id, ArtifactType::Program)
+            .await
+            .unwrap();
+        assert_eq!(warm_bytes, elf);
+
+        // Orphaned SDK-uploaded artifact is cleaned up.
+        assert!(
+            !svc.client
+                .exists(&orphan_artifact_id, ArtifactType::Program)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

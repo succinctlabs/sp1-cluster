@@ -55,6 +55,18 @@ pub fn artifact_id_from_uri(uri: &str) -> Option<&str> {
     }
 }
 
+/// Deterministic cluster artifact id for a program ELF, derived from `vk_hash`.
+///
+/// The cluster artifact store is keyed by opaque strings, so we can sidestep
+/// `create_artifact()` minting and address the same ELF across many proofs.
+/// As long as the SDK proves at least once per Redis TTL window (4h), the ELF
+/// stays warm and `request_proof` can skip the re-upload entirely. On a cache
+/// miss `request_proof` re-uploads from `ProgramStore` under the same id,
+/// re-warming for subsequent calls.
+pub fn program_artifact_id(vk_hash: &[u8]) -> String {
+    format!("program_{}", hex::encode(vk_hash))
+}
+
 /// Maximum byte-length for a request id.
 ///
 /// The SDK decodes the returned `request_id` via `B256::from_slice` (see
