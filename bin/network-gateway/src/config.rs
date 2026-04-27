@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Parser;
 
 use crate::auth::AuthMode;
@@ -60,4 +62,16 @@ pub struct Config {
     /// Comma-separated list of 0x-prefixed addresses. Required when `auth_mode=allowlist`.
     #[arg(long, env = "GATEWAY_AUTH_ALLOWLIST")]
     pub auth_allowlist: Option<String>,
+
+    /// Program-store backend. `memory` (default) keeps registered programs
+    /// in process memory — fine for single-user / self-hosted setups, but
+    /// SDK clients will re-register their programs after a gateway restart.
+    /// Use `fs` for durable on-disk storage.
+    #[arg(long, env = "GATEWAY_PROGRAM_STORE", default_value = "memory")]
+    pub program_store: String,
+
+    /// Directory used by the `fs` program store. Required when
+    /// `program_store=fs`; created on startup if missing.
+    #[arg(long, env = "GATEWAY_PROGRAM_STORE_DIR")]
+    pub program_store_dir: Option<PathBuf>,
 }

@@ -2,7 +2,7 @@ pub mod artifact_http;
 pub mod auth;
 pub mod config;
 pub mod ids;
-pub mod program_registry;
+pub mod program_store;
 pub mod service;
 pub mod status;
 
@@ -22,6 +22,7 @@ use tracing::{info, warn};
 use crate::artifact_http::ArtifactHttpState;
 use crate::auth::{parse_allowlist, Auth, AuthMode};
 use crate::config::Config;
+use crate::program_store::{FilesystemProgramStore, InMemoryProgramStore, ProgramStore};
 use crate::service::artifact_store::ArtifactStoreImpl;
 use crate::service::prover_network::ProverNetworkImpl;
 
@@ -37,11 +38,13 @@ where
             anyhow::anyhow!("failed to connect to cluster RPC {}: {e}", cfg.cluster_rpc)
         })?;
     let auth = build_auth(&cfg)?;
+    let program_store = build_program_store(&cfg)?;
     serve(
         cfg,
         client,
         cluster,
         auth,
+        program_store,
         shutdown_signal(),
         shutdown_signal(),
     )
@@ -57,6 +60,7 @@ pub async fn serve<A, FG, FH>(
     client: A,
     cluster: ClusterServiceClient,
     auth: Auth,
+    program_store: Arc<dyn ProgramStore>,
     grpc_shutdown: FG,
     http_shutdown: FH,
 ) -> Result<()>
@@ -93,6 +97,7 @@ where
         cfg.public_http_url.clone(),
         balance_amount,
         auth,
+        program_store,
     ))
     .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE)
     .max_encoding_message_size(MAX_GRPC_MESSAGE_SIZE);
@@ -126,6 +131,25 @@ where
     grpc_task.await.ok();
     info!("network-gateway shut down cleanly");
     Ok(())
+}
+
+pub fn build_program_store(cfg: &Config) -> Result<Arc<dyn ProgramStore>> {
+    match cfg.program_store.as_str() {
+        "memory" => {
+            info!("program store: in-memory (programs lost on gateway restart)");
+            Ok(Arc::new(InMemoryProgramStore::new()))
+        }
+        "fs" => {
+            let dir = cfg
+                .program_store_dir
+                .clone()
+                .context("GATEWAY_PROGRAM_STORE_DIR is required when program_store=fs")?;
+            let store = FilesystemProgramStore::new(dir.clone())?;
+            info!(dir = %dir.display(), "program store: filesystem");
+            Ok(Arc::new(store))
+        }
+        other => anyhow::bail!("unknown GATEWAY_PROGRAM_STORE={other} (expected memory or fs)"),
+    }
 }
 
 pub fn build_auth(cfg: &Config) -> Result<Auth> {

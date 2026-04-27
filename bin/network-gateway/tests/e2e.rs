@@ -18,7 +18,12 @@ use sp1_cluster_common::{
         cluster_service_server::{ClusterService, ClusterServiceServer},
     },
 };
-use sp1_cluster_network_gateway::{auth::Auth, config::Config, serve};
+use sp1_cluster_network_gateway::{
+    auth::Auth,
+    config::Config,
+    program_store::{InMemoryProgramStore, ProgramStore},
+    serve,
+};
 use sp1_sdk::network::proto::{
     artifact::{
         artifact_store_client::ArtifactStoreClient, ArtifactType as SdkArtifactType,
@@ -215,7 +220,10 @@ async fn e2e_register_program_request_proof_download() {
         balance_amount: None,
         auth_mode: sp1_cluster_network_gateway::auth::AuthMode::None,
         auth_allowlist: None,
+        program_store: "memory".into(),
+        program_store_dir: None,
     };
+    let program_store: Arc<dyn ProgramStore> = Arc::new(InMemoryProgramStore::new());
     let (gw_grpc_shutdown_tx, gw_grpc_shutdown_rx) = oneshot::channel::<()>();
     let (gw_http_shutdown_tx, gw_http_shutdown_rx) = oneshot::channel::<()>();
     let gateway_artifacts = artifacts.clone();
@@ -225,6 +233,7 @@ async fn e2e_register_program_request_proof_download() {
             gateway_artifacts,
             cluster,
             Auth::default(),
+            program_store,
             async move {
                 gw_grpc_shutdown_rx.await.ok();
             },

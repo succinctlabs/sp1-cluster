@@ -6,13 +6,14 @@ use sp1_sdk::network::proto::base::network::prover_network_server::ProverNetwork
 use sp1_sdk::network::proto::base::types as pb;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::info;
 
 use crate::auth::Auth;
 use crate::ids::{artifact_id_from_uri, artifact_uri, mint_request_id, proof_id_from_request_id};
-use crate::program_registry::{self, ProgramSidecar};
+use crate::program_store::ProgramStore;
 use crate::status::{
     cluster_execution_filter, cluster_fulfillment_filter, execution_from_cluster,
     fulfillment_from_cluster,
@@ -24,6 +25,7 @@ pub struct ProverNetworkImpl<A> {
     public_http_url: String,
     balance_amount: String,
     auth: Auth,
+    program_store: Arc<dyn ProgramStore>,
     nonces: DashMap<Vec<u8>, AtomicU64>,
 }
 
@@ -34,6 +36,7 @@ impl<A> ProverNetworkImpl<A> {
         public_http_url: String,
         balance_amount: String,
         auth: Auth,
+        program_store: Arc<dyn ProgramStore>,
     ) -> Self {
         Self {
             client,
@@ -41,8 +44,14 @@ impl<A> ProverNetworkImpl<A> {
             public_http_url,
             balance_amount,
             auth,
+            program_store,
             nonces: DashMap::new(),
         }
+    }
+
+    fn program_uri_for(&self, vk_hash: &[u8]) -> String {
+        let base = self.public_http_url.trim_end_matches('/');
+        format!("{base}/programs/{}", hex::encode(vk_hash))
     }
 
     fn next_nonce(&self, address: &[u8]) -> u64 {
@@ -162,9 +171,11 @@ where
 
         let requester = self.auth.authorize(&body.encode_to_vec(), &req.signature)?;
 
-        let sidecar = program_registry::load(&self.client, &body.vk_hash)
+        let (_vk_bytes, elf_bytes) = self
+            .program_store
+            .get(&body.vk_hash)
             .await
-            .map_err(|e| Status::internal(format!("sidecar load failed: {e}")))?
+            .map_err(|e| Status::internal(format!("program store load failed: {e}")))?
             .ok_or_else(|| {
                 Status::failed_precondition(format!(
                     "program not registered for vk_hash {}",
@@ -178,6 +189,20 @@ where
             })?
             .to_string();
 
+        // Re-upload the durable ELF into the cluster's ephemeral artifact store
+        // under a fresh id. The cluster pipeline ref-counts and may evict this
+        // artifact after the proof completes — that's fine because the
+        // authoritative copy lives in `program_store`.
+        let program_artifact = self
+            .client
+            .create_artifact()
+            .map_err(|e| Status::internal(format!("create program artifact failed: {e}")))?;
+        let program_artifact_id = program_artifact.to_id();
+        self.client
+            .upload_raw(&program_artifact_id, ArtifactType::Program, elf_bytes)
+            .await
+            .map_err(|e| Status::internal(format!("upload program artifact failed: {e}")))?;
+
         let request_id = mint_request_id();
         let proof_id = proof_id_from_request_id(&request_id);
         let proof_artifact = self
@@ -188,7 +213,7 @@ where
 
         let create = cluster_pb::ProofRequestCreateRequest {
             proof_id: proof_id.clone(),
-            program_artifact_id: sidecar.program_artifact_id.clone(),
+            program_artifact_id: program_artifact_id.clone(),
             stdin_artifact_id,
             options_artifact_id: Some(body.mode.to_string()),
             proof_artifact_id: Some(proof_artifact_id.clone()),
@@ -205,7 +230,7 @@ where
 
         info!(
             proof_id,
-            program_artifact_id = sidecar.program_artifact_id,
+            program_artifact_id,
             proof_artifact_id,
             %requester,
             "request_proof"
@@ -535,9 +560,11 @@ where
         request: Request<pb::GetProgramRequest>,
     ) -> Result<Response<pb::GetProgramResponse>, Status> {
         let req = request.into_inner();
-        let sidecar = program_registry::load(&self.client, &req.vk_hash)
+        let (vk_bytes, _elf_bytes) = self
+            .program_store
+            .get(&req.vk_hash)
             .await
-            .map_err(|e| Status::internal(format!("sidecar load failed: {e}")))?
+            .map_err(|e| Status::internal(format!("program store load failed: {e}")))?
             .ok_or_else(|| {
                 // The SDK's `NetworkClient::get_program` treats ANY Ok response as
                 // "program already registered"; only a NotFound status routes it
@@ -552,12 +579,8 @@ where
 
         let program = pb::Program {
             vk_hash: req.vk_hash.clone(),
-            vk: sidecar.vk_bytes,
-            program_uri: artifact_uri(
-                &self.public_http_url,
-                ArtifactType::Program,
-                &sidecar.program_artifact_id,
-            ),
+            vk: vk_bytes,
+            program_uri: self.program_uri_for(&req.vk_hash),
             name: None,
             owner: vec![],
             created_at: 0,
@@ -578,6 +601,9 @@ where
 
         let requester = self.auth.authorize(&body.encode_to_vec(), &req.signature)?;
 
+        // The SDK uploads ELF bytes to the gateway's artifact store immediately
+        // before calling `create_program`. Pull those bytes out of the ephemeral
+        // store and persist them in the durable program store keyed by vk_hash.
         let program_artifact_id = artifact_id_from_uri(&body.program_uri)
             .ok_or_else(|| {
                 Status::invalid_argument(format!(
@@ -587,17 +613,25 @@ where
             })?
             .to_string();
 
-        let sidecar = ProgramSidecar {
-            vk_bytes: body.vk,
-            program_artifact_id: program_artifact_id.clone(),
-        };
-        program_registry::store(&self.client, &body.vk_hash, sidecar)
+        let elf_bytes = self
+            .client
+            .download_raw(&program_artifact_id, ArtifactType::Program)
             .await
-            .map_err(|e| Status::internal(format!("sidecar store failed: {e}")))?;
+            .map_err(|e| {
+                Status::failed_precondition(format!(
+                    "create_program: ELF not present in artifact store at {} ({e})",
+                    body.program_uri
+                ))
+            })?;
+
+        self.program_store
+            .put(&body.vk_hash, &body.vk, &elf_bytes)
+            .await
+            .map_err(|e| Status::internal(format!("program store put failed: {e}")))?;
 
         info!(
             vk_hash = %hex::encode(&body.vk_hash),
-            program_artifact_id,
+            elf_len = elf_bytes.len(),
             %requester,
             "create_program"
         );
@@ -1385,6 +1419,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program_store::InMemoryProgramStore;
     use sp1_cluster_artifact::InMemoryArtifactClient;
     use sp1_cluster_common::proto::cluster_service_client::ClusterServiceClient as InnerClusterClient;
     use tonic::transport::Endpoint;
@@ -1407,6 +1442,7 @@ mod tests {
             "http://gw.test".into(),
             "42".into(),
             Auth::default(),
+            Arc::new(InMemoryProgramStore::new()),
         )
     }
 
@@ -1417,6 +1453,7 @@ mod tests {
             "http://gw.test".into(),
             "42".into(),
             auth,
+            Arc::new(InMemoryProgramStore::new()),
         )
     }
 
@@ -1425,8 +1462,17 @@ mod tests {
         let svc = mk();
         let vk_hash = vec![0xaa, 0xbb, 0xcc, 0xdd];
         let vk = b"vk-blob".to_vec();
-        let program_artifact_id = "artifact_01abcdef";
+        let elf = b"\x7fELF fake program bytes".to_vec();
+        let program_artifact_id = "artifact_01abcdef".to_string();
         let program_uri = format!("http://gw.test/artifacts/program/{program_artifact_id}");
+
+        // Mirror what the SDK does: stage the ELF in the gateway artifact store
+        // before calling create_program, so the gateway can copy it into the
+        // durable program store.
+        svc.client
+            .upload_raw(&program_artifact_id, ArtifactType::Program, elf.clone())
+            .await
+            .unwrap();
 
         let req = pb::CreateProgramRequest {
             format: 0,
@@ -1435,7 +1481,7 @@ mod tests {
                 nonce: 0,
                 vk_hash: vk_hash.clone(),
                 vk: vk.clone(),
-                program_uri: program_uri.clone(),
+                program_uri,
             }),
         };
         svc.create_program(Request::new(req)).await.unwrap();
@@ -1450,7 +1496,34 @@ mod tests {
         let program = resp.program.expect("program should be present");
         assert_eq!(program.vk_hash, vk_hash);
         assert_eq!(program.vk, vk);
-        assert_eq!(program.program_uri, program_uri);
+        assert_eq!(
+            program.program_uri,
+            format!("http://gw.test/programs/{}", hex::encode(&vk_hash))
+        );
+
+        // The durable store should hold the ELF independently of the cluster
+        // artifact's lifecycle.
+        let (got_vk, got_elf) = svc.program_store.get(&vk_hash).await.unwrap().unwrap();
+        assert_eq!(got_vk, vk);
+        assert_eq!(got_elf, elf);
+    }
+
+    #[tokio::test]
+    async fn create_program_fails_if_elf_not_uploaded() {
+        let svc = mk();
+        let vk_hash = vec![0x01, 0x02];
+        let req = pb::CreateProgramRequest {
+            format: 0,
+            signature: vec![],
+            body: Some(pb::CreateProgramRequestBody {
+                nonce: 0,
+                vk_hash,
+                vk: b"vk".to_vec(),
+                program_uri: "http://gw.test/artifacts/program/artifact_missing".into(),
+            }),
+        };
+        let err = svc.create_program(Request::new(req)).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
     }
 
     #[tokio::test]
