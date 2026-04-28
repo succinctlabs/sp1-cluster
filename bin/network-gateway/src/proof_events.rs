@@ -4,15 +4,24 @@
 //! At gateway startup we open one subscription to the API and demux each
 //! `ProofEvent` into a `broadcast::Sender` keyed by `proof_id`. Callers
 //! that want to wake up the moment a proof transitions out of `Pending`
-//! (today: nothing; Lever 3's `WaitForProofRequestStatus` long-poll: yes)
-//! get a `broadcast::Receiver<ProofRequestStatus>` from `wait_for_status`.
+//! get a [`Subscription`] guard via [`ProofEventsHub::subscribe`].
 //!
-//! Rationale for not surfacing this through the SDK yet:
-//!   - Lever 1+2 is the cluster-internal half of the latency win. The SDK
-//!     keeps polling every 2s for now (`crates/sdk/src/network/prover.rs`).
-//!   - Once Lever 3's proto change lands, the gateway already has the
-//!     plumbing to satisfy long-polls in ms instead of waiting for the
-//!     next SDK tick.
+//! ## Channel lifecycle
+//!
+//! Two cleanup paths keep the in-process map bounded:
+//!
+//! 1. **Terminal-publish.** When [`publish`](ProofEventsHub::publish)
+//!    sees a terminal cluster status (`Completed` / `Failed` /
+//!    `Cancelled`), the entry is removed immediately after the send.
+//!    No further NOTIFY events will fire for that `proof_id`, so the
+//!    channel is dead weight. Any subscribers still attached drain
+//!    their buffered values then observe `Closed` on the next `recv`.
+//!
+//! 2. **Drop-on-idle.** [`Subscription`] is RAII: dropping it
+//!    decrements `receiver_count`, then removes the map entry iff no
+//!    receivers remain. Catches the case where someone subscribes to
+//!    an *already-terminal* proof — terminal-publish can't fire a
+//!    second time, so without this the entry would leak.
 
 use std::sync::Arc;
 
@@ -30,6 +39,16 @@ use tracing::{debug, info, warn};
 /// without bloating memory.
 const PER_PROOF_CAPACITY: usize = 16;
 
+/// Cluster statuses past which no further NOTIFY events fire.
+fn is_terminal(status: ProofRequestStatus) -> bool {
+    matches!(
+        status,
+        ProofRequestStatus::Completed
+            | ProofRequestStatus::Failed
+            | ProofRequestStatus::Cancelled
+    )
+}
+
 #[derive(Clone, Default)]
 pub struct ProofEventsHub {
     senders: Arc<DashMap<String, broadcast::Sender<ProofRequestStatus>>>,
@@ -40,34 +59,87 @@ impl ProofEventsHub {
         Self::default()
     }
 
-    /// Subscribe to status transitions for a specific `proof_id`. Always
-    /// returns a receiver — the sender is created on first subscribe and
-    /// reused thereafter. Callers must check the latest known status via
-    /// `cluster.get_proof_request` before blocking on this; otherwise
-    /// they'll miss events that fired before they subscribed.
-    pub fn subscribe(&self, proof_id: &str) -> broadcast::Receiver<ProofRequestStatus> {
+    /// Subscribe to status transitions for `proof_id`. The returned
+    /// [`Subscription`] is RAII — drop it (or let it go out of scope)
+    /// to release the channel and let the hub GC empty entries.
+    ///
+    /// Callers should still consult the canonical status via
+    /// `cluster.get_proof_request` *after* subscribing; otherwise they
+    /// race against transitions that fired before the subscribe call.
+    pub fn subscribe(&self, proof_id: &str) -> Subscription {
         let entry = self
             .senders
             .entry(proof_id.to_string())
             .or_insert_with(|| broadcast::channel(PER_PROOF_CAPACITY).0);
-        entry.subscribe()
-    }
-
-    /// Drop the channel for a `proof_id` once we're sure nobody else cares.
-    /// Safe to call multiple times. Today nobody calls this — left as the
-    /// hook for Lever 3 to clean up after a long-poll terminates.
-    pub fn forget(&self, proof_id: &str) {
-        self.senders.remove(proof_id);
+        Subscription {
+            inner: Some(entry.subscribe()),
+            hub: self.clone(),
+            proof_id: proof_id.to_string(),
+        }
     }
 
     fn publish(&self, proof_id: &str, status: ProofRequestStatus) {
         if let Some(entry) = self.senders.get(proof_id) {
-            // Channel `send` errors only when there are no receivers, in
-            // which case we just drop. The map entry hangs around until
-            // someone calls `forget` — bounded by the request rate, fine
-            // for self-hosted scale.
+            // `send` errors only when there are zero receivers; we don't
+            // care — `recv` on an idle channel that later gets a value
+            // works regardless.
             let _ = entry.send(status);
         }
+        if is_terminal(status) {
+            // Common path. Reaches before any subscriber's Drop runs,
+            // so subscribers don't have to think about post-terminal
+            // bookkeeping.
+            self.senders.remove(proof_id);
+        }
+    }
+
+    /// Remove the entry iff it has zero attached receivers. Driven from
+    /// [`Subscription::drop`]; not part of the public API because
+    /// callers should never need to think about hub bookkeeping.
+    fn cleanup_if_idle(&self, proof_id: &str) {
+        // `remove_if` locks the bucket while evaluating the predicate,
+        // so a concurrent `subscribe` can't sneak a new receiver in
+        // between the count check and the removal.
+        self.senders
+            .remove_if(proof_id, |_, sender| sender.receiver_count() == 0);
+    }
+
+    /// Test/diagnostic helper. Number of active per-proof channels.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.senders.len()
+    }
+}
+
+/// RAII guard returned by [`ProofEventsHub::subscribe`]. Wraps a
+/// [`broadcast::Receiver`]; on drop, decrements the receiver count and
+/// asks the hub to GC the channel if nothing else is listening.
+#[must_use = "dropping the subscription unregisters from the hub"]
+pub struct Subscription {
+    // `Option` so [`Drop`] can `take()` and decrement the broadcast
+    // receiver count *before* the cleanup check. Always `Some` outside
+    // of [`Drop::drop`].
+    inner: Option<broadcast::Receiver<ProofRequestStatus>>,
+    hub: ProofEventsHub,
+    proof_id: String,
+}
+
+impl Subscription {
+    pub async fn recv(&mut self) -> Result<ProofRequestStatus, broadcast::error::RecvError> {
+        self.inner
+            .as_mut()
+            .expect("receiver only None inside Drop")
+            .recv()
+            .await
+    }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        // Take and drop the receiver first so its decrement of
+        // receiver_count is visible to `cleanup_if_idle`'s predicate.
+        drop(self.inner.take());
+        self.hub.cleanup_if_idle(&self.proof_id);
     }
 }
 
@@ -131,5 +203,87 @@ async fn run(api_client: ClusterServiceClient, hub: ProofEventsHub) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn subscribe_creates_entry_and_drop_removes_it() {
+        let hub = ProofEventsHub::new();
+        assert_eq!(hub.len(), 0);
+
+        let sub = hub.subscribe("p1");
+        assert_eq!(hub.len(), 1);
+
+        drop(sub);
+        assert_eq!(hub.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn second_subscriber_keeps_entry_alive_until_last_drops() {
+        let hub = ProofEventsHub::new();
+        let a = hub.subscribe("p1");
+        let b = hub.subscribe("p1");
+        assert_eq!(hub.len(), 1);
+
+        drop(a);
+        assert_eq!(hub.len(), 1, "b still attached");
+
+        drop(b);
+        assert_eq!(hub.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn terminal_publish_evicts_entry_even_with_active_receiver() {
+        let hub = ProofEventsHub::new();
+        let mut sub = hub.subscribe("p1");
+        assert_eq!(hub.len(), 1);
+
+        hub.publish("p1", ProofRequestStatus::Completed);
+        assert_eq!(hub.len(), 0, "terminal publish removes the entry");
+
+        // Subscriber still receives the buffered terminal status, then
+        // observes `Closed` on the next recv.
+        let got = sub.recv().await.unwrap();
+        assert_eq!(got, ProofRequestStatus::Completed);
+        let next = sub.recv().await;
+        assert!(matches!(next, Err(broadcast::error::RecvError::Closed)));
+
+        // Drop is a no-op (entry already gone); must not panic.
+        drop(sub);
+        assert_eq!(hub.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn non_terminal_publish_keeps_entry() {
+        let hub = ProofEventsHub::new();
+        let _sub = hub.subscribe("p1");
+        hub.publish("p1", ProofRequestStatus::Pending);
+        assert_eq!(hub.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn publish_after_drop_is_safe() {
+        let hub = ProofEventsHub::new();
+        // No subscribers — publish is a no-op even for terminal.
+        hub.publish("p1", ProofRequestStatus::Completed);
+        assert_eq!(hub.len(), 0);
+
+        // Subscriber arrives after, channel is fresh.
+        let sub = hub.subscribe("p1");
+        assert_eq!(hub.len(), 1);
+        drop(sub);
+        assert_eq!(hub.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn subscriber_receives_published_value() {
+        let hub = ProofEventsHub::new();
+        let mut sub = hub.subscribe("p1");
+        hub.publish("p1", ProofRequestStatus::Pending);
+        assert_eq!(sub.recv().await.unwrap(), ProofRequestStatus::Pending);
     }
 }
