@@ -2,6 +2,7 @@ pub mod artifact_http;
 pub mod auth;
 pub mod config;
 pub mod ids;
+pub mod proof_events;
 pub mod program_store;
 pub mod service;
 pub mod status;
@@ -24,6 +25,7 @@ use crate::auth::{parse_allowlist, Auth, AuthMode};
 use crate::config::Config;
 use crate::program_store::{FilesystemProgramStore, InMemoryProgramStore, ProgramStore};
 use crate::service::artifact_store::ArtifactStoreImpl;
+use crate::proof_events::{spawn as spawn_proof_events, ProofEventsHub};
 use crate::service::prover_network::ProverNetworkImpl;
 
 /// Resolve the auth config, connect to the cluster, and serve both gRPC and HTTP endpoints.
@@ -39,12 +41,14 @@ where
         })?;
     let auth = build_auth(&cfg)?;
     let program_store = build_program_store(&cfg)?;
+    let proof_events = spawn_proof_events(cluster.clone()).await?;
     serve(
         cfg,
         client,
         cluster,
         auth,
         program_store,
+        proof_events,
         shutdown_signal(),
         shutdown_signal(),
     )
@@ -61,6 +65,7 @@ pub async fn serve<A, FG, FH>(
     cluster: ClusterServiceClient,
     auth: Auth,
     program_store: Arc<dyn ProgramStore>,
+    proof_events: ProofEventsHub,
     grpc_shutdown: FG,
     http_shutdown: FH,
 ) -> Result<()>
@@ -98,6 +103,7 @@ where
         balance_amount,
         auth,
         program_store,
+        proof_events,
     ))
     .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE)
     .max_encoding_message_size(MAX_GRPC_MESSAGE_SIZE);
