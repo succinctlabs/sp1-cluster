@@ -101,7 +101,10 @@ async fn run(api_client: ClusterServiceClient, hub: ProofEventsHub) {
         {
             Ok(resp) => resp.into_inner(),
             Err(e) => {
-                warn!("subscribe_proof_events failed: {e}; retrying in {:?}", backoff);
+                warn!(
+                    "subscribe_proof_events failed: {e}; retrying in {:?}",
+                    backoff
+                );
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(10));
                 continue;

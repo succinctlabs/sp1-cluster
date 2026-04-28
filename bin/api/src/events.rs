@@ -95,7 +95,6 @@ impl ClusterEventsImpl {
         });
         Ok(Self { tx })
     }
-
 }
 
 type EventStream = Pin<Box<dyn Stream<Item = Result<ProofEvent, Status>> + Send + 'static>>;
