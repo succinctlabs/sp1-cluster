@@ -16,6 +16,7 @@ use crate::ids::{
     artifact_id_from_uri, artifact_uri, mint_request_id, program_artifact_id,
     proof_id_from_request_id,
 };
+use crate::proof_events::ProofEventsHub;
 use crate::program_store::ProgramStore;
 use crate::status::{
     cluster_execution_filter, cluster_fulfillment_filter, execution_from_cluster,
@@ -29,6 +30,8 @@ pub struct ProverNetworkImpl<A> {
     balance_amount: String,
     auth: Auth,
     program_store: Arc<dyn ProgramStore>,
+    #[allow(dead_code)]
+    proof_events: ProofEventsHub,
     nonces: DashMap<Vec<u8>, AtomicU64>,
 }
 
@@ -40,6 +43,7 @@ impl<A> ProverNetworkImpl<A> {
         balance_amount: String,
         auth: Auth,
         program_store: Arc<dyn ProgramStore>,
+        proof_events: ProofEventsHub,
     ) -> Self {
         Self {
             client,
@@ -48,6 +52,7 @@ impl<A> ProverNetworkImpl<A> {
             balance_amount,
             auth,
             program_store,
+            proof_events,
             nonces: DashMap::new(),
         }
     }
@@ -1476,6 +1481,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proof_events::ProofEventsHub;
     use crate::program_store::InMemoryProgramStore;
     use sp1_cluster_artifact::InMemoryArtifactClient;
     use sp1_cluster_common::proto::cluster_service_client::ClusterServiceClient as InnerClusterClient;
@@ -1487,7 +1493,8 @@ mod tests {
     fn dummy_cluster_client() -> ClusterServiceClient {
         let channel = Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
         ClusterServiceClient {
-            rpc: InnerClusterClient::new(channel),
+            rpc: InnerClusterClient::new(channel.clone()),
+            events: sp1_cluster_common::proto::events::cluster_events_service_client::ClusterEventsServiceClient::new(channel),
             backoff: Default::default(),
         }
     }
@@ -1500,6 +1507,7 @@ mod tests {
             "42".into(),
             Auth::default(),
             Arc::new(InMemoryProgramStore::new()),
+            ProofEventsHub::new(),
         )
     }
 
@@ -1511,6 +1519,7 @@ mod tests {
             "42".into(),
             auth,
             Arc::new(InMemoryProgramStore::new()),
+            ProofEventsHub::new(),
         )
     }
 

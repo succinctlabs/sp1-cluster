@@ -1,0 +1,37 @@
+// Push channel for proof_request lifecycle events. Hosted on the bin/api gRPC
+// server alongside ClusterService. Lets coordinator (claim new pending
+// requests) and bin/network-gateway (wake SDK long-polls) replace periodic
+// ProofRequestList polls with a stream-driven path. The wire types here
+// mirror sp1-prover-types' cluster.proto enums by raw integer; the
+// translation lives in crates/common/src/proto.rs so consumers don't have
+// to know two enums.
+syntax = "proto3";
+
+package cluster_events;
+
+service ClusterEventsService {
+  rpc SubscribeProofEvents(SubscribeProofEventsRequest)
+      returns (stream ProofEvent) {}
+}
+
+message SubscribeProofEventsRequest {
+  // Optional filter: when set, only events whose `scheduled_by` matches are
+  // forwarded. Empty / unset means "send everything". Coordinator can pass
+  // its own scheduler id; gateway leaves it unset.
+  optional string scheduled_by = 1;
+}
+
+message ProofEvent {
+  // The proof_request id this event refers to.
+  string proof_id = 1;
+
+  // Same integer values as sp1_prover_types::cluster::ProofRequestStatus.
+  // 0 UNSPECIFIED, 1 PENDING, 2 COMPLETED, 3 FAILED, 4 CANCELLED.
+  int32 proof_status = 2;
+
+  // Mirrors proof_requests.handled — true once a coordinator has claimed it.
+  bool handled = 3;
+
+  // Mirrors proof_requests.scheduled_by; consumers use it for filtering.
+  optional string scheduled_by = 4;
+}

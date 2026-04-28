@@ -1,5 +1,7 @@
+pub mod events;
 pub mod service;
 
+pub use events::ClusterEventsImpl;
 pub use service::ClusterServiceImpl;
 use tokio_util::sync::CancellationToken;
 
@@ -9,7 +11,10 @@ use std::sync::Arc;
 use alloy::primitives::Bytes;
 use axum::{routing::get, Router};
 use serde::{Deserialize, Serialize};
-use sp1_cluster_common::proto::cluster_service_server::ClusterServiceServer;
+use sp1_cluster_common::proto::{
+    cluster_service_server::ClusterServiceServer,
+    events::cluster_events_service_server::ClusterEventsServiceServer,
+};
 use sqlx::{prelude::FromRow, types::time::OffsetDateTime};
 use tonic::transport::Server;
 use tracing::{info, warn};
@@ -46,9 +51,16 @@ pub async fn run(config: ApiConfig, shutdown: CancellationToken) -> anyhow::Resu
 
     let pool = Arc::new(pool);
 
-    // Create the gRPC service
+    // Create the gRPC services
     let cluster_service = ClusterServiceImpl::new(pool.clone());
     let grpc_service = ClusterServiceServer::new(cluster_service);
+
+    // ClusterEventsService spawns a PgListener at startup and broadcasts
+    // proof_event NOTIFY messages over a gRPC server stream.
+    let events_service = ClusterEventsImpl::start((*pool).clone())
+        .await
+        .expect("Failed to start ClusterEventsService");
+    let events_grpc = ClusterEventsServiceServer::new(events_service);
 
     // Set up the gRPC server
     let grpc_addr = config
@@ -62,6 +74,7 @@ pub async fn run(config: ApiConfig, shutdown: CancellationToken) -> anyhow::Resu
         Server::builder()
             .accept_http1(true)
             .add_service(tonic_web::enable(grpc_service))
+            .add_service(tonic_web::enable(events_grpc))
             .serve_with_shutdown(grpc_addr, grpc_shutdown.cancelled_owned())
             .await
             .unwrap_or_else(|e| {
