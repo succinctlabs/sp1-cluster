@@ -7,6 +7,8 @@ use sp1_sdk::network::proto::base::types as pb;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::broadcast;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::info;
@@ -23,6 +25,16 @@ use crate::status::{
     fulfillment_from_cluster,
 };
 
+/// Maximum time the gateway will hold a `get_proof_request_status` call
+/// open while waiting for the next status transition.
+///
+/// Sized to fit comfortably under the SDK's 60s per-RPC tonic deadline
+/// (`crates/sdk/src/network/grpc.rs` sets `Endpoint::timeout(60s)`), which
+/// leaves margin for the round trip + the SDK's `process_proof_status`
+/// post-processing. Mainnet clients return immediately as before — only
+/// the gateway holds the call open.
+const STATUS_LONG_POLL_MAX: Duration = Duration::from_secs(25);
+
 pub struct ProverNetworkImpl<A> {
     client: A,
     cluster: ClusterServiceClient,
@@ -30,7 +42,6 @@ pub struct ProverNetworkImpl<A> {
     balance_amount: String,
     auth: Auth,
     program_store: Arc<dyn ProgramStore>,
-    #[allow(dead_code)]
     proof_events: ProofEventsHub,
     nonces: DashMap<Vec<u8>, AtomicU64>,
 }
@@ -68,6 +79,47 @@ impl<A> ProverNetworkImpl<A> {
             .entry(address.to_vec())
             .or_insert_with(|| AtomicU64::new(0));
         current.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Build the SDK-shaped `GetProofRequestStatusResponse` from a cluster
+    /// row. Used by both the unary fast-path and the long-poll wake-up
+    /// paths in `get_proof_request_status`.
+    fn build_status_response(
+        &self,
+        proof: cluster_pb::ProofRequest,
+    ) -> pb::GetProofRequestStatusResponse {
+        let fulfillment = fulfillment_from_cluster(proof.proof_status());
+        let execution = proof
+            .execution_result
+            .as_ref()
+            .map(|r| execution_from_cluster(r.status()))
+            .unwrap_or(pb::ExecutionStatus::Unexecuted);
+
+        let proof_uri = (fulfillment == pb::FulfillmentStatus::Fulfilled)
+            .then(|| {
+                proof
+                    .proof_artifact_id
+                    .as_ref()
+                    .map(|id| artifact_uri(&self.public_http_url, ArtifactType::Proof, id))
+            })
+            .flatten();
+
+        let public_values_hash = proof
+            .execution_result
+            .as_ref()
+            .filter(|r| !r.public_values_hash.is_empty())
+            .map(|r| r.public_values_hash.clone());
+
+        pb::GetProofRequestStatusResponse {
+            fulfillment_status: fulfillment as i32,
+            execution_status: execution as i32,
+            request_tx_hash: vec![0u8; 32],
+            deadline: proof.deadline,
+            fulfill_tx_hash: None,
+            proof_uri,
+            public_values_hash,
+            proof_public_uri: None,
+        }
     }
 
     async fn load_cluster_proof(&self, proof_id: &str) -> Result<cluster_pb::ProofRequest, Status> {
@@ -157,6 +209,16 @@ impl<A> ProverNetworkImpl<A> {
             error: 0,
         }
     }
+}
+
+/// SDK terminal states: SDK's `process_proof_status` returns early on
+/// `Fulfilled` (success) and `Unfulfillable` (`RequestUnfulfillable`).
+/// We don't wait for further transitions past these.
+fn is_terminal_fulfillment(fulfillment: i32) -> bool {
+    matches!(
+        pb::FulfillmentStatus::try_from(fulfillment),
+        Ok(pb::FulfillmentStatus::Fulfilled) | Ok(pb::FulfillmentStatus::Unfulfillable)
+    )
 }
 
 type StreamResult<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
@@ -288,46 +350,43 @@ where
         ))
     }
 
+    /// Long-polls. The handler holds the request open until the proof
+    /// transitions to a terminal state (or any state at all), or
+    /// `STATUS_LONG_POLL_MAX` elapses, whichever comes first. Mainnet's
+    /// handler returns immediately as before; nothing in the SDK or proto
+    /// changes — the *server's* response time is the only thing that
+    /// shifts. The SDK's existing `wait_proof` loop just observes "this
+    /// call took longer to return" and proceeds as before, so polling
+    /// clients on mainnet are unaffected.
     async fn get_proof_request_status(
         &self,
         request: Request<pb::GetProofRequestStatusRequest>,
     ) -> Result<Response<pb::GetProofRequestStatusResponse>, Status> {
         let req = request.into_inner();
         let proof_id = proof_id_from_request_id(&req.request_id);
+
+        // Subscribe BEFORE the initial fetch so we don't miss a transition
+        // that fires between the SELECT and the recv() below.
+        let mut events = self.proof_events.subscribe(&proof_id);
+
         let proof = self.load_cluster_proof(&proof_id).await?;
+        let initial = self.build_status_response(proof);
+        if is_terminal_fulfillment(initial.fulfillment_status) {
+            return Ok(Response::new(initial));
+        }
 
-        let fulfillment = fulfillment_from_cluster(proof.proof_status());
-        let execution = proof
-            .execution_result
-            .as_ref()
-            .map(|r| execution_from_cluster(r.status()))
-            .unwrap_or(pb::ExecutionStatus::Unexecuted);
-
-        let proof_uri = (fulfillment == pb::FulfillmentStatus::Fulfilled)
-            .then(|| {
-                proof
-                    .proof_artifact_id
-                    .as_ref()
-                    .map(|id| artifact_uri(&self.public_http_url, ArtifactType::Proof, id))
-            })
-            .flatten();
-
-        let public_values_hash = proof
-            .execution_result
-            .as_ref()
-            .filter(|r| !r.public_values_hash.is_empty())
-            .map(|r| r.public_values_hash.clone());
-
-        Ok(Response::new(pb::GetProofRequestStatusResponse {
-            fulfillment_status: fulfillment as i32,
-            execution_status: execution as i32,
-            request_tx_hash: vec![0u8; 32],
-            deadline: proof.deadline,
-            fulfill_tx_hash: None,
-            proof_uri,
-            public_values_hash,
-            proof_public_uri: None,
-        }))
+        match tokio::time::timeout(STATUS_LONG_POLL_MAX, events.recv()).await {
+            // Status changed (or we lagged the channel): re-fetch the row
+            // to pick up proof_uri / execution result / etc.
+            Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+                let proof = self.load_cluster_proof(&proof_id).await?;
+                Ok(Response::new(self.build_status_response(proof)))
+            }
+            // Hub closed (shouldn't happen) or 25s elapsed without a
+            // transition: return what we already have. The SDK's polling
+            // loop will call again on its next iteration.
+            Ok(Err(broadcast::error::RecvError::Closed)) | Err(_) => Ok(Response::new(initial)),
+        }
     }
 
     async fn get_proof_request_details(
