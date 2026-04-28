@@ -78,14 +78,14 @@ jobs:
         env:
           PRIVATE_PULL_TOKEN: ${{ secrets.PRIVATE_PULL_TOKEN }}
 
-      - name: Run gate integration tests
+      - name: Run artifact integration tests
         uses: actions-rs/cargo@v1
         with:
           command: test
           args: >-
             --release
             -p sp1-cluster-artifact
-            --test prove_shard_gate
+            --tests
             --
             --ignored
             --test-threads=1
