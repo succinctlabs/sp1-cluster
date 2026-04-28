@@ -7,6 +7,7 @@
 # Profile-guided optimization
 /tmp
 pgo-data.profdata
+data/**
 
 # MacOS nuisances
 .DS_Store
@@ -30,3 +31,10 @@ copybara.jar
 values-*.yaml
 !values-example.yaml
 .worktrees/
+
+# Per-developer docker compose tweaks (auto-loaded by `docker compose up`)
+**/docker-compose.override.yml
+**/compose.override.yml
+
+# Local agent documents
+.claude/local/**

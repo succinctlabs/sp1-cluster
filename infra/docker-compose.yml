@@ -190,6 +190,31 @@ services:
       - redis
     command: ["/bin/sh", "-c", "/fulfiller"]
 
+  # SDK-compatible gateway (opt-in via `--profile gateway`).
+  #
+  # GATEWAY_PUBLIC_HTTP_URL must be reachable from the *SDK caller* — that's
+  # why the default points at 127.0.0.1:8081 (same host as compose). For
+  # remote SDK callers, override it to your public hostname.
+  network-gateway:
+    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.1.5
+    profiles: ["gateway"]
+    environment:
+      - GATEWAY_GRPC_ADDR=0.0.0.0:50061
+      - GATEWAY_HTTP_ADDR=0.0.0.0:8081
+      - GATEWAY_PUBLIC_HTTP_URL=${GATEWAY_PUBLIC_HTTP_URL:-http://127.0.0.1:8081}
+      - GATEWAY_CLUSTER_RPC=http://api:50051
+      - GATEWAY_ARTIFACT_STORE=redis
+      - GATEWAY_REDIS_NODES=redis://:redispassword@redis:6379/0
+      - GATEWAY_PROGRAM_STORE=memory
+      - GATEWAY_AUTH_MODE=${GATEWAY_AUTH_MODE:-none}
+    ports:
+      - "0.0.0.0:50061:50061"
+      - "0.0.0.0:8081:8081"
+    command: ["/bin/sh", "-c", "/network-gateway"]
+    depends_on:
+      - api
+      - redis
+
   # Bidder Service
   bidder:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.1.5

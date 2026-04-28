@@ -23,5 +23,8 @@ dependencies:
 - name: bidder
   repository: file://../bidder
   version: 0.1.5
-digest: sha256:6ffb19a1e7d1957aaa691756bb0cab4e91a737a30e0733a8b80a7f300c02dbe9
-generated: "2025-12-10T16:04:37.181629-08:00"
+- name: network-gateway
+  repository: file://../network-gateway
+  version: 0.1.0
+digest: sha256:ef77babd0756bafb96d613c642cddcdc1f52c2ceda1f335f37fe9b2fddc96e1d
+generated: "2026-04-27T04:42:52.163391094Z"

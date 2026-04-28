@@ -85,12 +85,14 @@ RUN \
     --bin sp1-cluster-cli \
     --bin sp1-cluster-coordinator \
     --bin sp1-cluster-fulfiller \
+    --bin sp1-cluster-network-gateway \
     --bin sp1-cluster-node && \
     cp target/$BUILD_PROFILE/sp1-cluster-api /api && \
     cp target/$BUILD_PROFILE/sp1-cluster-bidder /bidder && \
     cp target/$BUILD_PROFILE/sp1-cluster-cli /cli && \
     cp target/$BUILD_PROFILE/sp1-cluster-coordinator /coordinator && \
     cp target/$BUILD_PROFILE/sp1-cluster-fulfiller /fulfiller && \
+    cp target/$BUILD_PROFILE/sp1-cluster-network-gateway /network-gateway && \
     cp target/$BUILD_PROFILE/sp1-cluster-node /node && \
     # Clean up any git credentials that might have been cached
     (git config --global --unset-all url."${GIT_URL_BASE}".insteadOf || true) && \
@@ -121,6 +123,7 @@ COPY --from=build /bidder /bidder
 COPY --from=build /cli /cli
 COPY --from=build /coordinator /coordinator
 COPY --from=build /fulfiller /fulfiller
+COPY --from=build /network-gateway /network-gateway
 COPY --from=build /node /node
 
 # Create .sp1 directories with correct ownership for volume mounts
@@ -133,12 +136,14 @@ RUN chown appuser:appgroup /api && \
     chown appuser:appgroup /cli && \
     chown appuser:appgroup /coordinator && \
     chown appuser:appgroup /fulfiller && \
+    chown appuser:appgroup /network-gateway && \
     chown appuser:appgroup /node && \
     chmod +x /api && \
     chmod +x /bidder && \
     chmod +x /cli && \
     chmod +x /coordinator && \
     chmod +x /fulfiller && \
+    chmod +x /network-gateway && \
     chmod +x /node
 
 # Set the user to the non-root user

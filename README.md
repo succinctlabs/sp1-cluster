@@ -25,6 +25,7 @@ This project implements a high performance SP1 proving cluster that can scale to
 - **CPU/GPU Node**: Distributed worker nodes that execute proof generation tasks
 - **Fulfiller**: Service that syncs the cluster API with assigned proofs from the SP1 Prover Network
 - **Bidder**: Service that bids on proofs from the SP1 Prover Network
+- **Network Gateway**: SDK-compatible gRPC/HTTP gateway that terminates the `sp1-sdk` network contract against a self-hosted cluster (see [bin/network-gateway/README.md](bin/network-gateway/README.md))
 - **Artifact Store**: Redis or S3 store used for storing ephemeral proving data
 
 For detailed information on the architecture and deployment instructions, see the [docs](https://docs.succinct.xyz/docs/provers/introduction).
