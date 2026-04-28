@@ -43,9 +43,7 @@ const PER_PROOF_CAPACITY: usize = 16;
 fn is_terminal(status: ProofRequestStatus) -> bool {
     matches!(
         status,
-        ProofRequestStatus::Completed
-            | ProofRequestStatus::Failed
-            | ProofRequestStatus::Cancelled
+        ProofRequestStatus::Completed | ProofRequestStatus::Failed | ProofRequestStatus::Cancelled
     )
 }
 
