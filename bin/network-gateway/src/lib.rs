@@ -2,8 +2,8 @@ pub mod artifact_http;
 pub mod auth;
 pub mod config;
 pub mod ids;
-pub mod proof_events;
 pub mod program_store;
+pub mod proof_events;
 pub mod service;
 pub mod status;
 
@@ -24,8 +24,8 @@ use crate::artifact_http::ArtifactHttpState;
 use crate::auth::{parse_allowlist, Auth, AuthMode};
 use crate::config::Config;
 use crate::program_store::{FilesystemProgramStore, InMemoryProgramStore, ProgramStore};
-use crate::service::artifact_store::ArtifactStoreImpl;
 use crate::proof_events::{spawn as spawn_proof_events, ProofEventsHub};
+use crate::service::artifact_store::ArtifactStoreImpl;
 use crate::service::prover_network::ProverNetworkImpl;
 
 /// Resolve the auth config, connect to the cluster, and serve both gRPC and HTTP endpoints.
@@ -59,6 +59,7 @@ where
 ///
 /// Broken out so integration tests can inject a fake ClusterServiceClient and
 /// their own shutdown signals (e.g. `oneshot::Receiver`).
+#[allow(clippy::too_many_arguments)]
 pub async fn serve<A, FG, FH>(
     cfg: Config,
     client: A,

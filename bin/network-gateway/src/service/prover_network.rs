@@ -16,8 +16,8 @@ use crate::ids::{
     artifact_id_from_uri, artifact_uri, mint_request_id, program_artifact_id,
     proof_id_from_request_id,
 };
-use crate::proof_events::ProofEventsHub;
 use crate::program_store::ProgramStore;
+use crate::proof_events::ProofEventsHub;
 use crate::status::{
     cluster_execution_filter, cluster_fulfillment_filter, execution_from_cluster,
     fulfillment_from_cluster,
@@ -1447,8 +1447,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proof_events::ProofEventsHub;
     use crate::program_store::InMemoryProgramStore;
+    use crate::proof_events::ProofEventsHub;
     use sp1_cluster_artifact::InMemoryArtifactClient;
     use sp1_cluster_common::proto::cluster_service_client::ClusterServiceClient as InnerClusterClient;
     use tonic::transport::Endpoint;

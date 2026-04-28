@@ -112,7 +112,10 @@ async fn run_event_stream<P: AssignmentPolicy>(
         {
             Ok(resp) => resp.into_inner(),
             Err(e) => {
-                tracing::warn!("subscribe_proof_events failed: {e}; retrying in {:?}", backoff);
+                tracing::warn!(
+                    "subscribe_proof_events failed: {e}; retrying in {:?}",
+                    backoff
+                );
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(Duration::from_secs(10));
                 continue;

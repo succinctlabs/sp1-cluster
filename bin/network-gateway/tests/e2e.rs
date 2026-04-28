@@ -21,8 +21,8 @@ use sp1_cluster_common::{
 use sp1_cluster_network_gateway::{
     auth::Auth,
     config::Config,
-    proof_events::ProofEventsHub,
     program_store::{InMemoryProgramStore, ProgramStore},
+    proof_events::ProofEventsHub,
     serve,
 };
 use sp1_sdk::network::proto::{
