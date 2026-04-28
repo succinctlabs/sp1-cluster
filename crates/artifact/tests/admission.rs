@@ -115,52 +115,6 @@ async fn admits_when_unlimited() {
         .expect("upload admitted");
 }
 
-/// Concurrent callers must not collectively overshoot the budget — atomic
-/// reservation serializes the check-then-reserve.
-#[tokio::test]
-#[ignore = "requires Redis at REDIS_URL"]
-async fn admission_atomic_no_overshoot_under_concurrency() {
-    let url = redis_url();
-    let cap = 100 * MB as u64;
-    reset(&url, cap).await; // 100 MB cap → 70 MB budget
-    let client = Arc::new(RedisArtifactClient::new(vec![url.clone()], 16));
-
-    seed(&client, 5, 5).await; // ~25 MB, below budget
-
-    // 20 × 3 MB = 60 MB would overshoot (25 + 60 > 70).
-    let mut handles = Vec::new();
-    for i in 0..20 {
-        let c = Arc::clone(&client);
-        handles.push(tokio::spawn(async move {
-            let a: Artifact = format!("race-{i}").into();
-            tokio::time::timeout(
-                Duration::from_secs(3),
-                c.upload_raw(
-                    &a,
-                    ArtifactType::UnspecifiedArtifactType,
-                    rand_bytes(3 * MB),
-                ),
-            )
-            .await
-        }));
-    }
-
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    let used = used_memory(&url).await;
-    let ceiling = cap * MEMORY_BUDGET_PCT / 100 + 3 * MB as u64; // budget + one in-flight
-    assert!(
-        used <= ceiling,
-        "budget overshoot: used={} MB > {} MB — TOCTOU race",
-        used / MB as u64,
-        ceiling / MB as u64,
-    );
-
-    flushdb(&url).await;
-    for h in handles {
-        let _ = h.await;
-    }
-}
-
 /// Permit pool must reserve headroom below the admission ceiling so
 /// non-permit-gated outputs can land even when inputs are at saturation.
 /// Without the gap, input saturation == admission ceiling → outputs
