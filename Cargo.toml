@@ -146,17 +146,17 @@ opt-level = 3
 [profile.dev.build-override]
 opt-level = 3
 
-# Picks up sp1#2713; drop once v6.1.1+ is released.
+# Memory-permit companion: sp1 PR #2723.
 [patch.crates-io]
-sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
-sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "b07cea1e" }
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
