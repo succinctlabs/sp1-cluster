@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  redis-gate:
-    name: ProveShardGate (Redis)
+  artifact-redis:
+    name: Artifact integration (Redis)
     runs-on:
       [
         "runs-on",
