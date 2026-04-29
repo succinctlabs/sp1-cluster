@@ -29,8 +29,13 @@ pub fn get_max_weight() -> usize {
             (info.total * 1024, "/proc/meminfo")
         });
     let total_gb = total_bytes / (1024 * 1024 * 1024);
-    // Round up to nearest 16 GB to match the existing scheduling units.
-    let max_weight = (total_gb.div_ceil(16) * 16) as usize;
+    // Report the limit as-is. The previous code rounded up to the nearest
+    // 16 GB to compensate for /proc/meminfo's "advertised total minus
+    // kernel" wiggle, but that overshoots cgroup-reported limits
+    // (a 24 GB container would round to 32 → over-schedule → OOM).
+    // Task weights aren't 16-quantized either, so rounding doesn't buy
+    // alignment.
+    let max_weight = total_gb as usize;
     tracing::info!(max_weight, source, total_gb, "worker max weight");
     max_weight
 }
