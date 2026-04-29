@@ -36,7 +36,7 @@ lazy_static! {
     /// Task weight for plonk wrap task.
     pub static ref PLONK_WRAP_WEIGHT: usize = std::env::var("WORKER_PLONK_WRAP_WEIGHT")
         .map(|s| s.parse().unwrap())
-        .unwrap_or(32);
+        .unwrap_or(60);
 
     /// Task weight for executor-only task.
     pub static ref EXECUTE_ONLY_WEIGHT: usize = std::env::var("WORKER_EXECUTE_ONLY_WEIGHT")
