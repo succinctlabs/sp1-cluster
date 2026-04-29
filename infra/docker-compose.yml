@@ -60,22 +60,22 @@ services:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.1.5
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
-      - WORKER_MAX_WEIGHT_OVERRIDE=48
+      - WORKER_MAX_WEIGHT_OVERRIDE=96
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=CPU
     volumes:
       - ${HOME}/.sp1/circuits:/root/.sp1/circuits
     command: ["/bin/sh", "-c", "/node"]
-    shm_size: 48G
+    shm_size: 96G
     deploy:
       resources:
         limits:
           cpus: "8"
-          memory: 48G
+          memory: 96G
         reservations:
           cpus: "4"
-          memory: 48G
+          memory: 96G
     depends_on:
       - coordinator
       - redis
@@ -85,22 +85,22 @@ services:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.1.5
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
-      - WORKER_MAX_WEIGHT_OVERRIDE=48
+      - WORKER_MAX_WEIGHT_OVERRIDE=96
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=ALL
     volumes:
       - ${HOME}/.sp1/circuits:/root/.sp1/circuits
     command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
-    shm_size: 48G
+    shm_size: 96G
     deploy:
       resources:
         limits:
           cpus: "8"
-          memory: 48G
+          memory: 96G
         reservations:
           cpus: "4"
-          memory: 48G
+          memory: 96G
     depends_on:
       - coordinator
       - redis
