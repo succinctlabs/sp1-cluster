@@ -60,18 +60,15 @@ async fn main() -> Result<()> {
         }
         "redis" => {
             eprintln!("using redis artifact store");
-            run_fulfiller(
-                RedisArtifactClient::new(
-                    settings
-                        .cluster_redis_nodes
-                        .clone()
-                        .expect("FULFILLER_CLUSTER_REDIS_NODES is not set"),
-                    settings.cluster_redis_pool_max_size.unwrap_or(16),
-                ),
-                network,
-                &settings,
-            )
-            .await
+            let client = RedisArtifactClient::new(
+                settings
+                    .cluster_redis_nodes
+                    .clone()
+                    .expect("FULFILLER_CLUSTER_REDIS_NODES is not set"),
+                settings.cluster_redis_pool_max_size.unwrap_or(16),
+            );
+            client.validate_config().await?;
+            run_fulfiller(client, network, &settings).await
         }
         _ => panic!("invalid artifact store"),
     }?;

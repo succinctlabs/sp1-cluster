@@ -5,6 +5,8 @@ services:
     environment:
       - REDIS_PASSWORD=redispassword
       - REDIS_AOF_ENABLED=no
+      # Keep below the cgroup limit; RSS overshoots maxmemory via fragmentation.
+      - REDIS_EXTRA_FLAGS=--maxmemory 28gb
     volumes:
       - redis_data:/bitnami/redis/data
     ports:

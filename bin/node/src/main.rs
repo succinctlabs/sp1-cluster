@@ -168,6 +168,10 @@ async fn main() -> Result<()> {
                 .parse()
                 .unwrap(),
         );
+        artifact_client
+            .validate_config()
+            .await
+            .map_err(|e| eyre::eyre!("{e}"))?;
         eprintln!("redis is set up");
         cfg_if! {
             if #[cfg(feature = "gpu")] {
