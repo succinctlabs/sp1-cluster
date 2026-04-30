@@ -16,7 +16,7 @@ members = [
     "crates/worker",
 ]
 [workspace.package]
-version = "2.2.0"
+version = "2.2.1"
 edition = "2021"
 repository = "https://github.com/succinctlabs/sp1-cluster"
 keywords = []
