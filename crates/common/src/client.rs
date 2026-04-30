@@ -1,6 +1,7 @@
 use crate::{
     proto::{
         self, cluster_service_client::ClusterServiceClient as InnerClusterClient,
+        events::cluster_events_service_client::ClusterEventsServiceClient as InnerEventsClient,
         ProofRequestCancelRequest, ProofRequestCreateRequest, ProofRequestGetRequest,
         ProofRequestListRequest, ProofRequestUpdateRequest,
     },
@@ -55,6 +56,7 @@ pub async fn reconnect_with_backoff(addr: &str) -> Result<Channel> {
 #[derive(Clone)]
 pub struct ClusterServiceClient {
     pub rpc: InnerClusterClient<Channel>,
+    pub events: InnerEventsClient<Channel>,
     pub backoff: ExponentialBackoff,
 }
 
@@ -66,7 +68,12 @@ impl ClusterServiceClient {
             .build();
         let channel = reconnect_with_backoff(&addr).await?;
         let rpc = InnerClusterClient::new(channel.clone());
-        Ok(Self { rpc, backoff })
+        let events = InnerEventsClient::new(channel);
+        Ok(Self {
+            rpc,
+            events,
+            backoff,
+        })
     }
 
     pub async fn create_proof_request(&self, request: ProofRequestCreateRequest) -> Result<()> {
