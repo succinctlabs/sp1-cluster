@@ -141,6 +141,27 @@ impl RedisArtifactClient {
             .clone()
     }
 
+    /// Refuse to start when `maxmemory` is unset on any node. Without this,
+    /// the lazy path silently floors at [`MIN_PERMITS_PER_NODE`] and caps
+    /// throughput at ~4 concurrent shards regardless of GPU count.
+    pub async fn validate_config(&self) -> Result<()> {
+        for idx in 0..self.connection_pools.len() {
+            let (_, maxmemory) =
+                tokio::time::timeout(MAXMEMORY_QUERY_TIMEOUT, self.query_memory(idx))
+                    .await
+                    .map_err(|_| anyhow!("Redis shard {idx}: INFO memory timed out"))??;
+            if !matches!(maxmemory, Some(v) if v > 0) {
+                return Err(anyhow!(
+                    "Redis shard {idx}: maxmemory is unset (0). \
+                     Set it (e.g. `CONFIG SET maxmemory <N>gb`, `--maxmemory <N>gb`, \
+                     or `REDIS_EXTRA_FLAGS=--maxmemory <N>gb` on Bitnami images). \
+                     Size below the host/cgroup limit to leave allocator headroom."
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Permit count for shard `idx`, derived from `maxmemory`. Falls back to
     /// [`MIN_PERMITS_PER_NODE`] when `maxmemory` is unreadable or 0.
     async fn compute_permits_for_node(&self, idx: usize) -> usize {
@@ -148,9 +169,10 @@ impl RedisArtifactClient {
         let maxmemory = match query {
             Ok(Ok((_, Some(v)))) if v > 0 => v,
             Ok(Ok(_)) => {
-                tracing::warn!(
+                tracing::error!(
                     shard = idx,
-                    "Redis maxmemory=0 or missing; using permit floor"
+                    "Redis maxmemory=0; throughput capped at {MIN_PERMITS_PER_NODE} permits. \
+                     Set maxmemory and restart (see validate_config)."
                 );
                 return MIN_PERMITS_PER_NODE;
             }
