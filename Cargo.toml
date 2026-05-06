@@ -32,10 +32,10 @@ sp1-cluster-utils = { path = "crates/utils" }
 sp1-cluster-worker = { path = "crates/worker" }
 
 # P3
-p3-baby-bear = "=0.3.2-succinct"
-p3-challenger = "=0.3.2-succinct"
-p3-field = "=0.3.2-succinct"
-p3-matrix = "=0.3.2-succinct"
+p3-baby-bear = "=0.3.3-succinct"
+p3-challenger = "=0.3.3-succinct"
+p3-field = "=0.3.3-succinct"
+p3-matrix = "=0.3.3-succinct"
 
 # SPN
 spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
@@ -147,17 +147,16 @@ opt-level = 3
 [profile.dev.build-override]
 opt-level = 3
 
-# Memory-permit companion: sp1 PR #2723.
 [patch.crates-io]
-sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
-sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
-sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
-sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
-sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
-sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
-sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
-sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
-sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
-sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
-sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
-sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "afe61d4" }
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
+sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
+sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }

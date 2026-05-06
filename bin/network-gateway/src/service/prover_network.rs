@@ -123,6 +123,7 @@ impl<A> ProverNetworkImpl<A> {
             strategy: pb::FulfillmentStrategy::Reserved as i32,
             program_uri,
             stdin_uri,
+            stdin_private: false,
             deadline: proof.deadline,
             cycle_limit: proof.cycle_limit.unwrap_or(0),
             gas_price: None,
@@ -1437,6 +1438,33 @@ where
             "get_filtered_prover_stake_balance_logs: not supported by self-hosted gateway",
         ))
     }
+
+    async fn get_stdin_uri(
+        &self,
+        _request: Request<pb::GetStdinUriRequest>,
+    ) -> Result<Response<pb::GetStdinUriResponse>, Status> {
+        Err(Status::unimplemented(
+            "get_stdin_uri: not supported by self-hosted gateway",
+        ))
+    }
+
+    async fn get_requester_usage(
+        &self,
+        _request: Request<pb::GetRequesterUsageRequest>,
+    ) -> Result<Response<pb::GetRequesterUsageResponse>, Status> {
+        Err(Status::unimplemented(
+            "get_requester_usage: not supported by self-hosted gateway",
+        ))
+    }
+
+    async fn set_hart_high_score(
+        &self,
+        _request: Request<pb::SetHartHighScoreRequest>,
+    ) -> Result<Response<pb::SetHartHighScoreResponse>, Status> {
+        Err(Status::unimplemented(
+            "set_hart_high_score: not supported by self-hosted gateway",
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -1679,6 +1707,7 @@ mod tests {
             gas_limit: 0,
             min_auction_period: 0,
             whitelist: vec![],
+            stdin_private: false,
         };
         let req = pb::RequestProofRequest {
             format: 0,

@@ -106,6 +106,7 @@ impl S3ArtifactClient {
             ArtifactType::Proof => "proofs",
             ArtifactType::Groth16Circuit => "",
             ArtifactType::PlonkCircuit => "",
+            ArtifactType::PrivateStdin => "private-stdins",
         }
     }
 

@@ -1,5 +1,5 @@
 use sp1_core_executor::{SP1CoreOpts, ELEMENT_THRESHOLD};
-
+use sp1_core_machine::riscv::RiscvAir;
 use sp1_prover::worker::SP1WorkerConfig;
 
 /// The core opts for the cluster.
@@ -19,7 +19,7 @@ pub fn cluster_opts() -> SP1CoreOpts {
 pub fn cluster_worker_config() -> SP1WorkerConfig {
     // Right now we are only changing the core opts, in the future we might want to change other
     // parts of the config as well.
-    let mut config = SP1WorkerConfig::default();
+    let mut config = SP1WorkerConfig::new(RiscvAir::machine());
     config.controller_config.opts = cluster_opts();
     config
 }
