@@ -5,6 +5,7 @@ use anyhow::Result;
 use opentelemetry::Context;
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::proto::WorkerTask;
+use sp1_core_machine::riscv::RiscvAir;
 use sp1_prover::worker::{run_vk_generation, TaskMetadata, WorkerClient};
 use std::sync::Arc;
 
@@ -46,7 +47,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
         let vk_worker = Arc::new(self.worker.prover_engine().vk_worker.clone());
         let client = self.worker.artifact_client().clone();
 
-        run_vk_generation(vk_worker, raw_task_request, client)
+        run_vk_generation(vk_worker, raw_task_request, client, RiscvAir::machine())
             .await
             .map(|_| TaskMetadata { gpu_ms: None })
     }

@@ -310,6 +310,7 @@ async fn e2e_register_program_request_proof_download() {
         gas_limit: 0,
         min_auction_period: 0,
         whitelist: vec![],
+        stdin_private: false,
     };
     let resp = network_rpc
         .request_proof(RequestProofRequest {

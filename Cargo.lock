@@ -9362,7 +9362,7 @@ dependencies = [
 [[package]]
 name = "spn-network-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network#81be73ca2ca8439684b773ee5a9344cc92c7ca81"
+source = "git+https://github.com/succinctlabs/network?branch=main#81be73ca2ca8439684b773ee5a9344cc92c7ca81"
 dependencies = [
  "alloy",
  "alloy-primitives",

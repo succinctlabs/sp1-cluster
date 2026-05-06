@@ -7,7 +7,13 @@ pub fn proto_to_cluster_type(proto: i32) -> ArtifactType {
         ProtoArtifactType::Program => ArtifactType::Program,
         ProtoArtifactType::Stdin => ArtifactType::Stdin,
         ProtoArtifactType::Proof => ArtifactType::Proof,
-        ProtoArtifactType::UnspecifiedArtifactType => ArtifactType::UnspecifiedArtifactType,
+        ProtoArtifactType::PrivateStdin => ArtifactType::PrivateStdin,
+        // Network-only artifact kinds (transactions, vapp state, exports) have
+        // no cluster-side counterpart — fold them into the unspecified bucket.
+        ProtoArtifactType::UnspecifiedArtifactType
+        | ProtoArtifactType::Transaction
+        | ProtoArtifactType::State
+        | ProtoArtifactType::Export => ArtifactType::UnspecifiedArtifactType,
     }
 }
 
@@ -20,6 +26,7 @@ pub fn artifact_type_segment(t: ArtifactType) -> &'static str {
         ArtifactType::Proof => "proof",
         ArtifactType::Groth16Circuit => "groth16",
         ArtifactType::PlonkCircuit => "plonk",
+        ArtifactType::PrivateStdin => "private-stdin",
     }
 }
 
@@ -31,6 +38,7 @@ pub fn parse_artifact_type_segment(seg: &str) -> Option<ArtifactType> {
         "proof" => ArtifactType::Proof,
         "groth16" => ArtifactType::Groth16Circuit,
         "plonk" => ArtifactType::PlonkCircuit,
+        "private-stdin" => ArtifactType::PrivateStdin,
         _ => return None,
     })
 }
