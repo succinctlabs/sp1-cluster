@@ -147,7 +147,6 @@ opt-level = 3
 [profile.dev.build-override]
 opt-level = 3
 
-# Picks up sp1#2713; drop once v6.1.1+ is released.
 [patch.crates-io]
 sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
 sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "64b48dbe" }
