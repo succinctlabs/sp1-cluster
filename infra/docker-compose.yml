@@ -62,6 +62,7 @@ services:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.2.1
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
+      # Must be <= container memory in GB (see deploy.resources.limits.memory below).
       - WORKER_MAX_WEIGHT_OVERRIDE=96
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
@@ -87,6 +88,7 @@ services:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.2.1
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
+      # Must be <= container memory in GB (see deploy.resources.limits.memory below).
       - WORKER_MAX_WEIGHT_OVERRIDE=96
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
@@ -112,6 +114,7 @@ services:
     image: ghcr.io/succinctlabs/sp1-cluster:node-gpu-v2.2.1
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
+      # Must be <= container memory in GB (see deploy.resources.limits.memory below).
       - WORKER_MAX_WEIGHT_OVERRIDE=24
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
