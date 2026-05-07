@@ -51,8 +51,6 @@ services:
     environment:
       - NODE_COORDINATOR_RPC=http://${MANAGER_HOST:-host.docker.internal}:50053
       # Must be <= container memory in GB (see deploy.resources.limits.memory below).
-      # Intentionally below memory: caps in-flight GPU tasks near a single GPU's
-      # real concurrency; remaining host RAM is headroom for CUDA buffers / staging.
       - WORKER_MAX_WEIGHT_OVERRIDE=24
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@${MANAGER_HOST:-host.docker.internal}:6379/0
