@@ -1,3 +1,4 @@
+mod events;
 mod service;
 
 use std::net::SocketAddr;
@@ -5,10 +6,17 @@ use std::sync::Arc;
 
 use alloy::primitives::Bytes;
 use axum::{routing::get, Router};
+use events::ClusterEventsImpl;
 use opentelemetry_sdk::Resource;
 use serde::{Deserialize, Serialize};
 use service::ClusterServiceImpl;
-use sp1_cluster_common::{logger, proto::cluster_service_server::ClusterServiceServer};
+use sp1_cluster_common::{
+    logger,
+    proto::{
+        cluster_service_server::ClusterServiceServer,
+        events::cluster_events_service_server::ClusterEventsServiceServer,
+    },
+};
 use sqlx::{prelude::FromRow, types::time::OffsetDateTime};
 use tonic::transport::Server;
 use tracing::{info, warn};
@@ -47,9 +55,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool = Arc::new(pool);
 
-    // Create the gRPC service
+    // Create the gRPC services
     let cluster_service = ClusterServiceImpl::new(pool.clone());
-    let grpc_service = ClusterServiceServer::new(cluster_service);
+    let cluster_grpc = ClusterServiceServer::new(cluster_service);
+
+    // ClusterEventsService spawns a PgListener at startup and broadcasts
+    // proof_event NOTIFY messages over a gRPC server stream.
+    let events_service = ClusterEventsImpl::start((*pool).clone())
+        .await
+        .expect("Failed to start ClusterEventsService");
+    let events_grpc = ClusterEventsServiceServer::new(events_service);
 
     // Set up the gRPC server
     let grpc_addr = std::env::var("API_GRPC_ADDR").unwrap_or("127.0.0.1:50051".to_string());
@@ -62,7 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         Server::builder()
             .accept_http1(true)
-            .add_service(tonic_web::enable(grpc_service))
+            .add_service(tonic_web::enable(cluster_grpc))
+            .add_service(tonic_web::enable(events_grpc))
             .serve(grpc_addr)
             .await
             .unwrap_or_else(|e| {

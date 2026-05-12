@@ -3,6 +3,7 @@ pub mod auth;
 pub mod config;
 pub mod ids;
 pub mod program_store;
+pub mod proof_events;
 pub mod service;
 pub mod status;
 
@@ -23,6 +24,7 @@ use crate::artifact_http::ArtifactHttpState;
 use crate::auth::{parse_allowlist, Auth, AuthMode};
 use crate::config::Config;
 use crate::program_store::{FilesystemProgramStore, InMemoryProgramStore, ProgramStore};
+use crate::proof_events::{spawn as spawn_proof_events, ProofEventsHub};
 use crate::service::artifact_store::ArtifactStoreImpl;
 use crate::service::prover_network::ProverNetworkImpl;
 
@@ -39,12 +41,14 @@ where
         })?;
     let auth = build_auth(&cfg)?;
     let program_store = build_program_store(&cfg)?;
+    let proof_events = spawn_proof_events(cluster.clone()).await?;
     serve(
         cfg,
         client,
         cluster,
         auth,
         program_store,
+        proof_events,
         shutdown_signal(),
         shutdown_signal(),
     )
@@ -55,12 +59,14 @@ where
 ///
 /// Broken out so integration tests can inject a fake ClusterServiceClient and
 /// their own shutdown signals (e.g. `oneshot::Receiver`).
+#[allow(clippy::too_many_arguments)]
 pub async fn serve<A, FG, FH>(
     cfg: Config,
     client: A,
     cluster: ClusterServiceClient,
     auth: Auth,
     program_store: Arc<dyn ProgramStore>,
+    proof_events: ProofEventsHub,
     grpc_shutdown: FG,
     http_shutdown: FH,
 ) -> Result<()>
@@ -98,6 +104,7 @@ where
         balance_amount,
         auth,
         program_store,
+        proof_events,
     ))
     .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE)
     .max_encoding_message_size(MAX_GRPC_MESSAGE_SIZE);

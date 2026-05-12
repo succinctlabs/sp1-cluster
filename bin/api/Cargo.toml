@@ -10,11 +10,14 @@ alloy.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 dotenv.workspace = true
+futures.workspace = true
 opentelemetry_sdk.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sqlx.workspace = true
 time.workspace = true
 tokio.workspace = true
+tokio-stream = { workspace = true, features = ["sync"] }
 tonic.workspace = true
 tonic-web.workspace = true
 tracing.workspace = true

@@ -22,6 +22,7 @@ use sp1_cluster_network_gateway::{
     auth::Auth,
     config::Config,
     program_store::{InMemoryProgramStore, ProgramStore},
+    proof_events::ProofEventsHub,
     serve,
 };
 use sp1_sdk::network::proto::{
@@ -198,7 +199,8 @@ async fn e2e_register_program_request_proof_download() {
         .unwrap()
         .connect_lazy();
     let cluster = ClusterServiceClient {
-        rpc: InnerClusterClient::new(channel),
+        rpc: InnerClusterClient::new(channel.clone()),
+        events: sp1_cluster_common::proto::events::cluster_events_service_client::ClusterEventsServiceClient::new(channel),
         backoff: Default::default(),
     };
 
@@ -234,6 +236,7 @@ async fn e2e_register_program_request_proof_download() {
             cluster,
             Auth::default(),
             program_store,
+            ProofEventsHub::new(),
             async move {
                 gw_grpc_shutdown_rx.await.ok();
             },
