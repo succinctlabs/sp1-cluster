@@ -36,6 +36,7 @@ struct DbProofRequest {
     updated_at: OffsetDateTime,
     extra_data: Option<String>,
     scheduled_by: Option<String>,
+    stdin_private: bool,
 }
 
 impl DbProofRequest {
@@ -64,6 +65,7 @@ impl DbProofRequest {
             updated_at: self.updated_at.unix_timestamp() as u64,
             extra_data: self.extra_data,
             scheduled_by: self.scheduled_by,
+            stdin_private: self.stdin_private,
         }
     }
 }
@@ -90,7 +92,7 @@ impl ClusterService for ClusterServiceImpl {
         info!("Creating proof request with ID: {}", req.proof_id);
 
         // Insert the proof request into the database
-        let result = sqlx::query!("INSERT INTO proof_requests (id, proof_status, requester, stdin_artifact_id, program_artifact_id, options_artifact_id, proof_artifact_id, cycle_limit, deadline, gas_limit, handled, metadata, scheduled_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        let result = sqlx::query!("INSERT INTO proof_requests (id, proof_status, requester, stdin_artifact_id, program_artifact_id, options_artifact_id, proof_artifact_id, cycle_limit, deadline, gas_limit, handled, metadata, scheduled_by, stdin_private) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
             req.proof_id,
             ProofRequestStatus::Pending as i16,
             &req.requester,
@@ -104,6 +106,7 @@ impl ClusterService for ClusterServiceImpl {
             false,
             "null".to_string(),
             req.scheduled_by.as_ref(),
+            req.stdin_private,
         )
         .execute(&*self.db_pool)
         .await;

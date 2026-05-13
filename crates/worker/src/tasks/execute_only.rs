@@ -8,7 +8,8 @@ use sp1_cluster_common::proto::{
 };
 use sp1_core_executor::{ExecutionError, Program, SP1CoreOpts};
 use sp1_prover::worker::{
-    execute_with_options, ProofId, SP1ExecutorConfig, TaskId, TaskMetadata, WorkerClient,
+    execute_with_options, ControllerInputs, ProofId, SP1ExecutorConfig, TaskId, TaskMetadata,
+    WorkerClient,
 };
 use sp1_sdk::network::proto::types::ExecuteFailureCause;
 use sp1_sdk::{SP1Context, SP1Stdin};
@@ -25,18 +26,20 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
             return Ok(TaskMetadata::default());
         }
 
-        // ELF, stdin, mode, cycle_limit
+        let ControllerInputs {
+            elf,
+            stdin_artifact,
+            cycle_limit,
+            metadata,
+            ..
+        } = TryFrom::try_from(data.inputs.as_slice())?;
+
         let artifact_client = self.worker.artifact_client();
         let (elf, stdin): (Vec<u8>, SP1Stdin) = tokio::try_join!(
-            artifact_client.download_program(&data.inputs[0]),
-            artifact_client.download_stdin(&data.inputs[1]),
+            artifact_client.download_program(&elf),
+            artifact_client
+                .download_with_type::<SP1Stdin>(&stdin_artifact, metadata.stdin_artifact_type()),
         )?;
-        let cycle_limit = if data.inputs.len() > 2 {
-            // [2] is mode, [3] is cycle_limit
-            data.inputs[3].parse::<u64>().ok()
-        } else {
-            None
-        };
 
         let proof_id = data.proof_id.clone();
 

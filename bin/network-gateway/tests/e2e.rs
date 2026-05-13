@@ -115,6 +115,7 @@ impl ClusterService for FakeCluster {
                 updated_at: 0,
                 extra_data: None,
                 scheduled_by: req.scheduled_by,
+                stdin_private: req.stdin_private,
             },
         );
         Ok(tonic::Response::new(()))

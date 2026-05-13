@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 sp1-cluster-common.workspace = true
+sp1-prover.workspace = true
 sp1-sdk.workspace = true
 spn-metrics.workspace = true
 
@@ -32,4 +33,3 @@ tracing.workspace = true
 
 [build-dependencies]
 chrono.workspace = true
-
