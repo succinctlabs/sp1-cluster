@@ -209,9 +209,7 @@ impl FulfillmentNetwork for MainnetFulfiller {
                 let assigned = spn_network_types::GetFilteredProofRequestsRequest {
                     version: Some(version.to_string()),
                     fulfillment_status: Some(spn_network_types::FulfillmentStatus::Assigned.into()),
-                    execution_status: Some(
-                        spn_network_types::ExecutionStatus::Unexecutable.into(),
-                    ),
+                    execution_status: Some(spn_network_types::ExecutionStatus::Unexecutable.into()),
                     minimum_deadline: Some(minimum_deadline),
                     fulfiller: Some(address.clone()),
                     limit: Some(limit),
