@@ -198,28 +198,35 @@ impl FulfillmentNetwork for MainnetFulfiller {
         minimum_deadline: u64,
         limit: u32,
     ) -> Result<Vec<Self::NetworkRequest>> {
+        // Two terminal shapes the network writes for an assigned request:
+        //   1. `Assigned + Unexecutable`     — oracle reported an exec failure; the
+        //                                      cluster still owes a `fail_fulfillment`.
+        //   2. `Unfulfillable` (any exec)    — network already flipped it terminal
+        //                                      (e.g. gas-limit, validation failure).
         let queries: Vec<_> = fulfiller_addresses
             .into_iter()
-            .map(
-                |address| spn_network_types::GetFilteredProofRequestsRequest {
+            .flat_map(|address| {
+                let assigned = spn_network_types::GetFilteredProofRequestsRequest {
                     version: Some(version.to_string()),
                     fulfillment_status: Some(spn_network_types::FulfillmentStatus::Assigned.into()),
                     execution_status: Some(spn_network_types::ExecutionStatus::Unexecutable.into()),
-                    execute_fail_cause: None,
                     minimum_deadline: Some(minimum_deadline),
-                    vk_hash: None,
-                    requester: None,
+                    fulfiller: Some(address.clone()),
+                    limit: Some(limit),
+                    ..Default::default()
+                };
+                let unfulfillable = spn_network_types::GetFilteredProofRequestsRequest {
+                    version: Some(version.to_string()),
+                    fulfillment_status: Some(
+                        spn_network_types::FulfillmentStatus::Unfulfillable.into(),
+                    ),
+                    minimum_deadline: Some(minimum_deadline),
                     fulfiller: Some(address),
                     limit: Some(limit),
-                    page: None,
-                    from: None,
-                    to: None,
-                    mode: None,
-                    not_bid_by: None,
-                    settlement_status: None,
-                    error: None,
-                },
-            )
+                    ..Default::default()
+                };
+                [assigned, unfulfillable]
+            })
             .collect();
 
         let responses = join_all(queries.into_iter().map(|request| {
@@ -228,10 +235,16 @@ impl FulfillmentNetwork for MainnetFulfiller {
         }))
         .await;
 
+        // Dedupe in case a status transition races the parallel queries.
+        let mut seen = std::collections::HashSet::new();
         let mut requests = Vec::new();
         for response in responses {
             let response = response?;
-            requests.extend(response.into_inner().requests);
+            for request in response.into_inner().requests {
+                if seen.insert(request.request_id.clone()) {
+                    requests.push(request);
+                }
+            }
         }
 
         Ok(requests.into_iter().map(NetworkProofRequest).collect())
