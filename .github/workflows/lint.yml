@@ -18,6 +18,7 @@ jobs:
         "runner=32cpu-linux-x64",
         "run-id=${{ github.run_id }}",
         "spot=false",
+        "disk=large",
         "tag=lint",
       ]
     env:
