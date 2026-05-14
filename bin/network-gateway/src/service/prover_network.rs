@@ -92,9 +92,14 @@ impl<A> ProverNetworkImpl<A> {
             ArtifactType::Program,
             &proof.program_artifact_id,
         );
+        let stdin_artifact_type = if proof.stdin_private {
+            ArtifactType::PrivateStdin
+        } else {
+            ArtifactType::Stdin
+        };
         let stdin_uri = artifact_uri(
             &self.public_http_url,
-            ArtifactType::Stdin,
+            stdin_artifact_type,
             &proof.stdin_artifact_id,
         );
 
@@ -123,7 +128,7 @@ impl<A> ProverNetworkImpl<A> {
             strategy: pb::FulfillmentStrategy::Reserved as i32,
             program_uri,
             stdin_uri,
-            stdin_private: false,
+            stdin_private: proof.stdin_private,
             deadline: proof.deadline,
             cycle_limit: proof.cycle_limit.unwrap_or(0),
             gas_price: None,
@@ -228,6 +233,7 @@ where
             cycle_limit: body.cycle_limit,
             gas_limit: body.gas_limit,
             scheduled_by: None,
+            stdin_private: body.stdin_private,
         };
         self.cluster
             .create_proof_request(create)

@@ -1,0 +1,2 @@
+ALTER TABLE proof_requests
+    ADD COLUMN stdin_private BOOLEAN NOT NULL DEFAULT FALSE;

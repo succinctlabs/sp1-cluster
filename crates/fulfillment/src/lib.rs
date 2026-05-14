@@ -645,6 +645,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                 cycle_limit: request.cycle_limit(),
                 gas_limit: request.gas_limit(),
                 scheduled_by: self.name.clone(),
+                stdin_private: request.stdin_private(),
             })
             .map_err(|e| anyhow!("failed to create proof request: {}", e))
             .await?;

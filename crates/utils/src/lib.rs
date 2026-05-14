@@ -90,6 +90,7 @@ pub async fn create_request<A: ArtifactClient>(
             cycle_limit: u64::MAX,
             gas_limit: u64::MAX,
             scheduled_by: None,
+            stdin_private: false,
         })
         .await?;
 

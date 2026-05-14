@@ -107,6 +107,11 @@
         "ordinal": 20,
         "name": "scheduled_by",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 21,
+        "name": "stdin_private",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -135,7 +140,8 @@
       false,
       false,
       true,
-      true
+      true,
+      false
     ]
   },
   "hash": "eda370087a85de4839dd9e865778c61b3807071ad2725a4c8f6627338d9c5c7a"

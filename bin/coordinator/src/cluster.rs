@@ -9,6 +9,7 @@ use sp1_cluster_common::{
         CreateProofRequest, ProofRequestListRequest, ProofRequestStatus, ProofRequestUpdateRequest,
     },
 };
+use sp1_prover::worker::ControllerInputMetadata;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 /// Spawn a task to update proof statuses with the cluster API given a channel of proof completions.
@@ -110,12 +111,28 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                                 );
                                 continue;
                             };
+
+                            let proof_nonce = String::new();
+                            let metadata = match serde_json::to_string(&ControllerInputMetadata {
+                                stdin_private: proof.stdin_private,
+                            }) {
+                                Ok(metadata) => metadata,
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to serialize ControllerInputMetadata: {e}"
+                                    );
+                                    continue;
+                                }
+                            };
+
                             // TODO: could bulk create
                             let inputs = vec![
                                 proof.program_artifact_id,
                                 proof.stdin_artifact_id,
                                 options_artifact_id,
                                 cycle_limit.to_string(),
+                                proof_nonce,
+                                metadata,
                             ];
                             let outputs = vec![proof_artifact_id];
                             tracing::info!("inputs: {:?}", inputs);
