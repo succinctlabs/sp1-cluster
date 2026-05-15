@@ -26,7 +26,7 @@ lazy_static! {
     /// Task weight for controller task.
     pub static ref CONTROLLER_WEIGHT: usize = std::env::var("WORKER_CONTROLLER_WEIGHT")
         .map(|s| s.parse().unwrap())
-        .unwrap_or(4);
+        .unwrap_or(1);
 
     /// Task weight for groth16 wrap task.
     pub static ref GROTH16_WRAP_WEIGHT: usize = std::env::var("WORKER_GROTH16_WRAP_WEIGHT")
@@ -46,5 +46,5 @@ lazy_static! {
     /// Task weight for core execute task.
     pub static ref CORE_EXECUTE_WEIGHT: usize = std::env::var("WORKER_CORE_EXECUTE_WEIGHT")
         .map(|s| s.parse().unwrap())
-        .unwrap_or(32);
+        .unwrap_or(8);
 }
