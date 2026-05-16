@@ -141,14 +141,11 @@ impl ClusterService for ClusterServiceImpl {
 
         match result {
             Ok(result) => {
-                if result.rows_affected() == 0 {
-                    warn!("Pending proof request {} not found", req.proof_id);
-                    return Err(Status::not_found(format!(
-                        "Pending proof request {} not found",
-                        req.proof_id
-                    )));
+                // Idempotent: 0 rows means the row is missing or already terminal,
+                // so the cancel goal (not Pending) is already met.
+                if result.rows_affected() > 0 {
+                    info!("Successfully cancelled proof request: {}", req.proof_id);
                 }
-                info!("Successfully cancelled proof request: {}", req.proof_id);
                 Ok(Response::new(()))
             }
             Err(e) => {
