@@ -38,15 +38,19 @@ impl CoordinatorMetrics {
         .increment(1);
     }
 
-    /// Record the time (seconds) between a worker's last heartbeat and dead detection.
-    /// Histogram used to observe dead-worker detection latency. Observability-only.
-    pub fn record_dead_worker_detection_latency(&self, worker_type: WorkerType, secs: f64) {
+    /// Record the age of a worker's last heartbeat at the moment dead-worker cleanup
+    /// removed it. By construction this is >= `WORKER_HEARTBEAT_TIMEOUT` (currently 30s)
+    /// because the cleanup only fires once that threshold is crossed. The variation
+    /// above the threshold reflects the cleanup poll cadence + scheduling jitter, NOT a
+    /// pure "death-to-detection" lag (the worker may have stopped emitting heartbeats
+    /// up to one heartbeat interval before its true death). Observability-only.
+    pub fn record_dead_worker_heartbeat_age(&self, worker_type: WorkerType, secs: f64) {
         describe_histogram!(
-            "coordinator_dead_worker_detection_latency_seconds",
-            "Seconds elapsed between a worker's last heartbeat and dead-worker cleanup.",
+            "coordinator_dead_worker_heartbeat_age_seconds",
+            "Seconds between a worker's last heartbeat and dead-worker cleanup (>= WORKER_HEARTBEAT_TIMEOUT).",
         );
         histogram!(
-            "coordinator_dead_worker_detection_latency_seconds",
+            "coordinator_dead_worker_heartbeat_age_seconds",
             "worker_type" => format!("{worker_type:?}"),
         )
         .record(secs);

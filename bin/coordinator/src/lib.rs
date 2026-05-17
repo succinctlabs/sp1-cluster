@@ -747,17 +747,17 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
-            // (worker_id, worker_type, detection_latency_secs)
+            // (worker_id, worker_type, heartbeat_age_secs at time of cleanup)
             let mut dead_workers: Vec<(String, WorkerType, u64)> = vec![];
             for (id, worker) in &state.workers {
                 if worker.last_heartbeat + WORKER_HEARTBEAT_TIMEOUT < now {
-                    let detection_latency = now.saturating_sub(worker.last_heartbeat);
+                    let heartbeat_age = now.saturating_sub(worker.last_heartbeat);
                     tracing::warn!(
                         "worker {} has timed out (last heartbeat {}s ago)",
                         id,
-                        detection_latency
+                        heartbeat_age
                     );
-                    dead_workers.push((id.clone(), worker.worker_type, detection_latency));
+                    dead_workers.push((id.clone(), worker.worker_type, heartbeat_age));
                 }
             }
             if !dead_workers.is_empty() {
@@ -768,13 +768,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                     .write_owned()
                     .instrument(tracing::debug_span!("acquire_write"))
                     .await;
-                for (id, worker_type, detection_latency) in dead_workers {
+                for (id, worker_type, heartbeat_age) in dead_workers {
                     if let Some(metrics) = &self.metrics {
                         metrics.increment_dead_workers(worker_type);
-                        metrics.record_dead_worker_detection_latency(
-                            worker_type,
-                            detection_latency as f64,
-                        );
+                        metrics.record_dead_worker_heartbeat_age(worker_type, heartbeat_age as f64);
                     }
                     self.remove_worker_internal(&mut state, id).await;
                 }
