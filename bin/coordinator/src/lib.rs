@@ -306,6 +306,15 @@ pub struct Task<P: AssignmentPolicy> {
     /// The worker that is currently working on this task.
     pub worker: Option<String>,
 
+    /// Number of times this task has been re-enqueued by the dead-worker cleanup path
+    /// (heartbeat timeout, not a worker-reported failure).
+    ///
+    /// Tracking-only (issue cloud-ops#127 PR1a). Does NOT consume retry budget and does
+    /// NOT change `retries` semantics. Used for observability + metrics only. Any future
+    /// enforcement based on this counter will land in a separate PR with explicit product
+    /// approval.
+    pub dead_worker_requeue_count: u32,
+
     /// Any extra state tracked by the assignment policy.
     pub extra: P::TaskState,
 }
@@ -451,6 +460,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             subscribers: HashSet::new(),
             worker: None,
             // allocation: None,
+            dead_worker_requeue_count: 0,
             extra: P::TaskState::default(),
         };
         tracing::debug!(
@@ -599,8 +609,11 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                     drop(state);
                 }
             } else {
-                tracing::error!(
-                    "task {} was assigned to an unknown worker: {} not found",
+                // Expected under dead-worker churn (e.g. spot eviction): the worker
+                // was cleaned up between assignment and completion. Downgraded to warn
+                // per issue cloud-ops#127 PR1a so it doesn't dominate error logs.
+                tracing::warn!(
+                    "task {} was assigned to an unknown worker: {} not found (possibly evicted)",
                     task_id,
                     worker_id
                 );
@@ -734,11 +747,17 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
-            let mut dead_workers = vec![];
+            // (worker_id, worker_type, heartbeat_age_secs at time of cleanup)
+            let mut dead_workers: Vec<(String, WorkerType, u64)> = vec![];
             for (id, worker) in &state.workers {
                 if worker.last_heartbeat + WORKER_HEARTBEAT_TIMEOUT < now {
-                    tracing::warn!("worker {} has timed out", id);
-                    dead_workers.push(id.clone());
+                    let heartbeat_age = now.saturating_sub(worker.last_heartbeat);
+                    tracing::warn!(
+                        "worker {} has timed out (last heartbeat {}s ago)",
+                        id,
+                        heartbeat_age
+                    );
+                    dead_workers.push((id.clone(), worker.worker_type, heartbeat_age));
                 }
             }
             if !dead_workers.is_empty() {
@@ -749,7 +768,11 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                     .write_owned()
                     .instrument(tracing::debug_span!("acquire_write"))
                     .await;
-                for id in dead_workers {
+                for (id, worker_type, heartbeat_age) in dead_workers {
+                    if let Some(metrics) = &self.metrics {
+                        metrics.increment_dead_workers(worker_type);
+                        metrics.record_dead_worker_heartbeat_age(worker_type, heartbeat_age as f64);
+                    }
                     self.remove_worker_internal(&mut state, id).await;
                 }
                 self.assign_tasks(state).await.unwrap()
@@ -816,31 +839,80 @@ impl<P: AssignmentPolicy> Coordinator<P> {
     }
 
     /// Just remove a worker with borrowed state and without reassigning tasks.
+    ///
+    /// Observability: per issue cloud-ops#127 PR1a, this path is the hot loop under
+    /// spot interruption. Behavior is intentionally unchanged in PR1a: tasks are
+    /// re-enqueued WITHOUT incrementing `task.retries`, WITHOUT decrementing
+    /// `proof.active_tasks`, and WITHOUT closing the task channel. Only a tracking-only
+    /// counter `Task::dead_worker_requeue_count` and a set of metrics are added.
     async fn remove_worker_internal(
         self: &Arc<Self>,
         state: &mut CoordinatorState<P>,
         worker_id: String,
     ) {
-        let worker = state.workers.remove(&worker_id).unwrap();
+        let Some(worker) = state.workers.remove(&worker_id) else {
+            tracing::warn!(
+                "remove_worker_internal called for unknown worker: {}",
+                worker_id
+            );
+            if let Some(metrics) = &self.metrics {
+                metrics.increment_orphan_worker_removals("unknown_worker");
+            }
+            return;
+        };
+        let worker_type = worker.worker_type;
         // Reassign any tasks that were running on this worker.
         for (proof_id, task_id) in &worker.active_tasks {
-            let Some(proof) = state.proofs.get(proof_id) else {
-                continue;
+            // Look up proof + task with a single scoped mutable borrow so we can both
+            // increment the tracking counter on the stored task and clone it for the
+            // queue. The borrow ends before we touch `state` again for
+            // `post_task_update_state` / `enqueue_task`.
+            let (proof_extra, task) = {
+                let Some(proof) = state.proofs.get_mut(proof_id) else {
+                    tracing::warn!(
+                        "dead-worker cleanup: proof {} not found for task {} (worker {})",
+                        proof_id,
+                        task_id,
+                        worker_id
+                    );
+                    if let Some(metrics) = &self.metrics {
+                        metrics.increment_dead_worker_missing_proof();
+                    }
+                    continue;
+                };
+                let proof_extra = proof.extra.clone();
+                let Some(stored) = proof.tasks.get_mut(task_id) else {
+                    tracing::warn!(
+                        "dead-worker cleanup: task {} not found in proof {} (worker {})",
+                        task_id,
+                        proof_id,
+                        worker_id
+                    );
+                    if let Some(metrics) = &self.metrics {
+                        metrics.increment_dead_worker_missing_task();
+                    }
+                    continue;
+                };
+                // Tracking-only: record that this task was re-enqueued via the
+                // dead-worker path. Does NOT consume retry budget (issue #127 PR1a).
+                stored.dead_worker_requeue_count =
+                    stored.dead_worker_requeue_count.saturating_add(1);
+                (proof_extra, stored.clone())
             };
-            let proof_extra = proof.extra.clone();
-            let task = proof.tasks.get(task_id).cloned();
-            if let Some(task) = task {
-                P::post_task_update_state(
-                    state,
-                    proof_extra,
-                    &task.id,
-                    task.extra.clone(),
-                    task.data.weight,
-                    proof_id,
-                    task.data.task_type(),
-                );
-                self.enqueue_task(state, task).await;
+            let task_type = task.data.task_type();
+            if let Some(metrics) = &self.metrics {
+                metrics.increment_dead_worker_requeues(worker_type, task_type);
             }
+            P::post_task_update_state(
+                state,
+                proof_extra,
+                &task.id,
+                task.extra.clone(),
+                task.data.weight,
+                proof_id,
+                task_type,
+            );
+            self.enqueue_task(state, task).await;
         }
         P::post_worker_empty(state, worker);
     }
@@ -1939,6 +2011,7 @@ mod tests {
                     retries: 0,
                     subscribers: HashSet::new(),
                     worker: None,
+                    dead_worker_requeue_count: 0,
                     extra: Default::default(),
                 },
             );
@@ -2016,5 +2089,262 @@ mod tests {
 
         c.cleanup_stale_task_channels();
         assert_eq!(c.task_channels.len(), 1);
+    }
+
+    // ============================================================================
+    // Worker lifecycle / dead-worker requeue invariants
+    // ----------------------------------------------------------------------------
+    // These tests codify the CURRENT behavior of the dead-worker / close-worker code
+    // path (issue cloud-ops#127 PR1a). They lock in invariants so any future change
+    // to subscriber semantics, retry budget, or proof.active_tasks accounting will be
+    // an explicit, reviewable diff rather than an accidental regression.
+    //
+    // PR1a is observability-only: no semantics change. PR1c/PR1d (if approved) will
+    // change some of these invariants — those PRs will update these tests.
+    // ============================================================================
+
+    fn insert_proof_with_running_task(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        proof_id: &str,
+        task_id: &str,
+        worker_id: Option<&str>,
+    ) {
+        let mut proof = Proof::new(proof_id.into(), None, ());
+        proof.active_tasks = 1;
+        proof.tasks.insert(
+            task_id.into(),
+            Task {
+                id: task_id.into(),
+                data: TaskData {
+                    proof_id: proof_id.into(),
+                    ..Default::default()
+                },
+                created_at: SystemTime::now(),
+                status: TaskStatus::Running,
+                retries: 0,
+                subscribers: HashSet::new(),
+                worker: worker_id.map(String::from),
+                dead_worker_requeue_count: 0,
+                extra: Default::default(),
+            },
+        );
+        state.proofs.insert(proof_id.into(), proof);
+    }
+
+    fn insert_dead_worker(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        worker_id: &str,
+        worker_type: WorkerType,
+        active_tasks: &[(&str, &str)],
+    ) -> mpsc::UnboundedReceiver<Result<ServerMessage, Status>> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut worker = Worker::new(worker_id.into(), worker_type, 24, tx);
+        // Force the heartbeat into the distant past so cleanup_dead_workers picks it up.
+        worker.last_heartbeat = 0;
+        for (proof_id, task_id) in active_tasks {
+            worker
+                .active_tasks
+                .insert(((*proof_id).into(), (*task_id).into()));
+        }
+        state.workers.insert(worker_id.into(), worker);
+        rx
+    }
+
+    #[tokio::test]
+    async fn close_worker_marks_worker_closed() {
+        let c = Arc::new(coordinator());
+        let (tx, _rx) = mpsc::unbounded_channel();
+        {
+            let mut state = c.state.write().await;
+            state.workers.insert(
+                "w1".into(),
+                Worker::new("w1".into(), WorkerType::Gpu, 24, tx),
+            );
+        }
+
+        c.close_worker("w1".into()).await.unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            state.workers.get("w1").unwrap().closed,
+            "close_worker must set worker.closed = true"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_worker_unknown_returns_not_found() {
+        let c = Arc::new(coordinator());
+        let err = c.close_worker("nonexistent".into()).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn cleanup_dead_workers_removes_dead_worker() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_dead_worker(&mut state, "w1", WorkerType::Gpu, &[]);
+        }
+
+        c.cleanup_dead_workers().await;
+
+        let state = c.state.read().await;
+        assert!(
+            !state.workers.contains_key("w1"),
+            "dead worker should be removed from state.workers"
+        );
+    }
+
+    /// Codifies invariants for PR1a:
+    ///   - dead-worker requeue does NOT decrement `proof.active_tasks`
+    ///   - dead-worker requeue does NOT increment `task.retries`
+    ///   - dead-worker requeue DOES increment `task.dead_worker_requeue_count` (tracking only)
+    ///   - task remains in proof.tasks (re-enqueued for future assignment)
+    #[tokio::test]
+    async fn cleanup_dead_workers_requeue_preserves_state_invariants() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            insert_dead_worker(&mut state, "w1", WorkerType::Gpu, &[("p1", "t1")]);
+        }
+
+        c.cleanup_dead_workers().await;
+
+        let state = c.state.read().await;
+        let proof = state
+            .proofs
+            .get("p1")
+            .expect("proof should still exist after dead-worker requeue");
+        let task = proof
+            .tasks
+            .get("t1")
+            .expect("task should still exist after dead-worker requeue");
+
+        // Invariant: proof.active_tasks unchanged (task still non-terminal).
+        assert_eq!(
+            proof.active_tasks, 1,
+            "dead-worker requeue must NOT decrement proof.active_tasks (PR1a)"
+        );
+        // Invariant: retries unchanged — infra failure is separate from logical retry budget.
+        assert_eq!(
+            task.retries, 0,
+            "dead-worker requeue must NOT increment task.retries (PR1a)"
+        );
+        // PR1a tracking-only counter — incremented by 1.
+        assert_eq!(
+            task.dead_worker_requeue_count, 1,
+            "dead_worker_requeue_count tracking counter should increment by 1"
+        );
+    }
+
+    /// Codifies invariant: dead-worker requeue does NOT close the task channel.
+    /// A subscriber attached before the dead-worker event must NOT receive EndOfStream;
+    /// the channel stays open for the eventual completion on a re-assigned worker.
+    #[tokio::test]
+    async fn cleanup_dead_workers_does_not_close_task_channel() {
+        let c = Arc::new(coordinator());
+        let mut subscriber_rx = c.subscribe_task_channel("t1", 0);
+
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            insert_dead_worker(&mut state, "w1", WorkerType::Gpu, &[("p1", "t1")]);
+        }
+
+        c.cleanup_dead_workers().await;
+
+        // Subscriber must not receive ANY message: no payload, no EndOfStream.
+        // The task is non-terminal — it will be re-assigned and the eventual
+        // completion message goes through this same channel.
+        assert!(
+            subscriber_rx.try_recv().is_err(),
+            "task channel must stay open across dead-worker requeue (no EndOfStream)"
+        );
+    }
+
+    /// Hardening: `remove_worker_internal` must not panic when called for a worker
+    /// that's no longer in state.workers.
+    #[tokio::test]
+    async fn remove_worker_unknown_worker_does_not_panic() {
+        let c = Arc::new(coordinator());
+        // This used to panic via `state.workers.remove(&worker_id).unwrap()`.
+        // After PR1a hardening, this should log + emit metric + return Ok-ish.
+        c.remove_worker("nonexistent".into()).await;
+
+        let state = c.state.read().await;
+        assert!(state.workers.is_empty());
+    }
+
+    /// Hardening: dead-worker cleanup must not panic when a worker has an active_task
+    /// entry that references a proof that has been concurrently removed.
+    #[tokio::test]
+    async fn cleanup_dead_workers_with_missing_proof_does_not_panic() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            // Worker references proof "ghost" that's not in state.proofs.
+            insert_dead_worker(&mut state, "w1", WorkerType::Gpu, &[("ghost", "t1")]);
+        }
+
+        c.cleanup_dead_workers().await;
+
+        let state = c.state.read().await;
+        assert!(state.workers.is_empty());
+    }
+
+    /// Hardening: dead-worker cleanup must not panic when a worker has an active_task
+    /// entry whose task does not exist in the (existing) proof.
+    #[tokio::test]
+    async fn cleanup_dead_workers_with_missing_task_does_not_panic() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            // Proof exists but doesn't contain "phantom_task".
+            let proof = Proof::new("p1".into(), None, ());
+            state.proofs.insert("p1".into(), proof);
+            insert_dead_worker(&mut state, "w1", WorkerType::Gpu, &[("p1", "phantom_task")]);
+        }
+
+        c.cleanup_dead_workers().await;
+
+        let state = c.state.read().await;
+        assert!(state.workers.is_empty());
+        // Proof still present (no spurious side effects).
+        assert!(state.proofs.contains_key("p1"));
+    }
+
+    /// Repeated dead-worker requeue on the same task accumulates the tracking counter.
+    /// Verifies the tracking field is monotonic across multiple dead-worker events.
+    #[tokio::test]
+    async fn dead_worker_requeue_count_accumulates_across_events() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            insert_dead_worker(&mut state, "w1", WorkerType::Gpu, &[("p1", "t1")]);
+        }
+        c.cleanup_dead_workers().await;
+
+        // Simulate a second worker picking it up and also dying.
+        {
+            let mut state = c.state.write().await;
+            insert_dead_worker(&mut state, "w2", WorkerType::Gpu, &[("p1", "t1")]);
+        }
+        c.cleanup_dead_workers().await;
+
+        let state = c.state.read().await;
+        let task = state.proofs.get("p1").unwrap().tasks.get("t1").unwrap();
+        assert_eq!(
+            task.dead_worker_requeue_count, 2,
+            "tracking counter should accumulate across multiple dead-worker events"
+        );
+        // Invariants still hold.
+        assert_eq!(task.retries, 0, "retries must remain 0");
+        assert_eq!(
+            state.proofs.get("p1").unwrap().active_tasks,
+            1,
+            "active_tasks must remain 1"
+        );
     }
 }
