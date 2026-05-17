@@ -309,10 +309,9 @@ pub struct Task<P: AssignmentPolicy> {
     /// Number of times this task has been re-enqueued by the dead-worker cleanup path
     /// (heartbeat timeout, not a worker-reported failure).
     ///
-    /// Tracking-only (issue cloud-ops#127 PR1a). Does NOT consume retry budget and does
-    /// NOT change `retries` semantics. Used for observability + metrics only. Any future
-    /// enforcement based on this counter will land in a separate PR with explicit product
-    /// approval.
+    /// Tracking-only. Does NOT consume retry budget and does NOT change `retries`
+    /// semantics. Worker disappearance is treated as an infra/liveness event, distinct
+    /// from a logical task failure.
     pub dead_worker_requeue_count: u32,
 
     /// Any extra state tracked by the assignment policy.
@@ -610,8 +609,8 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 }
             } else {
                 // Expected under dead-worker churn (e.g. spot eviction): the worker
-                // was cleaned up between assignment and completion. Downgraded to warn
-                // per issue cloud-ops#127 PR1a so it doesn't dominate error logs.
+                // was cleaned up between assignment and completion. Logged at warn so
+                // it doesn't dominate error logs.
                 tracing::warn!(
                     "task {} was assigned to an unknown worker: {} not found (possibly evicted)",
                     task_id,
@@ -840,11 +839,11 @@ impl<P: AssignmentPolicy> Coordinator<P> {
 
     /// Just remove a worker with borrowed state and without reassigning tasks.
     ///
-    /// Observability: per issue cloud-ops#127 PR1a, this path is the hot loop under
-    /// spot interruption. Behavior is intentionally unchanged in PR1a: tasks are
-    /// re-enqueued WITHOUT incrementing `task.retries`, WITHOUT decrementing
-    /// `proof.active_tasks`, and WITHOUT closing the task channel. Only a tracking-only
-    /// counter `Task::dead_worker_requeue_count` and a set of metrics are added.
+    /// Worker disappearance is treated as an infra/liveness event, not a logical
+    /// task failure. Tasks are re-enqueued WITHOUT incrementing `task.retries`,
+    /// WITHOUT decrementing `proof.active_tasks`, and WITHOUT closing the task
+    /// channel. A tracking counter `Task::dead_worker_requeue_count` and the
+    /// `coordinator_dead_worker_*` metrics observe this path.
     async fn remove_worker_internal(
         self: &Arc<Self>,
         state: &mut CoordinatorState<P>,
@@ -894,7 +893,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                     continue;
                 };
                 // Tracking-only: record that this task was re-enqueued via the
-                // dead-worker path. Does NOT consume retry budget (issue #127 PR1a).
+                // dead-worker path. Does NOT consume retry budget.
                 stored.dead_worker_requeue_count =
                     stored.dead_worker_requeue_count.saturating_add(1);
                 (proof_extra, stored.clone())
@@ -2094,13 +2093,12 @@ mod tests {
     // ============================================================================
     // Worker lifecycle / dead-worker requeue invariants
     // ----------------------------------------------------------------------------
-    // These tests codify the CURRENT behavior of the dead-worker / close-worker code
-    // path (issue cloud-ops#127 PR1a). They lock in invariants so any future change
-    // to subscriber semantics, retry budget, or proof.active_tasks accounting will be
-    // an explicit, reviewable diff rather than an accidental regression.
-    //
-    // PR1a is observability-only: no semantics change. PR1c/PR1d (if approved) will
-    // change some of these invariants — those PRs will update these tests.
+    // These tests codify the dead-worker / close-worker invariants:
+    //   - worker disappearance is an infra/liveness event (not a logical task failure)
+    //   - dead-worker requeue does NOT consume retry budget
+    //   - task remains non-terminal (proof.active_tasks unchanged)
+    //   - subscriber channel remains open across requeue
+    // Any change to these invariants should be deliberate, not accidental.
     // ============================================================================
 
     fn insert_proof_with_running_task(
@@ -2195,7 +2193,7 @@ mod tests {
         );
     }
 
-    /// Codifies invariants for PR1a:
+    /// Codifies invariants:
     ///   - dead-worker requeue does NOT decrement `proof.active_tasks`
     ///   - dead-worker requeue does NOT increment `task.retries`
     ///   - dead-worker requeue DOES increment `task.dead_worker_requeue_count` (tracking only)
@@ -2224,14 +2222,14 @@ mod tests {
         // Invariant: proof.active_tasks unchanged (task still non-terminal).
         assert_eq!(
             proof.active_tasks, 1,
-            "dead-worker requeue must NOT decrement proof.active_tasks (PR1a)"
+            "dead-worker requeue must NOT decrement proof.active_tasks"
         );
         // Invariant: retries unchanged — infra failure is separate from logical retry budget.
         assert_eq!(
             task.retries, 0,
-            "dead-worker requeue must NOT increment task.retries (PR1a)"
+            "dead-worker requeue must NOT increment task.retries"
         );
-        // PR1a tracking-only counter — incremented by 1.
+        // Tracking-only counter — incremented by 1.
         assert_eq!(
             task.dead_worker_requeue_count, 1,
             "dead_worker_requeue_count tracking counter should increment by 1"
@@ -2257,10 +2255,15 @@ mod tests {
         // Subscriber must not receive ANY message: no payload, no EndOfStream.
         // The task is non-terminal — it will be re-assigned and the eventual
         // completion message goes through this same channel.
-        assert!(
-            subscriber_rx.try_recv().is_err(),
-            "task channel must stay open across dead-worker requeue (no EndOfStream)"
-        );
+        match subscriber_rx.try_recv() {
+            Err(mpsc::error::TryRecvError::Empty) => {}
+            Err(mpsc::error::TryRecvError::Disconnected) => panic!(
+                "task channel must stay open across dead-worker requeue (channel was disconnected)"
+            ),
+            Ok(msg) => panic!(
+                "subscriber must not receive any message during dead-worker requeue, got: {msg:?}"
+            ),
+        }
     }
 
     /// Hardening: `remove_worker_internal` must not panic when called for a worker
@@ -2269,7 +2272,7 @@ mod tests {
     async fn remove_worker_unknown_worker_does_not_panic() {
         let c = Arc::new(coordinator());
         // This used to panic via `state.workers.remove(&worker_id).unwrap()`.
-        // After PR1a hardening, this should log + emit metric + return Ok-ish.
+        // After hardening, this should log + emit metric + return Ok-ish.
         c.remove_worker("nonexistent".into()).await;
 
         let state = c.state.read().await;

@@ -25,7 +25,7 @@ impl CoordinatorMetrics {
     }
 
     /// Increment counter when a worker is detected as dead (heartbeat timeout).
-    /// Observability-only — no behavior change. See issue cloud-ops#127 PR1a.
+    /// Observability-only — no behavior change.
     pub fn increment_dead_workers(&self, worker_type: WorkerType) {
         describe_counter!(
             "coordinator_dead_workers_total",
@@ -57,7 +57,7 @@ impl CoordinatorMetrics {
     }
 
     /// Increment counter when a task is requeued via the dead-worker cleanup path.
-    /// Observability-only. Does NOT change retry budget semantics in PR1a.
+    /// Observability-only. Does NOT change retry budget semantics.
     pub fn increment_dead_worker_requeues(&self, worker_type: WorkerType, task_type: TaskType) {
         describe_counter!(
             "coordinator_dead_worker_requeues_total",
