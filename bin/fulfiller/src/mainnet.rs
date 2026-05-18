@@ -92,7 +92,8 @@ impl FulfillmentNetwork for MainnetFulfiller {
         signer: &NetworkSigner,
     ) -> Result<()> {
         let error = request_error_from_extra_data(request.extra_data.as_deref());
-        self.fail_request_with_error(&request.id, error, &[], signer).await
+        self.fail_request_with_error(&request.id, error, &[], signer)
+            .await
     }
 
     async fn cancel_request(&self, request_id: &str, signer: &NetworkSigner) -> Result<()> {
