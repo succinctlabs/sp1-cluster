@@ -16,4 +16,16 @@ impl ProvingFailure {
     pub fn to_extra_data(&self) -> String {
         serde_json::json!({ "proving_failure": self }).to_string()
     }
+
+    /// Parse from the `extra_data` wire string. Returns `None` if the string
+    /// isn't a proving-failure payload.
+    pub fn from_extra_data(s: &str) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Envelope {
+            proving_failure: ProvingFailure,
+        }
+        serde_json::from_str::<Envelope>(s)
+            .ok()
+            .map(|e| e.proving_failure)
+    }
 }
