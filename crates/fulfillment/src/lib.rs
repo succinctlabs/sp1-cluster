@@ -6,12 +6,14 @@ use futures::{future::join_all, TryFutureExt};
 use sp1_cluster_artifact::{ArtifactClient, ArtifactType, CompressedUpload};
 use sp1_cluster_common::{
     client::ClusterServiceClient,
+    failure::ProvingFailure,
     proto::{
         ProofRequest, ProofRequestCancelRequest, ProofRequestCreateRequest,
         ProofRequestListRequest, ProofRequestStatus, ProofRequestUpdateRequest,
     },
 };
 use sp1_sdk::network::signer::NetworkSigner;
+use spn_network_types::ProofRequestError;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::{task::JoinSet, time::sleep};
@@ -31,6 +33,31 @@ const VK_MISMATCH_STRINGS: &[&str] = &[
     "sp1 vk hash mismatch",
     "vk hash from syscall does not match vkey from input",
 ];
+
+/// View over the two `extra_data` shapes the fulfillment loop reads:
+///   - `ExecutionResult` from execute_only (uses `failure_cause`).
+///   - `try_unclaim_proof` proving-failure payload (uses `proving_failure`).
+/// Fields are independent; either or both may be absent.
+#[derive(serde::Deserialize)]
+struct ExtraDataView {
+    #[serde(default)]
+    proving_failure: Option<ProvingFailure>,
+    #[serde(default)]
+    failure_cause: Option<u64>,
+}
+
+/// Derive the network's `ProofRequestError` from the worker's `extra_data`.
+/// A populated `failure_cause` means execute_only itself faulted -> `EXECUTION_FAILURE`.
+/// A `proving_failure` payload means a post-execute task failed -> `PROVING_FAILURE`.
+pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
+    let view: ExtraDataView = serde_json::from_str(extra_data?).ok()?;
+    if matches!(view.failure_cause, Some(c) if c != 0) {
+        return Some(ProofRequestError::ExecutionFailure as i32);
+    }
+    view.proving_failure
+        .is_some()
+        .then_some(ProofRequestError::ProvingFailure as i32)
+}
 
 #[derive(Clone)]
 pub struct Fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> {

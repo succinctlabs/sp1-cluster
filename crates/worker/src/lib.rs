@@ -8,6 +8,7 @@ use lazy_static::lazy_static;
 use opentelemetry::Context;
 use opentelemetry::{global, trace::TraceContextExt};
 use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_common::failure::ProvingFailure;
 use sp1_cluster_common::proto::{ProofRequestStatus, TaskStatus, TaskType, WorkerTask};
 use sp1_prover::worker::{ProofId, SP1Worker, TaskId, TaskMetadata, WorkerClient};
 use sp1_prover_types::network_base_types::ProofMode;
@@ -220,6 +221,8 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
                         self.worker.worker_client(),
                         ProofId::new(data.proof_id.clone()),
                         Some(TaskId::new(task.task_id.clone())),
+                        task_type,
+                        err,
                     )
                     .await;
 
@@ -237,6 +240,8 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
                         self.worker.worker_client(),
                         ProofId::new(data.proof_id.clone()),
                         Some(TaskId::new(task.task_id.clone())),
+                        task_type,
+                        err,
                     )
                     .await;
 
@@ -254,16 +259,25 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
     }
 }
 
-/// Unclaims a proof request and sets all associated tasks to FAILED_FATAL.
-pub async fn try_unclaim_proof<W: WorkerClient>(
+/// Unclaim a proof and stamp `extra_data` with a `proving_failure` payload
+/// so the fulfiller can surface a real `ProofRequestError`.
+pub async fn try_unclaim_proof<W: WorkerClient, E: std::fmt::Debug>(
     cluster_client: &W,
     proof_id: ProofId,
     task_id: Option<TaskId>,
+    task_type: TaskType,
+    err: &E,
 ) {
     log::info!("Unclaiming proof {proof_id}");
 
+    let payload = ProvingFailure {
+        task_type,
+        reason: format!("{err:?}"),
+    }
+    .to_extra_data();
+
     if let Err(err) = cluster_client
-        .complete_proof(proof_id, task_id, ProofRequestStatus::Failed, "")
+        .complete_proof(proof_id, task_id, ProofRequestStatus::Failed, payload)
         .await
     {
         log::error!("while unclaiming proof: {err:?}");

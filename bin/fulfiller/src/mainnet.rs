@@ -5,7 +5,10 @@ use futures::future::join_all;
 use prost::Message;
 use sp1_cluster_artifact::ArtifactType;
 use sp1_cluster_common::proto::ProofRequest;
-use sp1_cluster_fulfillment::network::{FulfillmentNetwork, NetworkRequest};
+use sp1_cluster_fulfillment::{
+    network::{FulfillmentNetwork, NetworkRequest},
+    request_error_from_extra_data,
+};
 use sp1_sdk::network::signer::NetworkSigner;
 use spn_artifacts::Artifact;
 
@@ -88,8 +91,8 @@ impl FulfillmentNetwork for MainnetFulfiller {
         _domain: &[u8],
         signer: &NetworkSigner,
     ) -> Result<()> {
-        self.cancel_request(&request.id, signer).await?;
-        Ok(())
+        let error = request_error_from_extra_data(request.extra_data.as_deref());
+        self.fail_request_with_error(&request.id, error, &[], signer).await
     }
 
     async fn cancel_request(&self, request_id: &str, signer: &NetworkSigner) -> Result<()> {

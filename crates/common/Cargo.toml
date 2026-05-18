@@ -24,6 +24,7 @@ opentelemetry_sdk = { workspace = true, features = ["logs", "logs_level_enabled"
 prost.workspace = true
 rustls = { workspace = true, features = ["ring"] }
 serde.workspace = true
+serde_json.workspace = true
 sp1-prover-types = { workspace = true }
 tokio-blocked = { workspace = true, optional = true }
 tonic.workspace = true
