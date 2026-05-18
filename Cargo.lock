@@ -1837,7 +1837,7 @@ dependencies = [
  "bitflags 2.10.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.12.1",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1857,7 +1857,7 @@ dependencies = [
  "bitflags 2.10.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.12.1",
  "proc-macro2",
  "quote",
  "regex",
@@ -4118,7 +4118,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.57.0",
 ]
 
 [[package]]
@@ -6079,8 +6079,8 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
- "heck 0.5.0",
- "itertools 0.14.0",
+ "heck 0.4.1",
+ "itertools 0.12.1",
  "log",
  "multimap",
  "once_cell",
@@ -6126,7 +6126,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.12.1",
  "proc-macro2",
  "quote",
  "syn 2.0.115",
@@ -8013,6 +8013,7 @@ dependencies = [
  "prost 0.13.5",
  "rustls 0.23.36",
  "serde",
+ "serde_json",
  "sp1-prover-types",
  "tokio-blocked",
  "tonic 0.12.3",
@@ -8096,6 +8097,7 @@ dependencies = [
  "hex",
  "rustls 0.23.36",
  "serde",
+ "serde_json",
  "sp1-cluster-artifact",
  "sp1-cluster-common",
  "sp1-sdk",
@@ -9254,7 +9256,7 @@ dependencies = [
 [[package]]
 name = "spn-artifact-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#3df3ca07a10a44ab7ae2bcf63ff6625b02c8c355"
+source = "git+https://github.com/succinctlabs/network?branch=main#560c3bec4324088c1680a51cf0aa5cf2f599b84f"
 dependencies = [
  "prost 0.13.5",
  "prost-build",
@@ -9266,7 +9268,7 @@ dependencies = [
 [[package]]
 name = "spn-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#3df3ca07a10a44ab7ae2bcf63ff6625b02c8c355"
+source = "git+https://github.com/succinctlabs/network?branch=main#560c3bec4324088c1680a51cf0aa5cf2f599b84f"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -9287,7 +9289,7 @@ dependencies = [
 [[package]]
 name = "spn-metrics"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#3df3ca07a10a44ab7ae2bcf63ff6625b02c8c355"
+source = "git+https://github.com/succinctlabs/network?branch=main#560c3bec4324088c1680a51cf0aa5cf2f599b84f"
 dependencies = [
  "axum 0.7.9",
  "eyre",
@@ -9306,7 +9308,7 @@ dependencies = [
 [[package]]
 name = "spn-network-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#3df3ca07a10a44ab7ae2bcf63ff6625b02c8c355"
+source = "git+https://github.com/succinctlabs/network?branch=main#560c3bec4324088c1680a51cf0aa5cf2f599b84f"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -9324,7 +9326,7 @@ dependencies = [
 [[package]]
 name = "spn-utils"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#3df3ca07a10a44ab7ae2bcf63ff6625b02c8c355"
+source = "git+https://github.com/succinctlabs/network?branch=main#560c3bec4324088c1680a51cf0aa5cf2f599b84f"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",

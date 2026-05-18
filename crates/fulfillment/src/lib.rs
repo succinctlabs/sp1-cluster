@@ -6,12 +6,14 @@ use futures::{future::join_all, TryFutureExt};
 use sp1_cluster_artifact::{ArtifactClient, ArtifactType, CompressedUpload};
 use sp1_cluster_common::{
     client::ClusterServiceClient,
+    failure::ProvingFailure,
     proto::{
-        ProofRequest, ProofRequestCancelRequest, ProofRequestCreateRequest,
+        ExecutionResult, ProofRequest, ProofRequestCancelRequest, ProofRequestCreateRequest,
         ProofRequestListRequest, ProofRequestStatus, ProofRequestUpdateRequest,
     },
 };
 use sp1_sdk::network::signer::NetworkSigner;
+use spn_network_types::ProofRequestError;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::{task::JoinSet, time::sleep};
@@ -31,6 +33,20 @@ const VK_MISMATCH_STRINGS: &[&str] = &[
     "sp1 vk hash mismatch",
     "vk hash from syscall does not match vkey from input",
 ];
+
+/// Derive the network's `ProofRequestError` from the worker's `extra_data`.
+/// An `ExecutionResult` with non-zero `failure_cause` means execute_only itself
+/// faulted -> `EXECUTION_FAILURE`. A `ProvingFailure` payload means a
+/// post-execute task failed -> `PROVING_FAILURE`.
+pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
+    let s = extra_data?;
+    if let Ok(er) = serde_json::from_str::<ExecutionResult>(s) {
+        if er.failure_cause != 0 {
+            return Some(ProofRequestError::ExecutionFailure as i32);
+        }
+    }
+    ProvingFailure::from_extra_data(s).map(|_| ProofRequestError::ProvingFailure as i32)
+}
 
 #[derive(Clone)]
 pub struct Fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> {

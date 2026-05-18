@@ -344,9 +344,10 @@ impl RedisArtifactClient {
 
         if total_chunks == 0 {
             let result = conn
-                .get::<_, Vec<u8>>(key)
+                .get::<_, Option<Vec<u8>>>(&key)
                 .await
-                .map_err(|e| backoff::Error::transient(e.into()))?;
+                .map_err(|e| backoff::Error::transient(e.into()))?
+                .ok_or_else(|| backoff::Error::permanent(anyhow!("artifact not found: {}", key)))?;
             tracing::info!("download took {:?}, size: {}", now.elapsed(), result.len());
             return Ok(result);
         }
