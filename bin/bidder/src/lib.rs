@@ -203,10 +203,14 @@ impl Bidder {
     }
 
     /// Spawn a background task that periodically refreshes the PROVE/USD cache.
-    fn spawn_prove_usd_refresh(&self, refresh_interval_secs: u64) {
+    /// No-op when `usd_pricing` is `None` (feature disabled).
+    fn spawn_prove_usd_refresh(&self) {
+        let Some(usd_pricing) = self.usd_pricing.clone() else {
+            return;
+        };
         let cache = self.prove_usd_cache.clone();
         let mut network = self.network.clone();
-        let mut ticker = interval(Duration::from_secs(refresh_interval_secs));
+        let mut ticker = interval(Duration::from_secs(usd_pricing.refresh_interval_secs));
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         tokio::spawn(async move {
@@ -230,9 +234,7 @@ impl Bidder {
     pub async fn run(mut self) -> Result<()> {
         info!("starting the bidder");
 
-        if let Some(usd_pricing) = &self.usd_pricing {
-            self.spawn_prove_usd_refresh(usd_pricing.refresh_interval_secs);
-        }
+        self.spawn_prove_usd_refresh();
 
         // Get the prover.
         let prover_bytes = self
@@ -359,7 +361,10 @@ impl Bidder {
                 active_proofs += 1;
             }
             failure_tasks.push(tokio::spawn(async move {
-                match self_clone.bid_request(prover, &request_id, bid_amount).await {
+                match self_clone
+                    .bid_request(prover, &request_id, bid_amount)
+                    .await
+                {
                     Ok(_) => {
                         info!("bid on request 0x{}", request_id);
                         self_clone.metrics.requests_bid.increment(1);
@@ -419,13 +424,17 @@ async fn fetch_prove_usd_micros(network: &mut ProverNetworkClient<Channel>) -> R
         .parse()
         .with_context(|| format!("parse PROVE/USD price {price_str:?}"))?;
     if !price.is_finite() || price <= 0.0 {
-        return Err(anyhow!("PROVE/USD must be finite and positive, got {price}"));
+        return Err(anyhow!(
+            "PROVE/USD must be finite and positive, got {price}"
+        ));
     }
     // Round-to-nearest before saturating cast, then guard against an absurd magnitude
     // that no real PROVE price can ever reach (≈ 1.8e13 USD).
     let micros = (price * 1_000_000.0).round();
     if micros >= u64::MAX as f64 {
-        return Err(anyhow!("PROVE/USD price {price} is out of representable range"));
+        return Err(anyhow!(
+            "PROVE/USD price {price} is out of representable range"
+        ));
     }
     Ok(micros as u64)
 }
@@ -477,6 +486,9 @@ mod tests {
     #[test]
     fn rounds_down() {
         // (1 * 10^9) / 3 = 333_333_333 (truncated).
-        assert_eq!(compute_bid_amount_wei(1, 3), Some(U256::from(333_333_333u64)));
+        assert_eq!(
+            compute_bid_amount_wei(1, 3),
+            Some(U256::from(333_333_333u64))
+        );
     }
 }
