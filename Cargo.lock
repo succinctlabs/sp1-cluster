@@ -9541,7 +9541,7 @@ dependencies = [
 [[package]]
 name = "spn-artifact-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#560c3bec4324088c1680a51cf0aa5cf2f599b84f"
+source = "git+https://github.com/succinctlabs/network?branch=main#d1196a1a605e096e767dc72a52672203cf093ce1"
 dependencies = [
  "prost 0.13.5",
  "prost-build",
@@ -9553,7 +9553,7 @@ dependencies = [
 [[package]]
 name = "spn-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#560c3bec4324088c1680a51cf0aa5cf2f599b84f"
+source = "git+https://github.com/succinctlabs/network?branch=main#d1196a1a605e096e767dc72a52672203cf093ce1"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -9574,7 +9574,7 @@ dependencies = [
 [[package]]
 name = "spn-metrics"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#560c3bec4324088c1680a51cf0aa5cf2f599b84f"
+source = "git+https://github.com/succinctlabs/network?branch=main#d1196a1a605e096e767dc72a52672203cf093ce1"
 dependencies = [
  "axum 0.7.9",
  "eyre",
@@ -9593,7 +9593,7 @@ dependencies = [
 [[package]]
 name = "spn-network-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#560c3bec4324088c1680a51cf0aa5cf2f599b84f"
+source = "git+https://github.com/succinctlabs/network?branch=main#d1196a1a605e096e767dc72a52672203cf093ce1"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -9611,7 +9611,7 @@ dependencies = [
 [[package]]
 name = "spn-utils"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#560c3bec4324088c1680a51cf0aa5cf2f599b84f"
+source = "git+https://github.com/succinctlabs/network?branch=main#d1196a1a605e096e767dc72a52672203cf093ce1"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",

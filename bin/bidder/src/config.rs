@@ -39,6 +39,29 @@ pub struct Settings {
     pub aggressive_mode: bool,
     /// Minimum deadline in seconds to bid on (optional safety check, even in aggressive mode)
     pub min_deadline_secs: Option<u64>,
+    /// Opt-in USD-pegged bidding. When `Some`, the bidder polls `GetProvePrice` and
+    /// converts the target to PROVE wei. When `None`, the bidder uses the static
+    /// `bid_amount` unconditionally.
+    ///
+    /// Unit note: BPGU = "billion PGU" = 10⁹ PGU. The wire-level field is `max_price_per_pgu`
+    /// (wei per PGU); BPGU is a billing-side convenience for stating targets at human scale.
+    #[serde(default)]
+    pub usd_pricing: Option<UsdPricingConfig>,
+}
+
+/// USD-pegged bidding parameters. The presence of this struct in `Settings` is itself
+/// the "feature on" signal; absence means "stay on the static `bid_amount` path."
+#[derive(Debug, Deserialize, Clone)]
+pub struct UsdPricingConfig {
+    /// USD target in µUSD per BPGU (1 BPGU = 10⁹ PGU).
+    pub target_usd_micros_per_bpgu: u64,
+    /// How often to refresh the PROVE/USD cache, in seconds.
+    #[serde(default = "default_refresh_interval_secs")]
+    pub refresh_interval_secs: u64,
+    /// Cached PROVE/USD older than this is treated as stale; bidder falls back to
+    /// `bid_amount` until the cache refreshes.
+    #[serde(default = "default_staleness_max_secs")]
+    pub staleness_max_secs: u64,
 }
 
 impl Settings {
@@ -68,4 +91,12 @@ fn default_groth16_enabled() -> bool {
 
 fn default_plonk_enabled() -> bool {
     true
+}
+
+fn default_refresh_interval_secs() -> u64 {
+    60
+}
+
+fn default_staleness_max_secs() -> u64 {
+    3600
 }

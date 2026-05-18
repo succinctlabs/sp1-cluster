@@ -1,17 +1,24 @@
-use std::time::Duration;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use crate::metrics::BidderMetrics;
+use crate::{config::UsdPricingConfig, metrics::BidderMetrics};
 use alloy::primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use futures::future::join_all;
-use tokio::time::sleep;
+use tokio::{
+    sync::RwLock,
+    time::{interval, sleep, MissedTickBehavior},
+};
 use tonic::transport::Channel;
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 
 use spn_network_types::{
     prover_network_client::ProverNetworkClient, BidRequest, BidRequestBody, FulfillmentStatus,
-    GetNonceRequest, GetOwnerRequest, MessageFormat, ProofMode, Signable, TransactionVariant,
+    GetNonceRequest, GetOwnerRequest, GetProvePriceRequest, MessageFormat, ProofMode, Signable,
+    TransactionVariant,
 };
 use spn_utils::time_now;
 
@@ -29,6 +36,15 @@ const REFRESH_INTERVAL_SEC: u64 = 3;
 
 /// The maximum number of requests to handle in a single refresh loop.
 const REQUEST_LIMIT: u32 = 100;
+
+/// A cached PROVE/USD reading shared between the refresh task and the bid loop.
+#[derive(Clone, Copy)]
+struct ProveUsdCache {
+    /// µUSD per 1 PROVE.
+    usd_micros: u64,
+    /// Time of the last successful refresh, for staleness checks.
+    fetched_at: Instant,
+}
 
 #[derive(Clone)]
 pub struct Bidder {
@@ -57,6 +73,15 @@ pub struct Bidder {
     aggressive_mode: bool,
     /// Minimum deadline in seconds to bid on (optional safety check, even in aggressive mode)
     min_deadline_secs: Option<u64>,
+    /// USD-pegged bidding parameters. `Some` enables the feature: bidder polls
+    /// `GetProvePrice` and converts the target to PROVE wei via
+    /// `target * 10^9 / prove_usd_micros`. `None` keeps the static `bid_amount` path.
+    ///
+    /// BPGU = 10⁹ PGU; see `UsdPricingConfig` for the unit convention.
+    usd_pricing: Option<UsdPricingConfig>,
+    /// Cache of the last fetched PROVE/USD price. Populated by the refresh task spawned
+    /// in `run()` when `usd_pricing.is_some()`.
+    prove_usd_cache: Arc<RwLock<Option<ProveUsdCache>>>,
 }
 
 impl Bidder {
@@ -77,6 +102,7 @@ impl Bidder {
         plonk_enabled: bool,
         aggressive_mode: bool,
         min_deadline_secs: Option<u64>,
+        usd_pricing: Option<UsdPricingConfig>,
     ) -> Self {
         Self {
             network,
@@ -94,6 +120,8 @@ impl Bidder {
             plonk_enabled,
             aggressive_mode,
             min_deadline_secs,
+            usd_pricing,
+            prove_usd_cache: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -137,9 +165,74 @@ impl Bidder {
         has_capacity && has_time
     }
 
+    /// Returns the bid amount to use for this iteration.
+    ///
+    /// Uses the USD-pegged amount when a target is configured and the cached PROVE/USD
+    /// reading is fresh; otherwise falls back to the static `bid_amount`.
+    async fn effective_bid_amount(&self) -> U256 {
+        let Some(usd_pricing) = &self.usd_pricing else {
+            return self.static_fallback();
+        };
+        let Some(cached) = *self.prove_usd_cache.read().await else {
+            return self.static_fallback();
+        };
+        if cached.fetched_at.elapsed().as_secs() >= usd_pricing.staleness_max_secs {
+            warn!("PROVE/USD cache is stale; falling back to static bid_amount");
+            return self.static_fallback();
+        }
+        match compute_bid_amount_wei(usd_pricing.target_usd_micros_per_bpgu, cached.usd_micros) {
+            Some(wei) => {
+                self.metrics.dynamic_bid_used_total.increment(1);
+                wei
+            }
+            None => {
+                warn!(
+                    target_usd_micros_per_bpgu = usd_pricing.target_usd_micros_per_bpgu,
+                    prove_usd_micros = cached.usd_micros,
+                    "USD→wei conversion failed; falling back to static bid_amount",
+                );
+                self.static_fallback()
+            }
+        }
+    }
+
+    /// Static-bid fallback path, with metric increment.
+    fn static_fallback(&self) -> U256 {
+        self.metrics.static_bid_used_total.increment(1);
+        self.bid_amount
+    }
+
+    /// Spawn a background task that periodically refreshes the PROVE/USD cache.
+    fn spawn_prove_usd_refresh(&self, refresh_interval_secs: u64) {
+        let cache = self.prove_usd_cache.clone();
+        let mut network = self.network.clone();
+        let mut ticker = interval(Duration::from_secs(refresh_interval_secs));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        tokio::spawn(async move {
+            loop {
+                ticker.tick().await;
+                match fetch_prove_usd_micros(&mut network).await {
+                    Ok(usd_micros) => {
+                        *cache.write().await = Some(ProveUsdCache {
+                            usd_micros,
+                            fetched_at: Instant::now(),
+                        });
+                        info!(usd_micros, "refreshed PROVE/USD");
+                    }
+                    Err(e) => warn!(error = %e, "PROVE/USD refresh failed; keeping previous cache"),
+                }
+            }
+        });
+    }
+
     /// Runs the bidder loop.
     pub async fn run(mut self) -> Result<()> {
         info!("starting the bidder");
+
+        if let Some(usd_pricing) = &self.usd_pricing {
+            self.spawn_prove_usd_refresh(usd_pricing.refresh_interval_secs);
+        }
 
         // Get the prover.
         let prover_bytes = self
@@ -164,7 +257,7 @@ impl Bidder {
         }
     }
 
-    /// Checks for requested proof requests that are in the network and
+    /// Checks for requested proof requests that are in the network and bids on eligible ones.
     #[instrument(skip_all)]
     async fn bid_requests(&mut self, prover: Address) -> Result<()> {
         // Get all requests from the network that are biddable.
@@ -230,6 +323,10 @@ impl Bidder {
         }
         info!("found {} biddable requests", requests.len());
 
+        // Resolve the bid amount once for this loop iteration so all spawned tasks share the
+        // same price snapshot.
+        let bid_amount = self.effective_bid_amount().await;
+
         let mut failure_tasks = Vec::new();
         for request in requests {
             let self_clone = self.clone();
@@ -262,7 +359,7 @@ impl Bidder {
                 active_proofs += 1;
             }
             failure_tasks.push(tokio::spawn(async move {
-                match self_clone.bid_request(prover, &request_id).await {
+                match self_clone.bid_request(prover, &request_id, bid_amount).await {
                     Ok(_) => {
                         info!("bid on request 0x{}", request_id);
                         self_clone.metrics.requests_bid.increment(1);
@@ -281,7 +378,7 @@ impl Bidder {
         Ok(())
     }
 
-    async fn bid_request(&self, prover: Address, request_id: &str) -> Result<()> {
+    async fn bid_request(&self, prover: Address, request_id: &str, amount: U256) -> Result<()> {
         // Send the bid request to the network.
         let nonce = self
             .network
@@ -292,7 +389,6 @@ impl Bidder {
             .await?
             .into_inner()
             .nonce;
-        let amount = self.bid_amount;
         let body = BidRequestBody {
             nonce,
             request_id: hex::decode(request_id).context("failed to decode request_id")?,
@@ -309,5 +405,78 @@ impl Bidder {
         self.network.clone().bid(bid_request).await?;
 
         Ok(())
+    }
+}
+
+/// Fetch the current PROVE/USD price and convert to µUSD per 1 PROVE.
+///
+/// Rejects non-finite or non-positive values. Mirrors `spn-pricing`'s parsing so the bidder
+/// and proxy interpret the RPC response identically.
+async fn fetch_prove_usd_micros(network: &mut ProverNetworkClient<Channel>) -> Result<u64> {
+    let resp = network.get_prove_price(GetProvePriceRequest {}).await?;
+    let price_str = resp.into_inner().price;
+    let price: f64 = price_str
+        .parse()
+        .with_context(|| format!("parse PROVE/USD price {price_str:?}"))?;
+    if !price.is_finite() || price <= 0.0 {
+        return Err(anyhow!("PROVE/USD must be finite and positive, got {price}"));
+    }
+    // Round-to-nearest before saturating cast, then guard against an absurd magnitude
+    // that no real PROVE price can ever reach (≈ 1.8e13 USD).
+    let micros = (price * 1_000_000.0).round();
+    if micros >= u64::MAX as f64 {
+        return Err(anyhow!("PROVE/USD price {price} is out of representable range"));
+    }
+    Ok(micros as u64)
+}
+
+/// Compute PROVE wei per PGU from a USD target. Same math as
+/// `spn-pricing::compute_max_price_per_pgu_wei`: `wei = target * 10^9 / prove_usd_micros`,
+/// rounded down. The `10^9` factor is the BPGU→PGU scale (1 BPGU = 10⁹ PGU).
+fn compute_bid_amount_wei(target_usd_micros_per_bpgu: u64, prove_usd_micros: u64) -> Option<U256> {
+    if prove_usd_micros == 0 {
+        return None;
+    }
+    let scale = U256::from(10u64).pow(U256::from(9u64));
+    let numerator = U256::from(target_usd_micros_per_bpgu).checked_mul(scale)?;
+    Some(numerator / U256::from(prove_usd_micros))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Anchor: target = $0.20/BPGU (200_000 µUSD), PROVE = $0.40 → 0.5 PROVE/BPGU = 5e8 wei/PGU.
+    #[test]
+    fn anchor_matches_legacy_static_bid() {
+        let wei = compute_bid_amount_wei(200_000, 400_000).unwrap();
+        assert_eq!(wei, U256::from(500_000_000u64));
+    }
+
+    /// Halving PROVE doubles the wei needed to hit the same $-target.
+    #[test]
+    fn lower_prove_price_raises_bid() {
+        let wei = compute_bid_amount_wei(200_000, 200_000).unwrap();
+        assert_eq!(wei, U256::from(1_000_000_000u64));
+    }
+
+    /// Doubling PROVE halves the wei.
+    #[test]
+    fn higher_prove_price_lowers_bid() {
+        let wei = compute_bid_amount_wei(200_000, 800_000).unwrap();
+        assert_eq!(wei, U256::from(250_000_000u64));
+    }
+
+    /// Zero PROVE/USD must short-circuit rather than divide by zero.
+    #[test]
+    fn zero_prove_price_returns_none() {
+        assert_eq!(compute_bid_amount_wei(200_000, 0), None);
+    }
+
+    /// Division rounds down.
+    #[test]
+    fn rounds_down() {
+        // (1 * 10^9) / 3 = 333_333_333 (truncated).
+        assert_eq!(compute_bid_amount_wei(1, 3), Some(U256::from(333_333_333u64)));
     }
 }
