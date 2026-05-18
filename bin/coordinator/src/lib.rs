@@ -2350,4 +2350,196 @@ mod tests {
             "active_tasks must remain 1"
         );
     }
+
+    /// Insert a live (healthy) worker with default capacity. Returns the tx side of
+    /// its message channel; the corresponding rx is dropped (not used in tests that
+    /// only care about state, not sent payloads).
+    fn insert_live_worker(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        worker_id: &str,
+        worker_type: WorkerType,
+    ) {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        state.workers.insert(
+            worker_id.into(),
+            Worker::new(worker_id.into(), worker_type, 24, tx),
+        );
+    }
+
+    /// Like `insert_proof_with_running_task` but explicitly sets the task_type so
+    /// the requeue path actually routes through `DefaultPolicy::enqueue_task` into
+    /// the matching queue. `TaskType::UnspecifiedTaskType` (the default used by the
+    /// simpler helper) maps to `WorkerType::None`, which silently bypasses the
+    /// queue — fine for tests that only assert on state, but wrong for tests that
+    /// exercise the scheduler.
+    fn insert_proof_with_running_gpu_task(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        proof_id: &str,
+        task_id: &str,
+        worker_id: Option<&str>,
+    ) {
+        let mut proof = Proof::new(proof_id.into(), None, ());
+        proof.active_tasks = 1;
+        proof.tasks.insert(
+            task_id.into(),
+            Task {
+                id: task_id.into(),
+                data: TaskData {
+                    proof_id: proof_id.into(),
+                    task_type: TaskType::ProveShard as i32,
+                    ..Default::default()
+                },
+                created_at: SystemTime::now(),
+                status: TaskStatus::Running,
+                retries: 0,
+                subscribers: HashSet::new(),
+                worker: worker_id.map(String::from),
+                dead_worker_requeue_count: 0,
+                extra: Default::default(),
+            },
+        );
+        state.proofs.insert(proof_id.into(), proof);
+    }
+
+    /// Regression guard: after `cleanup_dead_workers` removes a dead worker and
+    /// re-enqueues its task, the next `assign_tasks` cycle must place that task on a
+    /// live worker. Verifies the requeue actually reaches the policy queue and the
+    /// scheduler picks it up.
+    #[tokio::test]
+    async fn assign_tasks_after_dead_worker_picks_up_requeued_task() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w_dead"));
+            insert_dead_worker(&mut state, "w_dead", WorkerType::Gpu, &[("p1", "t1")]);
+            insert_live_worker(&mut state, "w_live", WorkerType::Gpu);
+        }
+
+        c.cleanup_dead_workers().await;
+
+        // Drive one assignment cycle.
+        let state = c.state.clone().write_owned().await;
+        c.assign_tasks(state).await.unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            !state.workers.contains_key("w_dead"),
+            "dead worker must be gone from state.workers"
+        );
+        let live = state
+            .workers
+            .get("w_live")
+            .expect("live worker should still be present");
+        assert!(
+            live.active_tasks.contains(&("p1".into(), "t1".into())),
+            "live worker should now own the requeued task"
+        );
+        let task = state
+            .proofs
+            .get("p1")
+            .unwrap()
+            .tasks
+            .get("t1")
+            .expect("task should still exist");
+        assert_eq!(task.worker.as_deref(), Some("w_live"));
+        assert_eq!(task.status, TaskStatus::Running);
+    }
+
+    /// Full lifecycle: task assigned to W1, W1 dies, task reassigned to W2 via
+    /// `assign_tasks`, W2 completes the task, then a ghost late `complete_task`
+    /// from W1 arrives.
+    ///
+    /// Invariants:
+    ///   - the live completion is the authoritative one (task.status == Succeeded)
+    ///   - proof.active_tasks accounting reaches 0 exactly once
+    ///   - subscriber sees exactly one EndOfStream (from the live completion)
+    ///   - retries == 0 (infra event did not consume retry budget)
+    ///   - dead_worker_requeue_count == 1
+    ///   - ghost late complete returns NotFound (proof cleaned up) and does NOT
+    ///     panic, double-decrement, or emit a second EndOfStream
+    #[tokio::test]
+    async fn dead_worker_full_lifecycle_with_late_complete_is_no_op() {
+        let c = Arc::new(coordinator());
+        let mut subscriber_rx = c.subscribe_task_channel("t1", 0);
+
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w_dead"));
+            insert_dead_worker(&mut state, "w_dead", WorkerType::Gpu, &[("p1", "t1")]);
+            insert_live_worker(&mut state, "w_live", WorkerType::Gpu);
+        }
+
+        // 1. Dead-worker cleanup: w_dead removed, task re-enqueued.
+        c.cleanup_dead_workers().await;
+
+        // 2. Scheduler picks up the requeued task on w_live.
+        {
+            let state = c.state.clone().write_owned().await;
+            c.assign_tasks(state).await.unwrap();
+        }
+
+        // Snapshot the tracking counter BEFORE the proof is cleaned up by completion.
+        {
+            let state = c.state.read().await;
+            let task = state.proofs.get("p1").unwrap().tasks.get("t1").unwrap();
+            assert_eq!(
+                task.dead_worker_requeue_count, 1,
+                "dead_worker_requeue_count must be 1 after a single dead-worker event"
+            );
+            assert_eq!(task.retries, 0, "retries must NOT have been incremented");
+        }
+
+        // 3. w_live completes the task (the authoritative completion).
+        c.complete_task(
+            "w_live".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata::default(),
+        )
+        .await
+        .expect("live completion should succeed");
+
+        // After live completion: proof has 0 active tasks and is removed from state.
+        {
+            let state = c.state.read().await;
+            assert!(
+                !state.proofs.contains_key("p1"),
+                "proof must be cleaned up after its only task completes"
+            );
+        }
+
+        // Subscriber must have received exactly one EndOfStream from the live completion.
+        assert!(
+            is_end_of_stream(&subscriber_rx.try_recv().unwrap()),
+            "subscriber must receive EndOfStream from the live completion"
+        );
+
+        // 4. Ghost late complete arrives from w_dead. Proof is already gone, so this
+        //    must return NotFound — NOT panic, NOT double-decrement, NOT re-emit EoS.
+        let ghost = c
+            .complete_task(
+                "w_dead".into(),
+                "p1".into(),
+                "t1".into(),
+                policy::TaskMetadata::default(),
+            )
+            .await;
+        assert!(
+            matches!(ghost, Err(ref e) if e.code() == tonic::Code::NotFound),
+            "ghost late complete after proof cleanup must return NotFound, got: {ghost:?}"
+        );
+
+        // Subscriber must not receive any additional message after the ghost call.
+        match subscriber_rx.try_recv() {
+            Err(mpsc::error::TryRecvError::Empty) => {}
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                // Channel is allowed to be disconnected after close_task_channel +
+                // cleanup_stale_task_channels. The key invariant is no duplicate EoS,
+                // which is satisfied by Disconnected (no payload to read).
+            }
+            Ok(msg) => {
+                panic!("ghost complete must not deliver a second subscriber message, got: {msg:?}")
+            }
+        }
+    }
 }
