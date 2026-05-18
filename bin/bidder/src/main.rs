@@ -91,6 +91,7 @@ async fn main() -> Result<()> {
         settings.plonk_enabled,
         settings.aggressive_mode,
         settings.min_deadline_secs,
+        settings.usd_pricing,
     );
 
     // Spawn the bidder task.
