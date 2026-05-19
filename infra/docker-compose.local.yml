@@ -20,7 +20,7 @@ services:
       - REDIS_PASSWORD=redispassword
       - REDIS_AOF_ENABLED=no
       - REDIS_MAXMEMORY=25gb
-      - REDIS_MAXMEMORY_POLICY=volatile-lru
+      - REDIS_MAXMEMORY_POLICY=noeviction
 
   postgresql:
     extends:
