@@ -76,57 +76,92 @@ If you'd rather keep it next to `.env.example`, a symlink works too —
 The canonical [`infra/docker-compose.yml`](../../infra/docker-compose.yml)
 stands up the full cluster (Postgres + Redis + `api` + coordinator + one
 CPU and GPU node) from prebuilt `ghcr.io/succinctlabs/sp1-cluster` images
-that track the latest release. `api`'s gRPC port is published on
+that track the latest release. The gateway itself is defined as a service
+in the same compose file but gated behind the opt-in `gateway` profile, so
+it only starts when you ask for it. `api`'s gRPC port is published on
 `127.0.0.1:50051` and Redis on `127.0.0.1:6379` — exactly what the gateway
-needs. The gateway is additive (new binary, no changes to `api` /
-`coordinator` / `node`), so those prebuilt images are fine for this test
-loop.
+needs.
 
-1. Bring up the stack. Drop `gpu0` if you don't have an NVIDIA runtime — the
-   gateway only needs `redis`, `postgresql`, `api`, and optionally a
-   coordinator + worker for a full prove round-trip:
+There are two ways to drive the gateway against the stack: in-compose (the
+shortest path to a working setup) or natively via `cargo run` (the right
+choice when iterating on gateway code).
 
-   ```bash
-   cd infra
-   # minimum to exercise the gateway's request-submission path:
-   docker compose up -d redis postgresql api coordinator cpu-node
-   # or, with GPU, the full stack:
-   # docker compose up -d
-   ```
+#### Option A — In-compose (recommended for a one-shot setup)
 
-2. Wait for `api` to finish migrations (a few seconds on first boot):
+The `--profile gateway` flag opts the `network-gateway` service in. Inside
+the compose network it points at `http://api:50051` and the Redis service
+DNS name, so no env overrides are required for a localhost SDK caller:
 
-   ```bash
-   docker compose logs -f api
-   ```
+```bash
+cd infra
+# minimum to exercise the gateway's request-submission path:
+docker compose --profile gateway up -d redis postgresql api coordinator cpu-node network-gateway
+# or, with GPU, the full stack + gateway:
+# docker compose --profile gateway up -d
+```
 
-3. Run the gateway natively against the stack:
+The gateway publishes `50061` (gRPC) and `8081` (HTTP) on `0.0.0.0`. If
+your SDK caller runs on a different host than the compose stack, override
+`GATEWAY_PUBLIC_HTTP_URL` to a hostname reachable *from the caller* — it's
+embedded in the `artifact_uri` / `program_uri` / `proof_uri` values handed
+back to the SDK:
 
-   ```bash
-   GATEWAY_CLUSTER_RPC=http://127.0.0.1:50051 \
-   GATEWAY_ARTIFACT_STORE=redis \
-   GATEWAY_REDIS_NODES=redis://:redispassword@127.0.0.1:6379/0 \
-   GATEWAY_PUBLIC_HTTP_URL=http://127.0.0.1:8081 \
-   cargo run -p sp1-cluster-network-gateway
-   ```
+```bash
+GATEWAY_PUBLIC_HTTP_URL=http://my-host.internal:8081 \
+  docker compose --profile gateway up -d network-gateway
+```
 
-4. Smoke-check:
+To turn on signature checking, set `GATEWAY_AUTH_MODE=verify` (or
+`allowlist`, paired with `GATEWAY_AUTH_ALLOWLIST`) the same way. See
+[Auth modes](#auth-modes) below.
 
-   ```bash
-   curl http://127.0.0.1:8081/healthz                       # -> OK
-   grpcurl -plaintext 127.0.0.1:50061 list                  # lists ProverNetwork + ArtifactStore
-   ```
+#### Option B — Native `cargo run` (recommended for iteration)
 
-5. Drive it with `sp1-sdk` — point `ProverClient` at the gateway, **not** the
-   api's `:50051`:
+Run the cluster services in compose without the gateway profile, then run
+the gateway natively against the published `127.0.0.1` ports. This keeps
+the rebuild loop on the gateway alone:
 
-   ```rust
-   let client = ProverClient::builder()
-       .network()
-       .rpc_url("http://127.0.0.1:50061")
-       .network_mode(NetworkMode::Reserved)
-       .build();
-   ```
+```bash
+cd infra
+docker compose up -d redis postgresql api coordinator cpu-node
+```
+
+Wait for `api` to finish migrations (a few seconds on first boot):
+
+```bash
+docker compose logs -f api
+```
+
+Then run the gateway:
+
+```bash
+GATEWAY_CLUSTER_RPC=http://127.0.0.1:50051 \
+GATEWAY_ARTIFACT_STORE=redis \
+GATEWAY_REDIS_NODES=redis://:redispassword@127.0.0.1:6379/0 \
+GATEWAY_PUBLIC_HTTP_URL=http://127.0.0.1:8081 \
+cargo run -p sp1-cluster-network-gateway
+```
+
+#### Smoke-check + driving with sp1-sdk
+
+Either option exposes the gateway at the same ports, so the rest is the
+same:
+
+```bash
+curl http://127.0.0.1:8081/healthz                       # -> OK
+grpcurl -plaintext 127.0.0.1:50061 list                  # lists ProverNetwork + ArtifactStore
+```
+
+Drive it with `sp1-sdk` — point `ProverClient` at the gateway, **not** the
+api's `:50051`:
+
+```rust
+let client = ProverClient::builder()
+    .network()
+    .rpc_url("http://127.0.0.1:50061")
+    .network_mode(NetworkMode::Reserved)
+    .build();
+```
 
 ### Running the end-to-end bench
 
@@ -146,8 +181,9 @@ Env overrides: `GATEWAY_RPC_URL` (default `http://127.0.0.1:50061`),
 `$PATH` for the S3 download step. A GPU worker in the stack makes the
 round-trip finish quickly; CPU-only will complete but slowly.
 
-Iteration tip: keep the docker-compose stack up and only restart `cargo run
--p sp1-cluster-network-gateway` between changes. Teardown when done:
+Iteration tip: if you're using Option B, keep the docker-compose stack up
+and only restart `cargo run -p sp1-cluster-network-gateway` between
+changes. Teardown when done:
 
 ```bash
 docker compose -f infra/docker-compose.yml down
