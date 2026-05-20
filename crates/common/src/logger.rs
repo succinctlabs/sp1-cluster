@@ -150,16 +150,21 @@ pub fn init(resource: Resource) {
         };
 
         let env_filter = build_env_filter(None);
-        let fmt_layer = tracing_subscriber::fmt::layer()
-            .compact()
-            .with_file(false)
+        let json_logs = std::env::var("LOG_FORMAT")
+            .map(|s| s.eq_ignore_ascii_case("json"))
+            .unwrap_or(false);
+        let base = tracing_subscriber::fmt::layer()
             .with_target(false)
             .with_thread_names(false)
             .with_span_events(FmtSpan::CLOSE)
             .with_writer(std::io::stdout)
             .with_file(true)
-            .with_line_number(true)
-            .with_filter(env_filter);
+            .with_line_number(true);
+        let fmt_layer = if json_logs {
+            base.json().with_filter(env_filter).boxed()
+        } else {
+            base.compact().with_filter(env_filter).boxed()
+        };
 
         let logging_enabled = std::env::var("LOGGING_ENABLED")
             .map(|s| s == "true")
