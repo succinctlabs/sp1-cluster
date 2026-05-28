@@ -202,8 +202,10 @@ impl Bidder {
         self.bid_amount
     }
 
-    /// Spawn a background task that periodically refreshes the PROVE/USD cache.
-    /// No-op when `usd_pricing` is `None` (feature disabled).
+    /// Poll `GetProvePrice` on a tick and refresh the PROVE/USD cache. Keeps the *cache*
+    /// fresh, not the upstream price — `GetProvePrice` is sourced from 10-minute buckets,
+    /// so a "fresh" cache can still hold a price minted minutes ago. No-op when
+    /// `usd_pricing` is `None`.
     fn spawn_prove_usd_refresh(&self) {
         let Some(usd_pricing) = self.usd_pricing.clone() else {
             return;
