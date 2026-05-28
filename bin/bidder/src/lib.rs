@@ -37,6 +37,9 @@ const REFRESH_INTERVAL_SEC: u64 = 3;
 /// The maximum number of requests to handle in a single refresh loop.
 const REQUEST_LIMIT: u32 = 100;
 
+/// Synchronous prime-fetch cap at startup so a slow RPC can't hang the bidder.
+const PRIME_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// A cached PROVE/USD reading shared between the refresh task and the bid loop.
 #[derive(Clone, Copy)]
 struct ProveUsdCache {
@@ -187,14 +190,29 @@ impl Bidder {
         }
     }
 
+    /// Synchronously seed the PROVE/USD cache once, bounded by `PRIME_TIMEOUT`. Called by
+    /// the dynamic-pricing setup path in `run()`; failure leaves the cache empty and the
+    /// bidder falls back to static until the refresh task takes over.
+    async fn prime_prove_usd_cache(&self) {
+        let mut network = self.network.clone();
+        let fetch = fetch_and_cache_prove_usd(&mut network, &self.prove_usd_cache);
+        match tokio::time::timeout(PRIME_TIMEOUT, fetch).await {
+            Ok(Ok(usd_micros)) => info!(usd_micros, "primed PROVE/USD cache"),
+            Ok(Err(e)) => warn!(
+                error = %e,
+                "failed to prime PROVE/USD cache; starting with static fallback",
+            ),
+            Err(_) => warn!(
+                timeout_secs = PRIME_TIMEOUT.as_secs(),
+                "timed out priming PROVE/USD cache; starting with static fallback",
+            ),
+        }
+    }
+
     /// Poll `GetProvePrice` on a tick and refresh the PROVE/USD cache. Keeps the *cache*
     /// fresh, not the upstream price — `GetProvePrice` is sourced from 10-minute buckets,
-    /// so a "fresh" cache can still hold a price minted minutes ago. No-op when
-    /// `usd_pricing` is `None`.
-    fn spawn_prove_usd_refresh(&self) {
-        let Some(usd_pricing) = self.usd_pricing.clone() else {
-            return;
-        };
+    /// so a "fresh" cache can still hold a price minted minutes ago.
+    fn spawn_prove_usd_refresh(&self, usd_pricing: &UsdPricingConfig) {
         let cache = self.prove_usd_cache.clone();
         let mut network = self.network.clone();
         let mut ticker = interval(Duration::from_secs(usd_pricing.refresh_interval_secs));
@@ -203,14 +221,8 @@ impl Bidder {
         tokio::spawn(async move {
             loop {
                 ticker.tick().await;
-                match fetch_prove_usd_micros(&mut network).await {
-                    Ok(usd_micros) => {
-                        *cache.write().await = Some(ProveUsdCache {
-                            usd_micros,
-                            fetched_at: Instant::now(),
-                        });
-                        info!(usd_micros, "refreshed PROVE/USD");
-                    }
+                match fetch_and_cache_prove_usd(&mut network, &cache).await {
+                    Ok(usd_micros) => info!(usd_micros, "refreshed PROVE/USD cache"),
                     Err(e) => warn!(error = %e, "PROVE/USD refresh failed; keeping previous cache"),
                 }
             }
@@ -221,7 +233,10 @@ impl Bidder {
     pub async fn run(mut self) -> Result<()> {
         info!("starting the bidder");
 
-        self.spawn_prove_usd_refresh();
+        if let Some(usd_pricing) = &self.usd_pricing {
+            self.prime_prove_usd_cache().await;
+            self.spawn_prove_usd_refresh(usd_pricing);
+        }
 
         // Get the prover.
         let prover_bytes = self
@@ -398,6 +413,20 @@ impl Bidder {
 
         Ok(())
     }
+}
+
+/// Fetch PROVE/USD and write it into the cache on success. Returns the µUSD value for the
+/// caller to log; cache is untouched on `Err`. Shared by the prime and refresh paths.
+async fn fetch_and_cache_prove_usd(
+    network: &mut ProverNetworkClient<Channel>,
+    cache: &RwLock<Option<ProveUsdCache>>,
+) -> Result<u64> {
+    let usd_micros = fetch_prove_usd_micros(network).await?;
+    *cache.write().await = Some(ProveUsdCache {
+        usd_micros,
+        fetched_at: Instant::now(),
+    });
+    Ok(usd_micros)
 }
 
 /// Fetch the current PROVE/USD price and convert to µUSD per 1 PROVE. Rejects non-finite
