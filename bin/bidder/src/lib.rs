@@ -170,36 +170,21 @@ impl Bidder {
     /// Uses the USD-pegged amount when a target is configured and the cached PROVE/USD
     /// reading is fresh; otherwise falls back to the static `bid_amount`.
     async fn effective_bid_amount(&self) -> U256 {
-        let Some(usd_pricing) = &self.usd_pricing else {
-            return self.static_fallback();
-        };
-        let Some(cached) = *self.prove_usd_cache.read().await else {
-            return self.static_fallback();
-        };
-        if cached.fetched_at.elapsed().as_secs() >= usd_pricing.staleness_max_secs {
-            warn!("PROVE/USD cache is stale; falling back to static bid_amount");
-            return self.static_fallback();
-        }
-        match compute_bid_amount_wei(usd_pricing.target_usd_micros_per_bpgu, cached.usd_micros) {
-            Some(wei) => {
+        let cache_snapshot = self
+            .prove_usd_cache
+            .read()
+            .await
+            .map(|c| (c.usd_micros, c.fetched_at.elapsed().as_secs()));
+        match bid_amount_outcome(self.usd_pricing.as_ref(), cache_snapshot, self.bid_amount) {
+            BidAmountOutcome::Static(v) => {
+                self.metrics.static_bid_used_total.increment(1);
+                v
+            }
+            BidAmountOutcome::Dynamic(v) => {
                 self.metrics.dynamic_bid_used_total.increment(1);
-                wei
-            }
-            None => {
-                warn!(
-                    target_usd_micros_per_bpgu = usd_pricing.target_usd_micros_per_bpgu,
-                    prove_usd_micros = cached.usd_micros,
-                    "USD→wei conversion failed; falling back to static bid_amount",
-                );
-                self.static_fallback()
+                v
             }
         }
-    }
-
-    /// Static-bid fallback path, with metric increment.
-    fn static_fallback(&self) -> U256 {
-        self.metrics.static_bid_used_total.increment(1);
-        self.bid_amount
     }
 
     /// Poll `GetProvePrice` on a tick and refresh the PROVE/USD cache. Keeps the *cache*
@@ -453,6 +438,47 @@ fn compute_bid_amount_wei(target_usd_micros_per_bpgu: u64, prove_usd_micros: u64
     Some(numerator / U256::from(prove_usd_micros))
 }
 
+/// Outcome of the effective-`bid_amount` decision. Carries which side (static vs dynamic)
+/// so the caller can bump the matching metric.
+#[derive(Debug, PartialEq, Eq)]
+enum BidAmountOutcome {
+    Static(U256),
+    Dynamic(U256),
+}
+
+/// Pure logic behind [`Bidder::effective_bid_amount`]. Falls back to `Static(static_bid)`
+/// when the USD floor is disabled, the cache is empty, the cache is stale, or the pricing
+/// math errors. Only returns `Dynamic(_)` on a fresh cache with successful math.
+///
+/// `cache_snapshot` is `(prove_usd_micros, age_secs)` captured by the caller — keeps the
+/// helper free of `Instant` so it can be unit-tested directly.
+fn bid_amount_outcome(
+    usd_pricing: Option<&UsdPricingConfig>,
+    cache_snapshot: Option<(u64, u64)>,
+    static_bid: U256,
+) -> BidAmountOutcome {
+    let Some(usd_pricing) = usd_pricing else {
+        return BidAmountOutcome::Static(static_bid);
+    };
+    let Some((prove_usd_micros, age_secs)) = cache_snapshot else {
+        return BidAmountOutcome::Static(static_bid);
+    };
+    if age_secs >= usd_pricing.staleness_max_secs {
+        warn!("PROVE/USD cache is stale; falling back to static bid_amount");
+        return BidAmountOutcome::Static(static_bid);
+    }
+    match compute_bid_amount_wei(usd_pricing.target_usd_micros_per_bpgu, prove_usd_micros) {
+        Some(wei) => BidAmountOutcome::Dynamic(wei),
+        None => {
+            warn!(
+                target_usd_micros_per_bpgu = usd_pricing.target_usd_micros_per_bpgu,
+                prove_usd_micros, "USD→wei conversion failed; falling back to static bid_amount",
+            );
+            BidAmountOutcome::Static(static_bid)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,5 +518,67 @@ mod tests {
             compute_bid_amount_wei(1, 3),
             Some(U256::from(333_333_333u64))
         );
+    }
+
+    /// Reference anchor reused across the outcome tests: $0.20/BPGU at PROVE=$0.40 → 500M wei.
+    const TARGET_MICROS_PER_BPGU: u64 = 200_000;
+    const PROVE_USD_MICROS: u64 = 400_000;
+    const EXPECTED_DYNAMIC_WEI: u64 = 500_000_000;
+
+    fn pricing(staleness_max_secs: u64) -> UsdPricingConfig {
+        UsdPricingConfig {
+            target_usd_micros_per_bpgu: TARGET_MICROS_PER_BPGU,
+            refresh_interval_secs: 60,
+            staleness_max_secs,
+        }
+    }
+
+    fn static_bid() -> U256 {
+        U256::from(1_000u64)
+    }
+
+    /// Dynamic pricing is opt-in — no `usd_pricing` config means static `bid_amount`.
+    #[test]
+    fn no_usd_pricing_returns_static() {
+        let out = bid_amount_outcome(None, None, static_bid());
+        assert_eq!(out, BidAmountOutcome::Static(static_bid()));
+    }
+
+    /// Cold start: empty cache → static `bid_amount` until the refresh task seeds it.
+    #[test]
+    fn missing_cache_returns_static() {
+        let cfg = pricing(3600);
+        let out = bid_amount_outcome(Some(&cfg), None, static_bid());
+        assert_eq!(out, BidAmountOutcome::Static(static_bid()));
+    }
+
+    /// Cache older than `staleness_max_secs` → static `bid_amount` (don't act on stale data).
+    #[test]
+    fn stale_cache_returns_static() {
+        let cfg = pricing(60);
+        let out = bid_amount_outcome(Some(&cfg), Some((PROVE_USD_MICROS, 120)), static_bid());
+        assert_eq!(out, BidAmountOutcome::Static(static_bid()));
+    }
+
+    /// Fresh cache + configured pricing → USD-derived dynamic bid via `compute_bid_amount_wei`.
+    /// Anchor: $0.20/BPGU at PROVE=$0.40 → 500M wei/PGU.
+    #[test]
+    fn fresh_cache_returns_dynamic() {
+        let cfg = pricing(3600);
+        let out = bid_amount_outcome(Some(&cfg), Some((PROVE_USD_MICROS, 10)), static_bid());
+        assert_eq!(
+            out,
+            BidAmountOutcome::Dynamic(U256::from(EXPECTED_DYNAMIC_WEI))
+        );
+    }
+
+    /// Defense-in-depth: `prove_usd_micros = 0` makes `compute_bid_amount_wei` return `None`
+    /// → static `bid_amount` (not propagated). Unreachable in production since
+    /// `fetch_prove_usd_micros` rejects non-positive prices, but the branch is kept covered.
+    #[test]
+    fn math_error_returns_static() {
+        let cfg = pricing(3600);
+        let out = bid_amount_outcome(Some(&cfg), Some((0, 10)), static_bid());
+        assert_eq!(out, BidAmountOutcome::Static(static_bid()));
     }
 }
