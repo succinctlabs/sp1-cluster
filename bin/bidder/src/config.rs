@@ -54,6 +54,10 @@ pub struct Settings {
 #[derive(Debug, Deserialize, Clone)]
 pub struct UsdPricingConfig {
     /// USD target in µUSD per BPGU (1 BPGU = 10⁹ PGU).
+    ///
+    /// Each prover sets this independently from their own cost structure (GPU + energy +
+    /// margin). Intentionally **not** derived from any upstream/proxy ceiling — coupling
+    /// every bidder's floor to the same target would collapse the auction to a tiebreak.
     pub target_usd_micros_per_bpgu: u64,
     /// How often to refresh the PROVE/USD cache, in seconds.
     #[serde(default = "default_refresh_interval_secs")]
