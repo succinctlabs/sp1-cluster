@@ -400,10 +400,13 @@ impl Bidder {
     }
 }
 
-/// Fetch the current PROVE/USD price and convert to µUSD per 1 PROVE.
+/// Fetch the current PROVE/USD price and convert to µUSD per 1 PROVE. Rejects non-finite
+/// or non-positive values.
 ///
-/// Rejects non-finite or non-positive values. Mirrors `spn-pricing`'s parsing so the bidder
-/// and proxy interpret the RPC response identically.
+/// **Parity contract**: byte-for-byte equivalent to `spn_pricing::parse_usd_micros` in
+/// network-services — both interpret the same `GetProvePrice` response. Duplicated because
+/// `spn-pricing` lives in private `network-services` and sp1-cluster ships to external
+/// provers. Planned follow-up: extract `spn-pricing` into the public `network` repo.
 async fn fetch_prove_usd_micros(network: &mut ProverNetworkClient<Channel>) -> Result<u64> {
     let resp = network.get_prove_price(GetProvePriceRequest {}).await?;
     let price_str = resp.into_inner().price;
@@ -426,9 +429,11 @@ async fn fetch_prove_usd_micros(network: &mut ProverNetworkClient<Channel>) -> R
     Ok(micros as u64)
 }
 
-/// Compute PROVE wei per PGU from a USD target. Same math as
-/// `spn-pricing::compute_max_price_per_pgu_wei`: `wei = target * 10^9 / prove_usd_micros`,
+/// Compute PROVE wei per PGU from a USD target. `wei = target * 10^9 / prove_usd_micros`,
 /// rounded down. The `10^9` factor is the BPGU→PGU scale (1 BPGU = 10⁹ PGU).
+///
+/// **Parity contract**: must match `spn_pricing::compute_max_price_per_pgu_wei` in
+/// network-services. See `fetch_prove_usd_micros` for the duplication rationale.
 fn compute_bid_amount_wei(target_usd_micros_per_bpgu: u64, prove_usd_micros: u64) -> Option<U256> {
     if prove_usd_micros == 0 {
         return None;
