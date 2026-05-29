@@ -22,9 +22,9 @@ pub struct BidderMetrics {
     /// The number of errors encountered during the main loop.
     pub main_loop_errors: Counter,
 
-    /// The number of bids computed via the dynamic USD-pegged path.
-    pub dynamic_bid_used_total: Counter,
+    /// The number of bids computed via the dynamic USD-pegged floor path.
+    pub dynamic_floor_used_total: Counter,
 
-    /// The number of bids that fell back to the static bid_amount.
-    pub static_bid_used_total: Counter,
+    /// The number of bids that fell back to the static `bid_amount`.
+    pub static_floor_used_total: Counter,
 }
