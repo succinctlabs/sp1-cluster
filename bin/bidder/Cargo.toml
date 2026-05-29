@@ -9,6 +9,7 @@ categories = { workspace = true }
 [dependencies]
 spn-metrics = { workspace = true }
 spn-network-types = { workspace = true, features = ["network"] }
+spn-pricing = { workspace = true }
 spn-utils = { workspace = true }
 
 alloy = { workspace = true }
@@ -20,6 +21,7 @@ futures = { workspace = true }
 hex = { workspace = true }
 rustls = { workspace = true, features = ["ring"] }
 serde = { workspace = true }
+time = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
