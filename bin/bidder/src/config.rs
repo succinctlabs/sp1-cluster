@@ -90,7 +90,11 @@ impl Default for UsdFloorConfig {
 impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
         Config::builder()
-            .add_source(Environment::with_prefix("BIDDER").separator("__"))
+            .add_source(
+                Environment::with_prefix("BIDDER")
+                    .prefix_separator("_")
+                    .separator("__"),
+            )
             .build()?
             .try_deserialize()
     }
