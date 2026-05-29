@@ -414,20 +414,24 @@ async fn fetch_and_cache_prove_usd(
     network: &mut ProverNetworkClient<Channel>,
     cache: &RwLock<Option<ProvePrice>>,
 ) -> Result<u64> {
-    let usd_micros = fetch_prove_usd_micros(network).await?;
-    *cache.write().await = Some(ProvePrice {
-        usd_micros,
-        as_of: OffsetDateTime::now_utc(),
-    });
+    let price = fetch_prove_price(network).await?;
+    let usd_micros = price.usd_micros;
+    *cache.write().await = Some(price);
     Ok(usd_micros)
 }
 
-/// Fetch the current PROVE/USD price and convert to µUSD per 1 PROVE.
-async fn fetch_prove_usd_micros(network: &mut ProverNetworkClient<Channel>) -> Result<u64> {
-    let resp = network.get_prove_price(GetProvePriceRequest {}).await?;
-    let price_str = resp.into_inner().price;
-    spn_pricing::parse_usd_micros(&price_str)
-        .with_context(|| format!("parse PROVE/USD price {price_str:?}"))
+/// Fetch the current PROVE/USD reading. `as_of` tracks the upstream `last_updated`
+/// timestamp so cache age reflects feed freshness.
+async fn fetch_prove_price(network: &mut ProverNetworkClient<Channel>) -> Result<ProvePrice> {
+    let resp = network
+        .get_prove_price(GetProvePriceRequest {})
+        .await?
+        .into_inner();
+    let usd_micros = spn_pricing::parse_usd_micros(&resp.price)
+        .with_context(|| format!("parse PROVE/USD price {:?}", resp.price))?;
+    let as_of = OffsetDateTime::from_unix_timestamp(resp.last_updated)
+        .with_context(|| format!("invalid last_updated unix ts: {}", resp.last_updated))?;
+    Ok(ProvePrice { usd_micros, as_of })
 }
 
 /// Outcome of the effective-`bid_amount` decision. Carries which side (static vs dynamic)
@@ -531,7 +535,7 @@ mod tests {
 
     /// Defense-in-depth: `prove_usd_micros = 0` makes `spn_pricing::compute_max_price_per_pgu_wei`
     /// error → static `bid_amount` (not propagated). Unreachable in production since
-    /// `fetch_prove_usd_micros` rejects non-positive prices, but the branch is kept covered.
+    /// `fetch_prove_price` rejects non-positive prices, but the branch is kept covered.
     #[test]
     fn math_error_returns_static() {
         let cfg = floor(3600);
