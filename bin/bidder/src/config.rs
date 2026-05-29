@@ -121,7 +121,7 @@ fn default_enabled() -> bool {
 }
 
 fn default_target() -> u64 {
-    200_000 // $0.20/BPGU
+    120_000 // $0.12/BPGU
 }
 
 fn default_refresh_interval_secs() -> u64 {
