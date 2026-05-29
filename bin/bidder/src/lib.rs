@@ -1,13 +1,11 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Duration};
 
 use crate::{config::UsdFloorConfig, metrics::BidderMetrics};
 use alloy::primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use futures::future::join_all;
+use time::OffsetDateTime;
 use tokio::{
     sync::RwLock,
     time::{interval, sleep, MissedTickBehavior},
@@ -20,6 +18,7 @@ use spn_network_types::{
     GetNonceRequest, GetOwnerRequest, GetProvePriceRequest, MessageFormat, ProofMode, Signable,
     TransactionVariant,
 };
+use spn_pricing::ProvePrice;
 use spn_utils::time_now;
 
 pub mod config;
@@ -39,15 +38,6 @@ const REQUEST_LIMIT: u32 = 100;
 
 /// Synchronous prime-fetch cap at startup so a slow RPC can't hang the bidder.
 const PRIME_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// A cached PROVE/USD reading shared between the refresh task and the bid loop.
-#[derive(Clone, Copy)]
-struct ProveUsdCache {
-    /// µUSD per 1 PROVE.
-    usd_micros: u64,
-    /// Time of the last successful refresh, for staleness checks.
-    fetched_at: Instant,
-}
 
 #[derive(Clone)]
 pub struct Bidder {
@@ -85,7 +75,7 @@ pub struct Bidder {
     usd_floor: UsdFloorConfig,
     /// Cache of the last fetched PROVE/USD price. Populated by the refresh task spawned
     /// in `run()` when `usd_floor.enabled`.
-    prove_usd_cache: Arc<RwLock<Option<ProveUsdCache>>>,
+    prove_usd_cache: Arc<RwLock<Option<ProvePrice>>>,
 }
 
 impl Bidder {
@@ -174,11 +164,12 @@ impl Bidder {
     /// Uses the USD-pegged amount when the USD floor is enabled and the cached PROVE/USD
     /// reading is fresh; otherwise falls back to the static `bid_amount`.
     async fn effective_bid_amount(&self) -> U256 {
-        let cache_snapshot = self
-            .prove_usd_cache
-            .read()
-            .await
-            .map(|c| (c.usd_micros, c.fetched_at.elapsed().as_secs()));
+        let cache_snapshot = self.prove_usd_cache.read().await.as_ref().map(|c| {
+            (
+                c.usd_micros,
+                (OffsetDateTime::now_utc() - c.as_of).whole_seconds().max(0) as u64,
+            )
+        });
         let usd_floor = self.usd_floor.enabled.then_some(&self.usd_floor);
         match bid_amount_outcome(usd_floor, cache_snapshot, self.bid_amount) {
             BidAmountOutcome::Static(v) => {
@@ -421,49 +412,22 @@ impl Bidder {
 /// caller to log; cache is untouched on `Err`. Shared by the prime and refresh paths.
 async fn fetch_and_cache_prove_usd(
     network: &mut ProverNetworkClient<Channel>,
-    cache: &RwLock<Option<ProveUsdCache>>,
+    cache: &RwLock<Option<ProvePrice>>,
 ) -> Result<u64> {
     let usd_micros = fetch_prove_usd_micros(network).await?;
-    *cache.write().await = Some(ProveUsdCache {
+    *cache.write().await = Some(ProvePrice {
         usd_micros,
-        fetched_at: Instant::now(),
+        as_of: OffsetDateTime::now_utc(),
     });
     Ok(usd_micros)
 }
 
-/// Fetch the current PROVE/USD price and convert to µUSD per 1 PROVE. Rejects non-finite
-/// or non-positive values and rounds to the nearest µUSD before saturating to `u64`.
+/// Fetch the current PROVE/USD price and convert to µUSD per 1 PROVE.
 async fn fetch_prove_usd_micros(network: &mut ProverNetworkClient<Channel>) -> Result<u64> {
     let resp = network.get_prove_price(GetProvePriceRequest {}).await?;
     let price_str = resp.into_inner().price;
-    let price: f64 = price_str
-        .parse()
-        .with_context(|| format!("parse PROVE/USD price {price_str:?}"))?;
-    if !price.is_finite() || price <= 0.0 {
-        return Err(anyhow!(
-            "PROVE/USD must be finite and positive, got {price}"
-        ));
-    }
-    // Round-to-nearest before saturating cast, then guard against an absurd magnitude
-    // that no real PROVE price can ever reach (≈ 1.8e13 USD).
-    let micros = (price * 1_000_000.0).round();
-    if micros >= u64::MAX as f64 {
-        return Err(anyhow!(
-            "PROVE/USD price {price} is out of representable range"
-        ));
-    }
-    Ok(micros as u64)
-}
-
-/// Compute PROVE wei per PGU from a USD target: `wei = target * 10^9 / prove_usd_micros`,
-/// rounded down. The `10^9` factor is the BPGU→PGU scale (1 BPGU = 10⁹ PGU).
-fn compute_bid_amount_wei(target_usd_micros_per_bpgu: u64, prove_usd_micros: u64) -> Option<U256> {
-    if prove_usd_micros == 0 {
-        return None;
-    }
-    let scale = U256::from(10u64).pow(U256::from(9u64));
-    let numerator = U256::from(target_usd_micros_per_bpgu).checked_mul(scale)?;
-    Some(numerator / U256::from(prove_usd_micros))
+    spn_pricing::parse_usd_micros(&price_str)
+        .with_context(|| format!("parse PROVE/USD price {price_str:?}"))
 }
 
 /// Outcome of the effective-`bid_amount` decision. Carries which side (static vs dynamic)
@@ -479,7 +443,7 @@ enum BidAmountOutcome {
 /// math errors. Only returns `Dynamic(_)` on a fresh cache with successful math.
 ///
 /// `cache_snapshot` is `(prove_usd_micros, age_secs)` captured by the caller — keeps the
-/// helper free of `Instant` so it can be unit-tested directly.
+/// helper free of clock types so it can be unit-tested directly.
 fn bid_amount_outcome(
     usd_floor: Option<&UsdFloorConfig>,
     cache_snapshot: Option<(u64, u64)>,
@@ -495,10 +459,11 @@ fn bid_amount_outcome(
         warn!("PROVE/USD cache is stale; falling back to static bid_amount");
         return BidAmountOutcome::Static(static_bid);
     }
-    match compute_bid_amount_wei(usd_floor.target, prove_usd_micros) {
-        Some(wei) => BidAmountOutcome::Dynamic(wei),
-        None => {
+    match spn_pricing::compute_max_price_per_pgu_wei(usd_floor.target, prove_usd_micros) {
+        Ok(wei) => BidAmountOutcome::Dynamic(wei),
+        Err(e) => {
             warn!(
+                error = %e,
                 target_micros_per_bpgu = usd_floor.target,
                 prove_usd_micros, "USD→wei conversion failed; falling back to static bid_amount",
             );
@@ -510,43 +475,6 @@ fn bid_amount_outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Anchor: target = $0.20/BPGU (200_000 µUSD), PROVE = $0.40 → 0.5 PROVE/BPGU = 5e8 wei/PGU.
-    #[test]
-    fn anchor_matches_legacy_static_bid() {
-        let wei = compute_bid_amount_wei(200_000, 400_000).unwrap();
-        assert_eq!(wei, U256::from(500_000_000u64));
-    }
-
-    /// Halving PROVE doubles the wei needed to hit the same $-target.
-    #[test]
-    fn lower_prove_price_raises_bid() {
-        let wei = compute_bid_amount_wei(200_000, 200_000).unwrap();
-        assert_eq!(wei, U256::from(1_000_000_000u64));
-    }
-
-    /// Doubling PROVE halves the wei.
-    #[test]
-    fn higher_prove_price_lowers_bid() {
-        let wei = compute_bid_amount_wei(200_000, 800_000).unwrap();
-        assert_eq!(wei, U256::from(250_000_000u64));
-    }
-
-    /// Zero PROVE/USD must short-circuit rather than divide by zero.
-    #[test]
-    fn zero_prove_price_returns_none() {
-        assert_eq!(compute_bid_amount_wei(200_000, 0), None);
-    }
-
-    /// Division rounds down.
-    #[test]
-    fn rounds_down() {
-        // (1 * 10^9) / 3 = 333_333_333 (truncated).
-        assert_eq!(
-            compute_bid_amount_wei(1, 3),
-            Some(U256::from(333_333_333u64))
-        );
-    }
 
     /// Reference anchor reused across the outcome tests: $0.20/BPGU at PROVE=$0.40 → 500M wei.
     const TARGET_MICROS_PER_BPGU: u64 = 200_000;
@@ -589,8 +517,8 @@ mod tests {
         assert_eq!(out, BidAmountOutcome::Static(static_bid()));
     }
 
-    /// Fresh cache + configured pricing → USD-derived dynamic bid via `compute_bid_amount_wei`.
-    /// Anchor: $0.20/BPGU at PROVE=$0.40 → 500M wei/PGU.
+    /// Fresh cache + configured pricing → USD-derived dynamic bid via
+    /// `spn_pricing::compute_max_price_per_pgu_wei`. Anchor: $0.20/BPGU at PROVE=$0.40 → 500M wei/PGU.
     #[test]
     fn fresh_cache_returns_dynamic() {
         let cfg = floor(3600);
@@ -601,8 +529,8 @@ mod tests {
         );
     }
 
-    /// Defense-in-depth: `prove_usd_micros = 0` makes `compute_bid_amount_wei` return `None`
-    /// → static `bid_amount` (not propagated). Unreachable in production since
+    /// Defense-in-depth: `prove_usd_micros = 0` makes `spn_pricing::compute_max_price_per_pgu_wei`
+    /// error → static `bid_amount` (not propagated). Unreachable in production since
     /// `fetch_prove_usd_micros` rejects non-positive prices, but the branch is kept covered.
     #[test]
     fn math_error_returns_static() {
