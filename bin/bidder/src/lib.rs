@@ -76,14 +76,15 @@ pub struct Bidder {
     aggressive_mode: bool,
     /// Minimum deadline in seconds to bid on (optional safety check, even in aggressive mode)
     min_deadline_secs: Option<u64>,
-    /// USD-pegged bidding parameters. `Some` enables the feature: bidder polls
+    /// USD-pegged bidding parameters. When `usd_floor.enabled`, the bidder polls
     /// `GetProvePrice` and converts the target to PROVE wei via
-    /// `target * 10^9 / prove_usd_micros`. `None` keeps the static `bid_amount` path.
+    /// `target * 10^9 / prove_usd_micros`. Otherwise the bidder stays on the static
+    /// `bid_amount` path.
     ///
     /// BPGU = 10⁹ PGU; see `UsdFloorConfig` for the unit convention.
-    usd_floor: Option<UsdFloorConfig>,
+    usd_floor: UsdFloorConfig,
     /// Cache of the last fetched PROVE/USD price. Populated by the refresh task spawned
-    /// in `run()` when `usd_floor.is_some()`.
+    /// in `run()` when `usd_floor.enabled`.
     prove_usd_cache: Arc<RwLock<Option<ProveUsdCache>>>,
 }
 
@@ -105,7 +106,7 @@ impl Bidder {
         plonk_enabled: bool,
         aggressive_mode: bool,
         min_deadline_secs: Option<u64>,
-        usd_floor: Option<UsdFloorConfig>,
+        usd_floor: UsdFloorConfig,
     ) -> Self {
         Self {
             network,
@@ -170,7 +171,7 @@ impl Bidder {
 
     /// Returns the bid amount to use for this iteration.
     ///
-    /// Uses the USD-pegged amount when a target is configured and the cached PROVE/USD
+    /// Uses the USD-pegged amount when the USD floor is enabled and the cached PROVE/USD
     /// reading is fresh; otherwise falls back to the static `bid_amount`.
     async fn effective_bid_amount(&self) -> U256 {
         let cache_snapshot = self
@@ -178,7 +179,8 @@ impl Bidder {
             .read()
             .await
             .map(|c| (c.usd_micros, c.fetched_at.elapsed().as_secs()));
-        match bid_amount_outcome(self.usd_floor.as_ref(), cache_snapshot, self.bid_amount) {
+        let usd_floor = self.usd_floor.enabled.then_some(&self.usd_floor);
+        match bid_amount_outcome(usd_floor, cache_snapshot, self.bid_amount) {
             BidAmountOutcome::Static(v) => {
                 self.metrics.static_floor_used_total.increment(1);
                 v
@@ -212,10 +214,10 @@ impl Bidder {
     /// Poll `GetProvePrice` on a tick and refresh the PROVE/USD cache. Keeps the *cache*
     /// fresh, not the upstream price — `GetProvePrice` is sourced from 10-minute buckets,
     /// so a "fresh" cache can still hold a price minted minutes ago.
-    fn spawn_prove_usd_refresh(&self, usd_floor: &UsdFloorConfig) {
+    fn spawn_prove_usd_refresh(&self) {
         let cache = self.prove_usd_cache.clone();
         let mut network = self.network.clone();
-        let mut ticker = interval(Duration::from_secs(usd_floor.refresh_interval_secs));
+        let mut ticker = interval(Duration::from_secs(self.usd_floor.refresh_interval_secs));
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         tokio::spawn(async move {
@@ -233,9 +235,9 @@ impl Bidder {
     pub async fn run(mut self) -> Result<()> {
         info!("starting the bidder");
 
-        if let Some(usd_floor) = &self.usd_floor {
+        if self.usd_floor.enabled {
             self.prime_prove_usd_cache().await;
-            self.spawn_prove_usd_refresh(usd_floor);
+            self.spawn_prove_usd_refresh();
         }
 
         // Get the prover.
@@ -553,6 +555,7 @@ mod tests {
 
     fn floor(staleness_max_secs: u64) -> UsdFloorConfig {
         UsdFloorConfig {
+            enabled: true,
             target: TARGET_MICROS_PER_BPGU,
             refresh_interval_secs: 60,
             staleness_max_secs,
@@ -563,7 +566,7 @@ mod tests {
         U256::from(1_000u64)
     }
 
-    /// Dynamic pricing is opt-in — no `usd_floor` config means static `bid_amount`.
+    /// Helper receives `None` when the feature is off — falls back to static `bid_amount`.
     #[test]
     fn no_usd_floor_returns_static() {
         let out = bid_amount_outcome(None, None, static_bid());
