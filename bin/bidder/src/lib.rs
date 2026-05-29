@@ -165,10 +165,9 @@ impl Bidder {
     /// reading is fresh; otherwise falls back to the static `bid_amount`.
     async fn effective_bid_amount(&self) -> U256 {
         let cache_snapshot = self.prove_usd_cache.read().await.as_ref().map(|c| {
-            (
-                c.usd_micros,
-                (OffsetDateTime::now_utc() - c.as_of).whole_seconds().max(0) as u64,
-            )
+            // Clamp negative durations (clock skew between upstream timestamp and this read) to 0.
+            let age_secs = (OffsetDateTime::now_utc() - c.as_of).whole_seconds().max(0) as u64;
+            (c.usd_micros, age_secs)
         });
         let usd_floor = self.usd_floor.enabled.then_some(&self.usd_floor);
         match bid_amount_outcome(usd_floor, cache_snapshot, self.bid_amount) {
@@ -460,7 +459,11 @@ fn bid_amount_outcome(
         return BidAmountOutcome::Static(static_bid);
     };
     if age_secs >= usd_floor.staleness_max_secs {
-        warn!("PROVE/USD cache is stale; falling back to static bid_amount");
+        warn!(
+            age_secs,
+            max_secs = usd_floor.staleness_max_secs,
+            "PROVE/USD cache is stale; falling back to static bid"
+        );
         return BidAmountOutcome::Static(static_bid);
     }
     match spn_pricing::compute_max_price_per_pgu_wei(usd_floor.target, prove_usd_micros) {
@@ -469,7 +472,7 @@ fn bid_amount_outcome(
             warn!(
                 error = %e,
                 target_micros_per_bpgu = usd_floor.target,
-                prove_usd_micros, "USD→wei conversion failed; falling back to static bid_amount",
+                prove_usd_micros, "USD→wei conversion failed; falling back to static bid",
             );
             BidAmountOutcome::Static(static_bid)
         }
