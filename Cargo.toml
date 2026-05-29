@@ -42,7 +42,7 @@ p3-matrix = "=0.3.3-succinct"
 spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
-spn-pricing = { git = "https://github.com/succinctlabs/network", branch = "farhad/spn-pricing-from-network" }
+spn-pricing = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
 
 # SP1

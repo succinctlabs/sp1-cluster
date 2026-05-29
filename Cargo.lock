@@ -9613,9 +9613,9 @@ dependencies = [
 [[package]]
 name = "spn-pricing"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Fspn-pricing-from-network#81f398f4514da71433d1a940fd8933a51a602173"
+source = "git+https://github.com/succinctlabs/network?branch=main#fd2f5dda78199b3e50ffc9cd5ac17d75e2a927e0"
 dependencies = [
- "alloy",
+ "alloy-primitives",
  "async-trait",
  "thiserror 1.0.69",
  "time",
