@@ -1,10 +1,13 @@
 use crate::{error::TaskError, SP1ClusterWorker};
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::proto::WorkerTask;
-use sp1_prover::worker::{TaskId, TaskMetadata, WorkerClient};
+use sp1_prover::{
+    worker::{TaskId, TaskMetadata, WorkerClient},
+    SP1ProverComponents,
+};
 use sp1_prover_types::Artifact;
 
-impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
+impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorker<W, A, C> {
     pub async fn process_sp1_setup_vkey(
         &self,
         task: &WorkerTask,

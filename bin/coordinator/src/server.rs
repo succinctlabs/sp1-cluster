@@ -12,10 +12,12 @@ use sp1_cluster_common::logger;
 use sp1_cluster_common::proto::{
     self, server_sub_message, CreateTaskResponse, GetStatsResponse, ServerMessage, ServerSubMessage,
 };
+use sp1_cluster_common::shutdown::wait_for_shutdown_signal;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Status};
 use tonic_web::GrpcWebLayer;
 
@@ -537,6 +539,18 @@ pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Syn
 
     let config = Settings::new()?;
 
+    let token = CancellationToken::new();
+    let _ = tokio::spawn(wait_for_shutdown_signal(token.clone()));
+
+    start_coordinator_server_custom::<P>(config, token).await
+}
+
+pub async fn start_coordinator_server_custom<
+    P: AssignmentPolicy + Default + Send + Sync + 'static,
+>(
+    config: Settings,
+    token: CancellationToken,
+) -> Result<(Arc<Coordinator<P>>, impl Future<Output = ()>)> {
     let addr = config.addr.parse::<SocketAddr>().unwrap();
 
     let mut service = GenericWorkerService::<P>::default();
@@ -551,10 +565,8 @@ pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Syn
         .set_metrics(metrics.clone());
 
     let (completed_tx, completed_rx) = mpsc::unbounded_channel::<ProofResult<P>>();
-    let task_map = Arc::new(DashMap::<String, TaskState>::new());
-    let api_rpc =
-        std::env::var("COORDINATOR_CLUSTER_RPC").unwrap_or("http://127.0.0.1:50051".to_string());
-    let api_client = Arc::new(ClusterServiceClient::new(api_rpc).await?);
+    let task_map = Arc::new(DashMap::<String, ProofRequestStatus>::new());
+    let api_client = Arc::new(ClusterServiceClient::new(config.cluster_rpc.clone()).await?);
 
     service.coordinator.set_proofs_tx(completed_tx).await;
     service
@@ -588,42 +600,12 @@ pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Syn
         addr
     );
 
-    // Create a channel to signal shutdown
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-
-    // Store the shutdown sender in an Arc to share between handlers
-    let shutdown_tx = Arc::new(std::sync::Mutex::new(Some(shutdown_tx)));
-
     let middleware = tower::ServiceBuilder::new()
         .layer_fn(|s| OkService { inner: s })
         .layer(GrpcWebLayer::new());
 
-    // Handle shutdown gracefully.
-    let coordinator_clone = service.coordinator.clone();
-    let shutdown_tx_clone = shutdown_tx.clone();
-    ctrlc::set_handler(move || {
-        let shutdown_tx = shutdown_tx_clone.clone();
-        let coordinator = coordinator_clone.clone();
-        let metrics_shutdown_tx = metrics_shutdown_tx.clone();
-        tokio::spawn(async move {
-            print_latency().await;
-            tracing::info!("Received ctrl-c, shutting down... (ctrl-c again to force exit)");
-
-            // Initiate coordinator shutdown
-            coordinator.shutdown().await;
-            metrics_shutdown_tx.send(()).unwrap();
-            tokio::time::sleep(Duration::from_secs(2)).await;
-
-            // Signal the main task to shut down
-            if let Some(tx) = shutdown_tx.lock().unwrap().take() {
-                let _ = tx.send(());
-            }
-        });
-    })
-    .expect("failed to set ctrl-c handler");
-
-    // Extract coordinator before moving service into server
     let coordinator = service.coordinator.clone();
+    let coordinator_for_shutdown = service.coordinator.clone();
 
     // Start the server
     let server = Server::builder()
@@ -645,8 +627,12 @@ pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Syn
                     tracing::error!("Server error: {:?}", e);
                 }
             }
-            _ = shutdown_rx => {
-                tracing::info!("Received shutdown signal");
+            _ = token.cancelled() => {
+                print_latency().await;
+                // Initiate coordinator shutdown
+                coordinator_for_shutdown.shutdown().await;
+                metrics_shutdown_tx.send(()).unwrap();
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
             _ = async {
                 if let Some(ref mut handle) = metrics_server_handle {

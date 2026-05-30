@@ -87,7 +87,7 @@ pub fn estimate_gpu_duration(task_counts: &HashMap<TaskType, i32>) -> Duration {
     let mut total_duration = Duration::from_millis(0);
 
     for (task_type, count) in task_counts {
-        if WorkerType::from_task_type(*task_type) != WorkerType::Gpu {
+        if worker_type_from_task_type(*task_type) != WorkerType::Gpu {
             continue;
         }
         let duration_ms = estimate_duration(*task_type) as u64;
@@ -95,4 +95,11 @@ pub fn estimate_gpu_duration(task_counts: &HashMap<TaskType, i32>) -> Duration {
     }
 
     total_duration
+}
+
+pub(crate) fn worker_type_from_task_type(task_type: TaskType) -> WorkerType {
+    match WorkerType::from_task_type(task_type) {
+        WorkerType::Gpu if option_env!("SP1_CLUSTER_CPU_ONLY").is_some() => WorkerType::Cpu,
+        worker_type => worker_type,
+    }
 }

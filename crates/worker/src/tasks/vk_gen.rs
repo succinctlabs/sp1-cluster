@@ -6,10 +6,13 @@ use opentelemetry::Context;
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::proto::WorkerTask;
 use sp1_core_machine::riscv::RiscvAir;
-use sp1_prover::worker::{run_vk_generation, TaskMetadata, WorkerClient};
+use sp1_prover::{
+    worker::{run_vk_generation, TaskMetadata, WorkerClient},
+    SP1ProverComponents,
+};
 use std::sync::Arc;
 
-impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
+impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorker<W, A, C> {
     /// The controller task for an SP1 proof. This task does all of the coordination for a full
     /// SP1 proof which can have mode core, compressed, plonk, and groth16.
     pub async fn process_sp1_generate_vk_controller(
@@ -35,7 +38,7 @@ impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
     }
 }
 
-impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
+impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorker<W, A, C> {
     /// Generate a single chunk of vks.
     pub async fn process_sp1_generate_vk_chunk(
         self: &Arc<Self>,

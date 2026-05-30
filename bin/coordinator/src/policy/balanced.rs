@@ -9,7 +9,10 @@ use sp1_cluster_common::proto::{CreateProofRequest, TaskStatus, TaskType, Worker
 use tokio::sync::OwnedRwLockWriteGuard;
 use tonic::Status;
 
-use crate::{estimate_duration, track_latency, Coordinator, CoordinatorState, Proof, Task, Worker};
+use crate::{
+    estimate_duration, track_latency, util::worker_type_from_task_type, Coordinator,
+    CoordinatorState, Proof, Task, Worker,
+};
 
 use super::{AssignmentPolicy, TaskMetadata};
 
@@ -82,7 +85,7 @@ impl BalancedPolicy {
     ) -> Result<Option<String>, Status> {
         let best_worker_id = track_latency!("coordinator.assign_task", {
             let task_type = task.data.task_type();
-            let worker_type = WorkerType::from_task_type(task_type);
+            let worker_type = worker_type_from_task_type(task_type);
 
             // Do not assign WorkerType::None tasks.
             if worker_type == WorkerType::None {
@@ -203,7 +206,7 @@ impl AssignmentPolicy for BalancedPolicy {
 
     fn enqueue_task(state: &mut CoordinatorState<Self>, task: Task<Self>) {
         let queued_task = Self::get_queued_task(state, &task);
-        let worker_type = WorkerType::from_task_type(task.data.task_type());
+        let worker_type = worker_type_from_task_type(task.data.task_type());
         match worker_type {
             WorkerType::Cpu => state.policy.cpu_queue.push(Reverse(queued_task)),
             WorkerType::Gpu => {
@@ -238,7 +241,7 @@ impl AssignmentPolicy for BalancedPolicy {
         task_type: TaskType,
     ) {
         // Decrement GPU weight when a GPU task completes
-        if WorkerType::from_task_type(task_type) == WorkerType::Gpu {
+        if worker_type_from_task_type(task_type) == WorkerType::Gpu {
             if let Some(current_weight) = state.policy.proof_gpu_weights.get_mut(proof_id) {
                 *current_weight = current_weight.saturating_sub(task_weight);
                 if *current_weight == 0 {

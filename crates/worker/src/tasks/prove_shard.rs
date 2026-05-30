@@ -3,10 +3,13 @@ use std::sync::Arc;
 use anyhow::Result;
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::proto::WorkerTask;
-use sp1_prover::worker::{TaskMetadata, WorkerClient};
+use sp1_prover::{
+    worker::{TaskMetadata, WorkerClient},
+    SP1ProverComponents,
+};
 
 use crate::{error::TaskError, utils::worker_task_to_raw_task_request, SP1ClusterWorker};
-impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
+impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorker<W, A, C> {
     /// Prove a single shard.
     pub async fn process_sp1_prove_shard(
         self: &Arc<Self>,

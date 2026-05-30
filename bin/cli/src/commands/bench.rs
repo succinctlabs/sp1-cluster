@@ -4,7 +4,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use clap::{Args, Subcommand};
 use eyre::Result;
 use sp1_cluster_artifact::{redis::RedisArtifactClient, ArtifactClient, ArtifactType};
-use sp1_cluster_common::proto::{CreateDummyProofRequest, TaskStatus, TaskType};
+use sp1_cluster_common::proto::{CreateDummyProofRequest, TaskStatus, TaskType, WorkerType};
 use sp1_cluster_utils::{request_proof_from_env, ClusterElf, ProofRequestResults};
 use sp1_cluster_worker::client::WorkerServiceClient;
 use sp1_prover::worker::{
@@ -414,10 +414,14 @@ impl BenchCommand {
                 .unwrap()
                 .as_millis()
         );
-
-        let client = WorkerServiceClient::new(cluster_rpc.to_string(), worker_id.clone())
-            .await
-            .map_err(|e| eyre::eyre!("Failed to connect to coordinator: {}", e))?;
+        let worker_type = WorkerType::from_str_name({
+            &std::env::var("WORKER_TYPE").unwrap_or_else(|_| "ALL".to_string())
+        })
+        .expect("Invalid worker type");
+        let client =
+            WorkerServiceClient::new(cluster_rpc.to_string(), worker_id.clone(), worker_type)
+                .await
+                .map_err(|e| eyre::eyre!("Failed to connect to coordinator: {}", e))?;
 
         // Create proof ID
         let proof_id = format!(

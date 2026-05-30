@@ -7,6 +7,7 @@ edition = "2021"
 sp1-cluster-common = { workspace = true }
 
 alloy.workspace = true
+anyhow.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 dotenv.workspace = true

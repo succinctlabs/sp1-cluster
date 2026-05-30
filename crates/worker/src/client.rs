@@ -55,12 +55,14 @@ pub struct WorkerServiceClient {
 }
 
 impl WorkerServiceClient {
-    pub async fn new(addr: String, worker_id: String) -> Result<WorkerServiceClient> {
+    pub async fn new(
+        addr: String,
+        worker_id: String,
+        worker_type: WorkerType,
+    ) -> Result<WorkerServiceClient> {
         let channel = reconnect_with_backoff(&addr).await?;
 
         let client = InnerWorkerClient::new(channel.clone());
-        let worker_type_str = std::env::var("WORKER_TYPE").unwrap_or_else(|_| "ALL".to_string());
-        let worker_type = WorkerType::from_str_name(&worker_type_str).expect("Invalid worker type");
 
         Ok(Self {
             client,

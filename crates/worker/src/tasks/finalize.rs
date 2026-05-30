@@ -5,12 +5,13 @@ use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::proto::WorkerTask;
 use sp1_prover::worker::TaskMetadata;
 use sp1_prover::worker::WorkerClient;
+use sp1_prover::SP1ProverComponents;
 use sp1_prover_types::network_base_types::ProofMode;
 use std::sync::Arc;
 
 use crate::SP1ClusterWorker;
 
-impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
+impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorker<W, A, C> {
     pub async fn process_sp1_finalize(
         self: &Arc<Self>,
         task: &WorkerTask,

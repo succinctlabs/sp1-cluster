@@ -9,7 +9,10 @@ use sp1_cluster_common::proto::{CreateProofRequest, TaskStatus, TaskType, Worker
 use tokio::sync::OwnedRwLockWriteGuard;
 use tonic::Status;
 
-use crate::{estimate_duration, track_latency, Coordinator, CoordinatorState, Proof, Task, Worker};
+use crate::{
+    estimate_duration, track_latency, util::worker_type_from_task_type, Coordinator,
+    CoordinatorState, Proof, Task, Worker,
+};
 
 use super::{AssignmentPolicy, TaskMetadata};
 
@@ -43,7 +46,7 @@ impl DefaultPolicy {
     ) -> Result<Option<String>, Status> {
         let best_worker_id = track_latency!("coordinator.assign_task", {
             let task_type = task.data.task_type();
-            let worker_type = WorkerType::from_task_type(task_type);
+            let worker_type = worker_type_from_task_type(task_type);
 
             // Do not assign WorkerType::None tasks.
             if worker_type == WorkerType::None {
@@ -148,7 +151,7 @@ impl AssignmentPolicy for DefaultPolicy {
 
     fn enqueue_task(state: &mut CoordinatorState<Self>, task: Task<Self>) {
         let queued_task = Self::get_queued_task(state, &task);
-        let worker_type = WorkerType::from_task_type(task.data.task_type());
+        let worker_type = worker_type_from_task_type(task.data.task_type());
         match worker_type {
             WorkerType::Cpu => state.policy.cpu_queue.push(Reverse(queued_task)),
             WorkerType::Gpu => state.policy.gpu_queue.push(Reverse(queued_task)),
