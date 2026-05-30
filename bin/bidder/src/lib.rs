@@ -426,11 +426,7 @@ async fn fetch_prove_price(network: &mut ProverNetworkClient<Channel>) -> Result
         .get_prove_price(GetProvePriceRequest {})
         .await?
         .into_inner();
-    let usd_micros = spn_pricing::parse_usd_micros(&resp.price)
-        .with_context(|| format!("parse PROVE/USD price {:?}", resp.price))?;
-    let as_of = OffsetDateTime::from_unix_timestamp(resp.last_updated)
-        .with_context(|| format!("invalid last_updated unix ts: {}", resp.last_updated))?;
-    Ok(ProvePrice { usd_micros, as_of })
+    Ok(ProvePrice::parse(&resp.price, resp.last_updated)?)
 }
 
 /// Outcome of the effective-`bid_amount` decision. Carries which side (static vs dynamic)
