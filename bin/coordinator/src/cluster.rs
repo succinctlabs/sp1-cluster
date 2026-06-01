@@ -36,7 +36,11 @@ fn reissue_lost_status_write(
     if !inflight.insert(proof_id.clone()) {
         return; // a re-issue for this proof is already running
     }
-    tracing::warn!("re-issuing lost {:?} status write for proof {}", status, proof_id);
+    tracing::warn!(
+        "re-issuing lost {:?} status write for proof {}",
+        status,
+        proof_id
+    );
 
     let api_client = api_client.clone();
     let metrics = metrics.clone();
@@ -50,7 +54,11 @@ fn reissue_lost_status_write(
         match api_client.update_proof_request(update).await {
             Ok(()) => metrics.increment_reissued_status_writes(),
             Err(e) => {
-                tracing::warn!("re-issue of lost status write for {} failed: {}", proof_id, e)
+                tracing::warn!(
+                    "re-issue of lost status write for {} failed: {}",
+                    proof_id,
+                    e
+                )
             }
         }
         inflight.remove(&proof_id);
