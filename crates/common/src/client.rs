@@ -8,8 +8,27 @@ use crate::{
 };
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
 use eyre::Result;
+use std::future::Future;
 use std::time::Duration;
 use tonic::transport::{Channel, Endpoint};
+use tonic::{Response, Status};
+
+/// Per-attempt cap. `backoff_retry` only counts time *between* attempts, so a hung call (e.g. a DB
+/// connection killed mid-restart) never retries — it blocks until the 60s channel timeout. Capping
+/// each attempt turns the hang into a fast, retryable failure. 5s sits above a normal call (~ms) and
+/// under the 10s backoff budget, so it fires only on a real stall yet still leaves room to retry.
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// One gRPC attempt under [`ATTEMPT_TIMEOUT`], body unwrapped. A timeout becomes a transient
+/// `DeadlineExceeded` so `backoff_retry` re-issues it.
+async fn with_timeout<T>(
+    fut: impl Future<Output = Result<Response<T>, Status>>,
+) -> Result<T, Status> {
+    match tokio::time::timeout(ATTEMPT_TIMEOUT, fut).await {
+        Ok(resp) => resp.map(|r| r.into_inner()),
+        Err(_) => Err(Status::deadline_exceeded("cluster API attempt timed out")),
+    }
+}
 
 pub async fn reconnect_with_backoff(addr: &str) -> Result<Channel> {
     let backoff = ExponentialBackoffBuilder::new()
@@ -69,19 +88,30 @@ impl ClusterServiceClient {
         Ok(Self { rpc, backoff })
     }
 
+    /// Shared call policy: retry transient failures within the backoff budget, each attempt bounded
+    /// by [`ATTEMPT_TIMEOUT`]. `make_call` builds one fresh attempt per try (cloning client/request).
+    async fn retry_call<T, Fut>(&self, make_call: impl Fn() -> Fut) -> Result<T>
+    where
+        Fut: Future<Output = Result<Response<T>, Status>>,
+    {
+        Ok(backoff_retry(self.backoff.clone(), || with_timeout(make_call())).await?)
+    }
+
     pub async fn create_proof_request(&self, request: ProofRequestCreateRequest) -> Result<()> {
-        backoff_retry(self.backoff.clone(), || async {
-            let response = self.rpc.clone().proof_request_create(request.clone()).await;
-            response.map(|response| response.into_inner())
+        self.retry_call(|| {
+            let mut client = self.rpc.clone();
+            let request = request.clone();
+            async move { client.proof_request_create(request).await }
         })
         .await?;
         Ok(())
     }
 
     pub async fn cancel_proof_request(&self, request: ProofRequestCancelRequest) -> Result<()> {
-        backoff_retry(self.backoff.clone(), || async {
-            let response = self.rpc.clone().proof_request_cancel(request.clone()).await;
-            response.map(|response| response.into_inner())
+        self.retry_call(|| {
+            let mut client = self.rpc.clone();
+            let request = request.clone();
+            async move { client.proof_request_cancel(request).await }
         })
         .await?;
         Ok(())
@@ -91,18 +121,21 @@ impl ClusterServiceClient {
         &self,
         request: ProofRequestListRequest,
     ) -> Result<Vec<proto::ProofRequest>> {
-        let result = backoff_retry(self.backoff.clone(), || async {
-            let response = self.rpc.clone().proof_request_list(request.clone()).await;
-            response.map(|response| response.into_inner().proof_requests)
-        })
-        .await?;
-        Ok(result)
+        let result = self
+            .retry_call(|| {
+                let mut client = self.rpc.clone();
+                let request = request.clone();
+                async move { client.proof_request_list(request).await }
+            })
+            .await?;
+        Ok(result.proof_requests)
     }
 
     pub async fn update_proof_request(&self, request: ProofRequestUpdateRequest) -> Result<()> {
-        backoff_retry(self.backoff.clone(), || async {
-            let response = self.rpc.clone().proof_request_update(request.clone()).await;
-            response.map(|response| response.into_inner())
+        self.retry_call(|| {
+            let mut client = self.rpc.clone();
+            let request = request.clone();
+            async move { client.proof_request_update(request).await }
         })
         .await?;
         Ok(())
@@ -112,11 +145,13 @@ impl ClusterServiceClient {
         &self,
         request: ProofRequestGetRequest,
     ) -> Result<Option<proto::ProofRequest>> {
-        let result = backoff_retry(self.backoff.clone(), || async {
-            let response = self.rpc.clone().proof_request_get(request.clone()).await;
-            response.map(|response| response.into_inner().proof_request)
-        })
-        .await?;
-        Ok(result)
+        let result = self
+            .retry_call(|| {
+                let mut client = self.rpc.clone();
+                let request = request.clone();
+                async move { client.proof_request_get(request).await }
+            })
+            .await?;
+        Ok(result.proof_request)
     }
 }

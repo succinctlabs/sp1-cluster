@@ -576,6 +576,7 @@ pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Syn
         api_client.clone(),
         service.coordinator.clone(),
         task_map.clone(),
+        metrics.clone(),
     );
 
     spawn_heartbeat_task(service.coordinator.clone());

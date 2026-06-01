@@ -8015,6 +8015,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sp1-prover-types",
+ "tokio",
  "tokio-blocked",
  "tonic 0.12.3",
  "tonic-build",

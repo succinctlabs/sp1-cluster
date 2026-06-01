@@ -232,7 +232,7 @@ impl ClusterService for ClusterServiceImpl {
                 Ok(Response::new(()))
             }
             Err(e) => {
-                error!("Failed to update proof request: {:?}", e);
+                error!("Failed to update proof request {}: {:?}", req.proof_id, e);
                 Err(Status::internal("Failed to update proof request"))
             }
         }

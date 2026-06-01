@@ -1,7 +1,8 @@
 use std::{collections::HashSet, sync::Arc, time::SystemTime};
 
+use crate::metrics::CoordinatorMetrics;
 use crate::{AssignmentPolicy, Coordinator, ProofResult};
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use hex;
 use sp1_cluster_common::{
     client::ClusterServiceClient,
@@ -11,6 +12,50 @@ use sp1_cluster_common::{
 };
 use sp1_prover::worker::ControllerInputMetadata;
 use tokio::{sync::mpsc, task::JoinHandle};
+
+/// For a row the DB still reports PENDING: if we already hold a *terminal* status (Completed/Failed)
+/// in memory, the original completion write was lost (e.g. a cluster-DB outage) — return it to
+/// re-write. Otherwise (still proving) `None`.
+fn lost_status_write(in_memory: ProofRequestStatus) -> Option<ProofRequestStatus> {
+    match in_memory {
+        ProofRequestStatus::Completed | ProofRequestStatus::Failed => Some(in_memory),
+        _ => None,
+    }
+}
+
+/// Re-write a proof's lost terminal status to the cluster API. Spawned fire-and-forget so a slow
+/// write never stalls the claimer loop, and deduped via `inflight` so a still-PENDING row on the
+/// next poll doesn't start a second write while the first runs.
+fn reissue_lost_status_write(
+    api_client: &Arc<ClusterServiceClient>,
+    metrics: &Arc<CoordinatorMetrics>,
+    inflight: &Arc<DashSet<String>>,
+    proof_id: String,
+    status: ProofRequestStatus,
+) {
+    if !inflight.insert(proof_id.clone()) {
+        return; // a re-issue for this proof is already running
+    }
+    tracing::warn!("re-issuing lost {:?} status write for proof {}", status, proof_id);
+
+    let api_client = api_client.clone();
+    let metrics = metrics.clone();
+    let inflight = inflight.clone();
+    tokio::task::spawn(async move {
+        let update = ProofRequestUpdateRequest {
+            proof_id: proof_id.clone(),
+            proof_status: Some(status.into()),
+            ..Default::default()
+        };
+        match api_client.update_proof_request(update).await {
+            Ok(()) => metrics.increment_reissued_status_writes(),
+            Err(e) => {
+                tracing::warn!("re-issue of lost status write for {} failed: {}", proof_id, e)
+            }
+        }
+        inflight.remove(&proof_id);
+    });
+}
 
 /// Spawn a task to update proof statuses with the cluster API given a channel of proof completions.
 pub fn spawn_proof_status_task<P: AssignmentPolicy>(
@@ -67,9 +112,12 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
     api_client: Arc<ClusterServiceClient>,
     coordinator: Arc<Coordinator<P>>,
     task_map: Arc<DashMap<String, ProofRequestStatus>>,
+    metrics: Arc<CoordinatorMetrics>,
 ) -> JoinHandle<()> {
     tokio::task::spawn({
         async move {
+            // Proof ids whose re-issue is in flight, so the next poll doesn't spawn a duplicate.
+            let reissue_inflight: Arc<DashSet<String>> = Arc::new(DashSet::new());
             loop {
                 match api_client
                     .get_proof_requests(ProofRequestListRequest {
@@ -90,7 +138,18 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                         let mut seen_set = HashSet::new();
                         for proof in response.into_iter().rev() {
                             seen_set.insert(proof.id.clone());
-                            if task_map.contains_key(&proof.id) {
+                            if let Some(in_memory) = task_map.get(&proof.id).map(|s| *s) {
+                                // Tracked already. Terminal in memory but still PENDING here → its
+                                // completion write was lost; re-issue it.
+                                if let Some(status) = lost_status_write(in_memory) {
+                                    reissue_lost_status_write(
+                                        &api_client,
+                                        &metrics,
+                                        &reissue_inflight,
+                                        proof.id.clone(),
+                                        status,
+                                    );
+                                }
                                 continue;
                             }
                             let Some(options_artifact_id) = proof.options_artifact_id else {
