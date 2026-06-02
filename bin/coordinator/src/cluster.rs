@@ -13,44 +13,34 @@ use sp1_cluster_common::{
 use sp1_prover::worker::ControllerInputMetadata;
 use tokio::{sync::mpsc, task::JoinHandle};
 
-/// For a row the DB still reports PENDING: if we already hold a *terminal* status (Completed/Failed)
-/// in memory, the original completion write was lost (e.g. a cluster-DB outage) — return it to
-/// re-write. Otherwise (still proving) `None`.
-fn lost_status_write(in_memory: ProofRequestStatus) -> Option<ProofRequestStatus> {
-    match in_memory {
-        ProofRequestStatus::Completed | ProofRequestStatus::Failed => Some(in_memory),
-        _ => None,
-    }
+/// What the coordinator knows about a proof it owns.
+#[derive(Clone)]
+pub enum TaskState {
+    /// Claimed and still proving.
+    Pending,
+    /// Finished — the exact completion write, kept so a lost one can be re-issued verbatim.
+    Terminal(ProofRequestUpdateRequest),
 }
 
-/// Re-write a proof's lost terminal status to the cluster API. Spawned fire-and-forget so a slow
-/// write never stalls the claimer loop, and deduped via `inflight` so a still-PENDING row on the
-/// next poll doesn't start a second write while the first runs.
+/// Re-write a proof's lost terminal write to the cluster API, preserving its full payload (status +
+/// metadata + `extra_data`). Spawned fire-and-forget so a slow write never stalls the claimer loop,
+/// and deduped via `inflight` so a still-PENDING row on the next poll doesn't start a second write.
 fn reissue_lost_status_write(
     api_client: &Arc<ClusterServiceClient>,
     metrics: &Arc<CoordinatorMetrics>,
     inflight: &Arc<DashSet<String>>,
-    proof_id: String,
-    status: ProofRequestStatus,
+    update: ProofRequestUpdateRequest,
 ) {
+    let proof_id = update.proof_id.clone();
     if !inflight.insert(proof_id.clone()) {
         return; // a re-issue for this proof is already running
     }
-    tracing::warn!(
-        "re-issuing lost {:?} status write for proof {}",
-        status,
-        proof_id
-    );
+    tracing::warn!("re-issuing lost status write for proof {}", proof_id);
 
     let api_client = api_client.clone();
     let metrics = metrics.clone();
     let inflight = inflight.clone();
     tokio::task::spawn(async move {
-        let update = ProofRequestUpdateRequest {
-            proof_id: proof_id.clone(),
-            proof_status: Some(status.into()),
-            ..Default::default()
-        };
         match api_client.update_proof_request(update).await {
             Ok(()) => metrics.increment_reissued_status_writes(),
             Err(e) => {
@@ -68,7 +58,7 @@ fn reissue_lost_status_write(
 /// Spawn a task to update proof statuses with the cluster API given a channel of proof completions.
 pub fn spawn_proof_status_task<P: AssignmentPolicy>(
     api_client: Arc<ClusterServiceClient>,
-    task_map: Arc<DashMap<String, ProofRequestStatus>>,
+    task_map: Arc<DashMap<String, TaskState>>,
     mut completed_rx: mpsc::UnboundedReceiver<ProofResult<P>>,
 ) -> JoinHandle<()> {
     tokio::task::spawn(async move {
@@ -79,36 +69,39 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
             extra_data,
         }) = completed_rx.recv().await
         {
-            let Some(mut status) = task_map.get_mut(&id) else {
-                tracing::error!("proof {} not found", id);
-                continue;
-            };
-            if *status != ProofRequestStatus::Pending {
-                tracing::error!("proof {} is in unexpected state {:?}", id, status);
+            match task_map.get(&id).map(|s| matches!(*s, TaskState::Pending)) {
+                None => {
+                    tracing::error!("proof {} not found", id);
+                    continue;
+                }
+                Some(false) => {
+                    tracing::error!(
+                        "proof {} completed from an unexpected (non-Pending) state",
+                        id
+                    );
+                }
+                Some(true) => {}
             }
-            *status = if success {
+            let status = if success {
                 ProofRequestStatus::Completed
             } else {
                 ProofRequestStatus::Failed
             };
-            tracing::info!("Setting proof status to {:?} for {}", *status, id);
-            let status_copy = *status;
+            tracing::info!("Setting proof status to {:?} for {}", status, id);
             let metadata_string = serde_json::to_string(&metadata).unwrap_or_else(|e| {
                 tracing::error!("Failed to serialize metadata: {}", e);
                 "null".to_string()
             });
-            drop(status);
+            let update = ProofRequestUpdateRequest {
+                proof_id: id.clone(),
+                proof_status: Some(status.into()),
+                metadata: Some(metadata_string),
+                extra_data,
+                ..Default::default()
+            };
+            task_map.insert(id.clone(), TaskState::Terminal(update.clone()));
 
-            if let Err(e) = api_client
-                .update_proof_request(ProofRequestUpdateRequest {
-                    proof_id: id.clone(),
-                    proof_status: Some(status_copy.into()),
-                    metadata: Some(metadata_string),
-                    extra_data,
-                    ..Default::default()
-                })
-                .await
-            {
+            if let Err(e) = api_client.update_proof_request(update).await {
                 tracing::error!("Failed to update proof status: {}", e);
             }
         }
@@ -119,7 +112,7 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
 pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
     api_client: Arc<ClusterServiceClient>,
     coordinator: Arc<Coordinator<P>>,
-    task_map: Arc<DashMap<String, ProofRequestStatus>>,
+    task_map: Arc<DashMap<String, TaskState>>,
     metrics: Arc<CoordinatorMetrics>,
 ) -> JoinHandle<()> {
     tokio::task::spawn({
@@ -146,16 +139,15 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                         let mut seen_set = HashSet::new();
                         for proof in response.into_iter().rev() {
                             seen_set.insert(proof.id.clone());
-                            if let Some(in_memory) = task_map.get(&proof.id).map(|s| *s) {
-                                // Tracked already. Terminal in memory but still PENDING here → its
-                                // completion write was lost; re-issue it.
-                                if let Some(status) = lost_status_write(in_memory) {
+                            if let Some(state) = task_map.get(&proof.id) {
+                                // Tracked, but still PENDING in the DB. If we hold its terminal
+                                // write, it was lost — re-issue it. (Pending = still proving → skip.)
+                                if let TaskState::Terminal(update) = state.value() {
                                     reissue_lost_status_write(
                                         &api_client,
                                         &metrics,
                                         &reissue_inflight,
-                                        proof.id.clone(),
-                                        status,
+                                        update.clone(),
                                     );
                                 }
                                 continue;
@@ -220,7 +212,7 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                                         proof.id,
                                         task_id
                                     );
-                                    task_map.insert(proof.id, ProofRequestStatus::Pending);
+                                    task_map.insert(proof.id, TaskState::Pending);
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to create proof: {}", e);
@@ -229,9 +221,9 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                         }
                         // Remove proofs from task_map that are no longer Claimed.
                         let mut proofs_to_fail = vec![];
-                        task_map.retain(|id, status| {
+                        task_map.retain(|id, state| {
                             let was_seen = seen_set.contains(id);
-                            if !was_seen && *status == ProofRequestStatus::Pending {
+                            if !was_seen && matches!(state, TaskState::Pending) {
                                 tracing::warn!(
                                     "Running proof {} is no longer in cluster DB list",
                                     id
