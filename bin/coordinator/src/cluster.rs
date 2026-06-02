@@ -22,13 +22,13 @@ pub enum TaskState {
     Terminal(ProofRequestUpdateRequest),
 }
 
-/// Re-write a proof's lost terminal write to the cluster API, preserving its full payload (status +
-/// metadata + `extra_data`). Spawned fire-and-forget so a slow write never stalls the claimer loop,
-/// and deduped via `inflight` so a still-PENDING row on the next poll doesn't start a second write.
+/// Re-issue a proof's lost terminal write. Fire-and-forget so it never stalls the claimer loop,
+/// deduped via `inflight`, and drops the `task_map` entry once the write lands or is moot.
 fn reissue_lost_status_write(
     api_client: &Arc<ClusterServiceClient>,
     metrics: &Arc<CoordinatorMetrics>,
     inflight: &Arc<DashSet<String>>,
+    task_map: &Arc<DashMap<String, TaskState>>,
     update: ProofRequestUpdateRequest,
 ) {
     let proof_id = update.proof_id.clone();
@@ -40,9 +40,14 @@ fn reissue_lost_status_write(
     let api_client = api_client.clone();
     let metrics = metrics.clone();
     let inflight = inflight.clone();
+    let task_map = task_map.clone();
     tokio::task::spawn(async move {
         match api_client.update_proof_request(update).await {
-            Ok(()) => metrics.increment_reissued_status_writes(),
+            Ok(()) => {
+                metrics.increment_reissued_status_writes();
+                // stop tracking — but only if it's still our Terminal, not a re-claimed Pending.
+                task_map.remove_if(&proof_id, |_, v| matches!(v, TaskState::Terminal(_)));
+            }
             Err(e) => {
                 tracing::warn!(
                     "re-issue of lost status write for {} failed: {}",
@@ -99,10 +104,15 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
                 extra_data,
                 ..Default::default()
             };
+            // Record the write before attempting it; the claimer re-issues it if it's lost.
             task_map.insert(id.clone(), TaskState::Terminal(update.clone()));
-
-            if let Err(e) = api_client.update_proof_request(update).await {
-                tracing::error!("Failed to update proof status: {}", e);
+            match api_client.update_proof_request(update).await {
+                Ok(()) => {
+                    // confirmed (or moot) → stop tracking; conditional so a re-claim isn't dropped.
+                    task_map.remove_if(&id, |_, v| matches!(v, TaskState::Terminal(_)));
+                }
+                // transient failure → keep the Terminal entry so the claimer re-issues it
+                Err(e) => tracing::error!("Failed to update proof status: {}", e),
             }
         }
     })
@@ -139,17 +149,8 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                         let mut seen_set = HashSet::new();
                         for proof in response.into_iter().rev() {
                             seen_set.insert(proof.id.clone());
-                            if let Some(state) = task_map.get(&proof.id) {
-                                // Tracked, but still PENDING in the DB. If we hold its terminal
-                                // write, it was lost — re-issue it. (Pending = still proving → skip.)
-                                if let TaskState::Terminal(update) = state.value() {
-                                    reissue_lost_status_write(
-                                        &api_client,
-                                        &metrics,
-                                        &reissue_inflight,
-                                        update.clone(),
-                                    );
-                                }
+                            if task_map.contains_key(&proof.id) {
+                                // Already tracking it (proving, or a lost write the sweep handles).
                                 continue;
                             }
                             let Some(options_artifact_id) = proof.options_artifact_id else {
@@ -219,18 +220,19 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                                 }
                             }
                         }
-                        // Remove proofs from task_map that are no longer Claimed.
+                        // Fail a Pending proof that vanished from the DB list. Keep every Terminal
+                        // entry (it may just be on a later page) — removed only when its write lands.
                         let mut proofs_to_fail = vec![];
-                        task_map.retain(|id, state| {
-                            let was_seen = seen_set.contains(id);
-                            if !was_seen && matches!(state, TaskState::Pending) {
+                        task_map.retain(|id, state| match state {
+                            TaskState::Pending if !seen_set.contains(id) => {
                                 tracing::warn!(
                                     "Running proof {} is no longer in cluster DB list",
                                     id
                                 );
                                 proofs_to_fail.push(id.clone());
+                                false
                             }
-                            was_seen
+                            _ => true,
                         });
                         for id in proofs_to_fail {
                             if let Err(e) =
@@ -238,6 +240,25 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                             {
                                 tracing::error!("Failed to fail expired proof: {:?}", e);
                             }
+                        }
+
+                        // Sweep all unconfirmed terminal writes (not just this page), so a lost write
+                        // beyond the 1000-row page still recovers.
+                        let unconfirmed: Vec<ProofRequestUpdateRequest> = task_map
+                            .iter()
+                            .filter_map(|e| match e.value() {
+                                TaskState::Terminal(update) => Some(update.clone()),
+                                TaskState::Pending => None,
+                            })
+                            .collect();
+                        for update in unconfirmed {
+                            reissue_lost_status_write(
+                                &api_client,
+                                &metrics,
+                                &reissue_inflight,
+                                &task_map,
+                                update,
+                            );
                         }
                     }
                     Err(e) => {
