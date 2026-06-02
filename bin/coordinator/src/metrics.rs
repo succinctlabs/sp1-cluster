@@ -105,6 +105,16 @@ impl CoordinatorMetrics {
         );
         counter!("coordinator_dead_worker_missing_task_total").increment(1);
     }
+
+    /// Claimer re-issued a terminal status write that an earlier completion lost. A nonzero rate
+    /// means completion writes are being dropped (e.g. a cluster-DB blip). Observability-only.
+    pub fn increment_reissued_status_writes(&self) {
+        describe_counter!(
+            "coordinator_reissued_status_writes_total",
+            "Terminal proof-status writes re-issued by the claimer after an earlier write was lost.",
+        );
+        counter!("coordinator_reissued_status_writes_total").increment(1);
+    }
 }
 
 pub async fn initialize_metrics() -> Result<(

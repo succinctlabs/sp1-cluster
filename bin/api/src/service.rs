@@ -162,6 +162,11 @@ impl ClusterService for ClusterServiceImpl {
         let req = request.into_inner();
         info!("Updating proof request with ID: {}", req.proof_id);
 
+        // A proof_status write is the Pending→terminal completion; guard the whole UPDATE (below) on
+        // `proof_status = Pending` so a re-issue can't clobber a row that moved on (e.g. Cancelled).
+        // Guards every field in the request — but only the completion writer sets proof_status today.
+        let guard_pending = req.proof_status.is_some();
+
         // If we're not updating anything return an error.
         if req
             == (ProofRequestUpdateRequest {
@@ -216,12 +221,27 @@ impl ClusterService for ClusterServiceImpl {
 
         query.push(" WHERE id = ");
         query.push_bind(&req.proof_id);
+        // Only land a completion write from Pending, so it can't clobber a row that's moved on
+        // (e.g. Cancelled) or a gone row.
+        if guard_pending {
+            query.push(" AND proof_status = ");
+            query.push_bind(ProofRequestStatus::Pending as i16);
+        }
 
         let result = query.build().execute(&*self.db_pool).await;
 
         match result {
             Ok(result) => {
                 if result.rows_affected() == 0 {
+                    if guard_pending {
+                        // Row is no longer Pending (already terminal / cancelled / gone) — the
+                        // completion write is moot. Succeed idempotently so the caller stops tracking it.
+                        info!(
+                            "Proof request {} no longer Pending; completion write skipped",
+                            req.proof_id
+                        );
+                        return Ok(Response::new(()));
+                    }
                     warn!("Proof request {} not found", req.proof_id);
                     return Err(Status::not_found(format!(
                         "Proof request {} not found",
@@ -232,7 +252,7 @@ impl ClusterService for ClusterServiceImpl {
                 Ok(Response::new(()))
             }
             Err(e) => {
-                error!("Failed to update proof request: {:?}", e);
+                error!("Failed to update proof request {}: {:?}", req.proof_id, e);
                 Err(Status::internal("Failed to update proof request"))
             }
         }

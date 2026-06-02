@@ -1,5 +1,5 @@
 use super::*;
-use crate::cluster::{spawn_proof_claimer_task, spawn_proof_status_task};
+use crate::cluster::{spawn_proof_claimer_task, spawn_proof_status_task, TaskState};
 use crate::config::Settings;
 use crate::latency::print_latency;
 use crate::metrics::initialize_metrics;
@@ -10,8 +10,7 @@ use mti::prelude::{MagicTypeIdExt, V7};
 use sp1_cluster_common::client::ClusterServiceClient;
 use sp1_cluster_common::logger;
 use sp1_cluster_common::proto::{
-    self, server_sub_message, CreateTaskResponse, GetStatsResponse, ProofRequestStatus,
-    ServerMessage, ServerSubMessage,
+    self, server_sub_message, CreateTaskResponse, GetStatsResponse, ServerMessage, ServerSubMessage,
 };
 use std::future::Future;
 use std::marker::PhantomData;
@@ -552,7 +551,7 @@ pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Syn
         .set_metrics(metrics.clone());
 
     let (completed_tx, completed_rx) = mpsc::unbounded_channel::<ProofResult<P>>();
-    let task_map = Arc::new(DashMap::<String, ProofRequestStatus>::new());
+    let task_map = Arc::new(DashMap::<String, TaskState>::new());
     let api_rpc =
         std::env::var("COORDINATOR_CLUSTER_RPC").unwrap_or("http://127.0.0.1:50051".to_string());
     let api_client = Arc::new(ClusterServiceClient::new(api_rpc).await?);
@@ -576,6 +575,7 @@ pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Syn
         api_client.clone(),
         service.coordinator.clone(),
         task_map.clone(),
+        metrics.clone(),
     );
 
     spawn_heartbeat_task(service.coordinator.clone());
