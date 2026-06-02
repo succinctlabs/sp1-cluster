@@ -13,7 +13,24 @@ use tokio::task::JoinSet;
 use tracing::{instrument, Instrument};
 
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
-const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
+
+/// Default artifact retention TTL in Redis. Override via `ARTIFACT_TIMEOUT_SECONDS`.
+///
+/// This caps a single proof's wall-clock: stdin and intermediate artifacts expire this
+/// long after they're written (Program artifacts are exempt — see upload path), so a proof
+/// that runs longer than this loses in-flight artifacts mid-run. Raising it buys proving
+/// headroom for very large proofs but increases steady-state Redis memory (artifacts live
+/// longer) — size `maxmemory` / host RAM accordingly (see admission control below).
+const DEFAULT_ARTIFACT_TIMEOUT_SECONDS: u64 = 6 * 60 * 60; // 6 hours
+
+/// Artifact retention TTL, from `ARTIFACT_TIMEOUT_SECONDS` or [`DEFAULT_ARTIFACT_TIMEOUT_SECONDS`].
+fn artifact_timeout_seconds() -> u64 {
+    std::env::var("ARTIFACT_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT_ARTIFACT_TIMEOUT_SECONDS)
+}
 
 /// Conservative cap on a single shard artifact. Override via `PROVE_SHARD_MAX_BYTES`.
 const DEFAULT_SHARD_MAX_BYTES: u64 = 20 * 1024 * 1024;
@@ -407,7 +424,7 @@ impl RedisArtifactClient {
         if serialized.len() <= CHUNK_SIZE {
             let mut options = SetOptions::default();
             if !matches!(artifact_type, ArtifactType::Program) {
-                options = options.with_expiration(SetExpiry::EX(ARTIFACT_TIMEOUT_SECONDS));
+                options = options.with_expiration(SetExpiry::EX(artifact_timeout_seconds()));
             }
 
             conn.set_options::<_, _, ()>(key, serialized, options)
@@ -429,7 +446,7 @@ impl RedisArtifactClient {
                     let _: usize = conn.hset(&hash_key, chunk_idx, chunk).await?;
                     if !matches!(artifact_type, ArtifactType::Program) {
                         let _: bool = conn
-                            .expire(&hash_key, ARTIFACT_TIMEOUT_SECONDS as i64)
+                            .expire(&hash_key, artifact_timeout_seconds() as i64)
                             .await?;
                     }
                     Ok::<(), anyhow::Error>(())
@@ -659,7 +676,7 @@ impl ArtifactClient for RedisArtifactClient {
                 .map_err(|e| backoff::Error::transient(e.into()))?;
 
             // Set expiration to prevent memory leaks
-            conn.expire::<_, ()>(&redis_key, ARTIFACT_TIMEOUT_SECONDS as i64)
+            conn.expire::<_, ()>(&redis_key, artifact_timeout_seconds() as i64)
                 .await
                 .map_err(|e| backoff::Error::transient(e.into()))?;
 
