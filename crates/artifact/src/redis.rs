@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -13,7 +13,21 @@ use tokio::task::JoinSet;
 use tracing::{instrument, Instrument};
 
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
-const ARTIFACT_TIMEOUT_SECONDS: u64 = 4 * 60 * 60; // 4 hours
+
+/// Default Redis artifact retention. Override via `ARTIFACT_TIMEOUT_SECONDS`.
+///
+/// Caps a proof's wall-clock: stdin and intermediate artifacts expire this long after write
+/// (Program artifacts are exempt). Longer retention raises steady-state Redis memory.
+const DEFAULT_ARTIFACT_TIMEOUT_SECONDS: u64 = 6 * 60 * 60; // 6 hours
+
+/// Resolved once; clamped to `[1, i64::MAX]` so the `EXPIRE` cast can't go negative.
+static ARTIFACT_TIMEOUT_SECONDS: LazyLock<u64> = LazyLock::new(|| {
+    std::env::var("ARTIFACT_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&v| v > 0 && v <= i64::MAX as u64)
+        .unwrap_or(DEFAULT_ARTIFACT_TIMEOUT_SECONDS)
+});
 
 /// Conservative cap on a single shard artifact. Override via `PROVE_SHARD_MAX_BYTES`.
 const DEFAULT_SHARD_MAX_BYTES: u64 = 20 * 1024 * 1024;
@@ -407,7 +421,7 @@ impl RedisArtifactClient {
         if serialized.len() <= CHUNK_SIZE {
             let mut options = SetOptions::default();
             if !matches!(artifact_type, ArtifactType::Program) {
-                options = options.with_expiration(SetExpiry::EX(ARTIFACT_TIMEOUT_SECONDS));
+                options = options.with_expiration(SetExpiry::EX(*ARTIFACT_TIMEOUT_SECONDS));
             }
 
             conn.set_options::<_, _, ()>(key, serialized, options)
@@ -429,7 +443,7 @@ impl RedisArtifactClient {
                     let _: usize = conn.hset(&hash_key, chunk_idx, chunk).await?;
                     if !matches!(artifact_type, ArtifactType::Program) {
                         let _: bool = conn
-                            .expire(&hash_key, ARTIFACT_TIMEOUT_SECONDS as i64)
+                            .expire(&hash_key, *ARTIFACT_TIMEOUT_SECONDS as i64)
                             .await?;
                     }
                     Ok::<(), anyhow::Error>(())
@@ -529,7 +543,7 @@ impl ArtifactClient for RedisArtifactClient {
         artifact_type: ArtifactType,
         data: Vec<u8>,
     ) -> Result<()> {
-        // zstd level 0: fast compression for ephemeral Redis storage (4-hour TTL)
+        // zstd level 0: fast compression for ephemeral, TTL'd Redis storage
         let compressed = zstd::encode_all(data.as_slice(), 0)
             .map_err(|e| anyhow!("Failed to compress artifact: {}", e))?;
         self.upload_to_transport(artifact_type, artifact.id(), &compressed)
@@ -659,7 +673,7 @@ impl ArtifactClient for RedisArtifactClient {
                 .map_err(|e| backoff::Error::transient(e.into()))?;
 
             // Set expiration to prevent memory leaks
-            conn.expire::<_, ()>(&redis_key, ARTIFACT_TIMEOUT_SECONDS as i64)
+            conn.expire::<_, ()>(&redis_key, *ARTIFACT_TIMEOUT_SECONDS as i64)
                 .await
                 .map_err(|e| backoff::Error::transient(e.into()))?;
 
