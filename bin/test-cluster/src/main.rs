@@ -90,12 +90,25 @@ async fn main() -> anyhow::Result<()> {
 
     let cpu_node = tokio::spawn(sp1_cluster_node::run(
         sp1_cluster_node::config::NodeConfig {
-            worker_id: "test-cluster-node".to_string(),
+            worker_id: "test-cluster-node-cpu".to_string(),
             worker_type: WorkerType::Cpu,
             coordinator_rpc: format!("http://{COORDINATOR_ADDR}"),
             ..Default::default()
         },
-        artifact_client,
+        artifact_client.clone(),
+        token.clone(),
+        None,
+    ));
+
+    #[cfg(feature = "gpu")]
+    let gpu_node = tokio::spawn(sp1_cluster_node::run(
+        sp1_cluster_node::config::NodeConfig {
+            worker_id: "test-cluster-node-gpu".to_string(),
+            worker_type: WorkerType::Gpu,
+            coordinator_rpc: format!("http://{COORDINATOR_ADDR}"),
+            ..Default::default()
+        },
+        artifact_client.clone(),
         token.clone(),
         None,
     ));
@@ -113,6 +126,11 @@ async fn main() -> anyhow::Result<()> {
 
     token.cancel();
 
+    #[cfg(feature = "gpu")]
+    {
+        tracing::info!("Shutting down gpu node");
+        let _ = gpu_node.await?;
+    }
     tracing::info!("Shutting down cpu node");
     let _ = cpu_node.await?;
     tracing::info!("Shutting down gateway");
