@@ -540,7 +540,7 @@ pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Syn
     let config = Settings::new()?;
 
     let token = CancellationToken::new();
-    let _ = tokio::spawn(wait_for_shutdown_signal(token.clone()));
+    let _shutdown_handle = tokio::spawn(wait_for_shutdown_signal(token.clone()));
 
     start_coordinator_server_custom::<P>(config, token).await
 }

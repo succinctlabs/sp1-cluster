@@ -1,5 +1,3 @@
-mod service;
-
 use opentelemetry_sdk::Resource;
 use sp1_cluster_api::ApiConfig;
 use sp1_cluster_common::logger;

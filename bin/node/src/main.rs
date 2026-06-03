@@ -1,5 +1,3 @@
-mod config;
-
 use eyre::Result;
 use jemallocator::Jemalloc;
 use opentelemetry::KeyValue;

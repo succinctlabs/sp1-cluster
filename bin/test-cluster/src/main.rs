@@ -113,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
         None,
     ));
 
-    if let Some(result) = submit_proof_request(Elf::Static(&*test_artifacts::FIBONACCI_ELF), {
+    if let Some(result) = submit_proof_request(Elf::Static(&test_artifacts::FIBONACCI_ELF), {
         let mut stdin = SP1Stdin::new();
         stdin.write(&500u32);
         stdin
