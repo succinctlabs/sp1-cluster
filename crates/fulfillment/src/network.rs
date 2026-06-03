@@ -7,6 +7,9 @@ use sp1_sdk::network::signer::NetworkSigner;
 pub trait NetworkRequest: Send + Sync + 'static {
     fn request_id(&self) -> String;
 
+    /// Whether the network already marked this request `Unfulfillable` (a terminal state).
+    fn is_unfulfillable(&self) -> bool;
+
     fn program_uri(&self) -> &str;
 
     fn stdin_uri(&self) -> &str;
