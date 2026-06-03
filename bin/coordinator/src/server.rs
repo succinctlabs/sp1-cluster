@@ -565,7 +565,7 @@ pub async fn start_coordinator_server_custom<
         .set_metrics(metrics.clone());
 
     let (completed_tx, completed_rx) = mpsc::unbounded_channel::<ProofResult<P>>();
-    let task_map = Arc::new(DashMap::<String, ProofRequestStatus>::new());
+    let task_map = Arc::new(DashMap::<String, TaskState>::new());
     let api_client = Arc::new(ClusterServiceClient::new(config.cluster_rpc.clone()).await?);
 
     service.coordinator.set_proofs_tx(completed_tx).await;
