@@ -24,7 +24,8 @@ impl Redis {
             .with_env_var("REDIS_EXTRA_FLAGS", "--maxmemory 28gb")
             .start()
             .with_cancellation_token_owned(token)
-            .await.ok_or(anyhow::anyhow!("redis startup cancelled"))??;
+            .await
+            .ok_or(anyhow::anyhow!("redis startup cancelled"))??;
         let addr = {
             let host = container.get_host().await?;
             let port = container.get_host_port_ipv4(6379.tcp()).await?;
@@ -65,7 +66,8 @@ impl Postgres {
             .with_env_var("POSTGRES_PASSWORD", password)
             .start()
             .with_cancellation_token_owned(token)
-            .await.ok_or(anyhow::anyhow!("postgres startup cancelled"))??;
+            .await
+            .ok_or(anyhow::anyhow!("postgres startup cancelled"))??;
         let addr = {
             let host = container.get_host().await?;
             let port = container.get_host_port_ipv4(5432.tcp()).await?;
