@@ -113,11 +113,18 @@ async fn main() -> anyhow::Result<()> {
         None,
     ));
 
-    if let Some(result) = submit_proof_request(Elf::Static(&test_artifacts::FIBONACCI_ELF), {
-        let mut stdin = SP1Stdin::new();
-        stdin.write(&500u32);
-        stdin
-    })
+    if let Some(result) = submit_proof_request(
+        Elf::Dynamic(
+            zstd::decode_all(include_bytes!("../programs/fibonacci.bin.zst").as_slice())
+                .unwrap()
+                .into(),
+        ),
+        {
+            let mut stdin = SP1Stdin::new();
+            stdin.write(&500u32);
+            stdin
+        },
+    )
     .with_cancellation_token_owned(token.clone())
     .await
     {

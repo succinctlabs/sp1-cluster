@@ -18,6 +18,7 @@ opentelemetry_sdk.workspace = true
 anyhow.workspace = true
 rand.workspace = true
 futures-util.workspace = true
+zstd.workspace = true
 testcontainers = "0.27.3"
 
 sp1-cluster-common.path = "../../crates/common"
@@ -27,5 +28,3 @@ sp1-cluster-bidder.path = "../bidder"
 sp1-cluster-coordinator.path = "../coordinator"
 sp1-cluster-node.path = "../node"
 sp1-cluster-network-gateway.path = "../network-gateway"
-
-test-artifacts = { git = "https://github.com/succinctlabs/sp1.git", tag = "v6.2.2" }
