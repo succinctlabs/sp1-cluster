@@ -5,11 +5,12 @@ use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::proto::WorkerTask;
 use sp1_prover::worker::TaskMetadata;
 use sp1_prover::worker::WorkerClient;
+use sp1_prover::SP1ProverComponents;
 use std::sync::Arc;
 
 use crate::SP1ClusterWorker;
 
-impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
+impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorker<W, A, C> {
     /// Generate a proof that verifies a batch of deferred proofs.
     pub async fn process_sp1_recursion_deferred_batch(
         self: &Arc<Self>,

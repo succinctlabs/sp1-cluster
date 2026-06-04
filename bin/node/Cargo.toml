@@ -37,6 +37,6 @@ serde_json.workspace = true
 sysinfo.workspace = true
 tar.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tonic.workspace = true
 tracing.workspace = true
-

@@ -10,7 +10,7 @@ pub fn cluster_opts() -> SP1CoreOpts {
 
     println!("Shard threshold: {shard_threshold}");
     opts.sharding_threshold.element_threshold = shard_threshold;
-    opts.global_dependencies_opt = true;
+    opts.global_dependencies_opt = option_env!("SP1_CLUSTER_CPU_ONLY").is_none();
 
     opts
 }

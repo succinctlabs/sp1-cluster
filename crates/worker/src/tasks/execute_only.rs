@@ -11,10 +11,11 @@ use sp1_prover::worker::{
     execute_with_options, ControllerInputs, ProofId, SP1ExecutorConfig, TaskId, TaskMetadata,
     WorkerClient,
 };
+use sp1_prover::SP1ProverComponents;
 use sp1_sdk::network::proto::types::ExecuteFailureCause;
 use sp1_sdk::{SP1Context, SP1Stdin};
 
-impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
+impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorker<W, A, C> {
     /// Does execution only - used for the execution oracle.
     pub async fn process_sp1_execute_only(
         self: &Arc<Self>,

@@ -9,6 +9,7 @@ members = [
     "bin/fulfiller",
     "bin/network-gateway",
     "bin/node",
+    "bin/test-cluster",
     "crates/artifact",
     "crates/common",
     "crates/fulfillment",
@@ -109,10 +110,12 @@ sqlx = { version = "0.8.5", features = ["runtime-tokio", "tls-native-tls", "macr
 sys-info = "0.9.1"
 sysinfo = "0.33.1"
 tar = "0.4.44"
+testcontainers = "0.27.3"
 time = { version = "0.3.41", features = ["serde"] }
 tokio = { version = "1.45.0", features = ["full", "tracing", "rt-multi-thread"] }
 tokio-blocked = "0.1.0"
 tokio-stream = "0.1"
+tokio-util = "0.7.18"
 tonic = { version = "0.12.3", features = ["tls"] }
 tonic-build = "0.12.3"
 tonic-web = "0.12.3"

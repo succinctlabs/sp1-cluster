@@ -14,6 +14,7 @@ use sp1_prover::worker::{
 };
 use sp1_prover_types::{
     ArtifactId, CreateDummyProofRequest, CreateTaskRequest, TaskData, TaskStatus, TaskType,
+    WorkerType,
 };
 use sp1_sdk::network::proto::types::ProofMode;
 
@@ -55,10 +56,15 @@ impl BuildVkeys {
 
         // This environment variable should address the cluster coordinator.
         let cluster_rpc = std::env::var("CLI_COORDINATOR_RPC").unwrap();
+        let worker_type = WorkerType::from_str_name({
+            &std::env::var("WORKER_TYPE").unwrap_or_else(|_| "ALL".to_string())
+        })
+        .expect("Invalid worker type");
 
-        let mut cluster_client = WorkerServiceClient::new(cluster_rpc, node_id.clone())
-            .await
-            .unwrap();
+        let mut cluster_client =
+            WorkerServiceClient::new(cluster_rpc, node_id.clone(), worker_type)
+                .await
+                .unwrap();
 
         // NOTE: Only run this script using the AWS cluster (not local cluster with Redicis artifact store).
         // We throw out most of the config, but we want to just extract the

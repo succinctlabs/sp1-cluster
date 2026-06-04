@@ -11,6 +11,7 @@ use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::failure::ProvingFailure;
 use sp1_cluster_common::proto::{ProofRequestStatus, TaskStatus, TaskType, WorkerTask};
 use sp1_prover::worker::{ProofId, SP1Worker, TaskId, TaskMetadata, WorkerClient};
+use sp1_prover::SP1ProverComponents;
 use sp1_prover_types::network_base_types::ProofMode;
 use std::time::Instant;
 use std::{collections::HashMap, env, sync::Arc};
@@ -46,17 +47,11 @@ lazy_static! {
         .ok();
 }
 
-#[cfg(feature = "gpu")]
-pub type ClusterProverComponents = sp1_gpu_prover::SP1CudaProverComponents;
-
-#[cfg(not(feature = "gpu"))]
-pub type ClusterProverComponents = sp1_prover::CpuSP1ProverComponents;
-
 pub const VERGEN_GIT_SHA: &str = env!("VERGEN_GIT_SHA");
 pub const VERGEN_BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
 
-pub struct SP1ClusterWorker<W: WorkerClient, A: ArtifactClient> {
-    pub worker: Arc<SP1Worker<A, W, ClusterProverComponents>>,
+pub struct SP1ClusterWorker<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> {
+    pub worker: Arc<SP1Worker<A, W, C>>,
     pub metrics: Option<Arc<WorkerMetrics>>,
 }
 
@@ -66,11 +61,8 @@ pub struct TaskResult {
     pub task_id: String,
 }
 
-impl<W: WorkerClient, A: ArtifactClient> SP1ClusterWorker<W, A> {
-    pub fn new(
-        worker: Arc<SP1Worker<A, W, ClusterProverComponents>>,
-        metrics: Option<Arc<WorkerMetrics>>,
-    ) -> Self {
+impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorker<W, A, C> {
+    pub fn new(worker: Arc<SP1Worker<A, W, C>>, metrics: Option<Arc<WorkerMetrics>>) -> Self {
         Self { worker, metrics }
     }
 
