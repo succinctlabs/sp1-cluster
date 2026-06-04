@@ -380,7 +380,18 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             let self_clone = self.clone();
             tokio::spawn(async move {
                 let request_id = request.request_id();
-                match self_clone.cancel_request(&request_id).await {
+                let result = async {
+                    // Only fail on the network while it still expects one. A request the network
+                    // has already finalized treats the fail as a no-op, so re-sending it each
+                    // sweep until the deadline would only spend the signer's nonce. The cluster
+                    // unclaim runs either way.
+                    if !request.is_unfulfillable() {
+                        self_clone.cancel_on_network(&request_id).await?;
+                    }
+                    self_clone.cancel_on_cluster(&request_id).await
+                }
+                .await;
+                match result {
                     Ok(_) => {
                         info!("cancelled request 0x{}", request_id);
                         self_clone.metrics.requests_cancelled.increment(1);
@@ -399,23 +410,24 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         Ok(())
     }
 
-    /// Cancels a request by failing fulfillment on the network and unclaming it on the cluster.
-    async fn cancel_request(&self, request_id: &str) -> Result<()> {
-        // Send the failed fulfillment to the network.
+    /// Releases the request on the network by failing its fulfillment.
+    async fn cancel_on_network(&self, request_id: &str) -> Result<()> {
         if !self.disable_fulfillment {
             self.network
                 .cancel_request(request_id, &self.signer)
                 .await?;
         }
+        Ok(())
+    }
 
-        // Update the status to cancelled on the cluster.
+    /// Marks the request cancelled on the cluster so workers stop proving it.
+    async fn cancel_on_cluster(&self, request_id: &str) -> Result<()> {
         self.cluster
             .cancel_proof_request(ProofRequestCancelRequest {
                 proof_id: request_id.to_string(),
             })
             .map_err(|e| anyhow!("failed to update proof request status: {}", e))
             .await?;
-
         Ok(())
     }
 

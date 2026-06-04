@@ -334,6 +334,10 @@ impl NetworkRequest for NetworkProofRequest {
         hex::encode(&self.0.request_id)
     }
 
+    fn is_unfulfillable(&self) -> bool {
+        self.0.fulfillment_status == spn_network_types::FulfillmentStatus::Unfulfillable as i32
+    }
+
     fn program_uri(&self) -> &str {
         &self.0.program_uri
     }
