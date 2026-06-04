@@ -10,21 +10,20 @@ categories.workspace = true
 gpu = ["sp1-cluster-node/gpu"]
 
 [dependencies]
+anyhow.workspace = true
+futures-util.workspace = true
+opentelemetry_sdk.workspace = true
+rand.workspace = true
+sp1-cluster-api.path = "../api"
+sp1-cluster-artifact.path = "../../crates/artifact"
+sp1-cluster-bidder.path = "../bidder"
+sp1-cluster-common.path = "../../crates/common"
+sp1-cluster-coordinator.path = "../coordinator"
+sp1-cluster-network-gateway.path = "../network-gateway"
+sp1-cluster-node.path = "../node"
+sp1-sdk.workspace = true
+testcontainers = "0.27.3"
 tokio.workspace = true
 tokio-util.workspace = true
-sp1-sdk.workspace = true
 tracing.workspace = true
-opentelemetry_sdk.workspace = true
-anyhow.workspace = true
-rand.workspace = true
-futures-util.workspace = true
 zstd.workspace = true
-testcontainers = "0.27.3"
-
-sp1-cluster-common.path = "../../crates/common"
-sp1-cluster-artifact.path = "../../crates/artifact"
-sp1-cluster-api.path = "../api"
-sp1-cluster-bidder.path = "../bidder"
-sp1-cluster-coordinator.path = "../coordinator"
-sp1-cluster-node.path = "../node"
-sp1-cluster-network-gateway.path = "../network-gateway"
