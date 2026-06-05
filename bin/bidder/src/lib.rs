@@ -427,7 +427,10 @@ async fn fetch_and_cache_prove_usd(
 /// Fetch the current PROVE/USD reading. `as_of` tracks the upstream `last_updated`
 /// timestamp so cache age reflects feed freshness.
 async fn fetch_prove_price(network: &mut ProverNetworkClient<Channel>) -> Result<ProvePrice> {
-    let resp = network.get_prove_price(GetProvePriceRequest {}).await?.into_inner();
+    let resp = network
+        .get_prove_price(GetProvePriceRequest {})
+        .await?
+        .into_inner();
     Ok(ProvePrice::parse(&resp.price, resp.last_updated)?)
 }
 
