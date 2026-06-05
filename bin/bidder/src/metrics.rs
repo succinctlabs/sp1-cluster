@@ -22,9 +22,13 @@ pub struct BidderMetrics {
     /// The number of errors encountered during the main loop.
     pub main_loop_errors: Counter,
 
-    /// The number of bids computed via the dynamic USD-pegged floor path.
+    /// Age in seconds of the most recently cached PROVE/USD price snapshot.
+    pub prove_usd_age_seconds: Gauge,
+
+    /// Number of bid evaluations where the dynamic USD-derived `bid_amount` was used.
     pub dynamic_floor_used_total: Counter,
 
-    /// The number of bids that fell back to the static `bid_amount`.
+    /// Number of bid evaluations where we fell back to the static `bid_amount`
+    /// (either dynamic not configured, or the cached price is stale/absent).
     pub static_floor_used_total: Counter,
 }

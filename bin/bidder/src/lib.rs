@@ -187,7 +187,7 @@ impl Bidder {
     /// bidder falls back to static until the refresh task takes over.
     async fn prime_prove_usd_cache(&self) {
         let mut network = self.network.clone();
-        let fetch = fetch_and_cache_prove_usd(&mut network, &self.prove_usd_cache);
+        let fetch = fetch_and_cache_prove_usd(&mut network, &self.prove_usd_cache, &self.metrics);
         match tokio::time::timeout(PRIME_TIMEOUT, fetch).await {
             Ok(Ok(usd_micros)) => info!(usd_micros, "primed PROVE/USD cache"),
             Ok(Err(e)) => warn!(
@@ -201,19 +201,20 @@ impl Bidder {
         }
     }
 
-    /// Poll `GetProvePrice` on a tick and refresh the PROVE/USD cache. Keeps the *cache*
-    /// fresh, not the upstream price — `GetProvePrice` is sourced from 10-minute buckets,
-    /// so a "fresh" cache can still hold a price minted minutes ago.
+    /// Spawn a background task that polls `GetProvePrice` on a tick and refreshes the cache.
+    /// Keeps the *cache* fresh, not the upstream price (alert on the indexer's
+    /// `prove_price_latest_age_seconds` gauge for that).
     fn spawn_prove_usd_refresh(&self) {
         let cache = self.prove_usd_cache.clone();
         let mut network = self.network.clone();
+        let metrics = self.metrics.clone();
         let mut ticker = interval(Duration::from_secs(self.usd_floor.refresh_interval_secs));
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         tokio::spawn(async move {
             loop {
                 ticker.tick().await;
-                match fetch_and_cache_prove_usd(&mut network, &cache).await {
+                match fetch_and_cache_prove_usd(&mut network, &cache, &metrics).await {
                     Ok(usd_micros) => info!(usd_micros, "refreshed PROVE/USD cache"),
                     Err(e) => warn!(error = %e, "PROVE/USD refresh failed; keeping previous cache"),
                 }
@@ -412,20 +413,21 @@ impl Bidder {
 async fn fetch_and_cache_prove_usd(
     network: &mut ProverNetworkClient<Channel>,
     cache: &RwLock<Option<ProvePrice>>,
+    metrics: &BidderMetrics,
 ) -> Result<u64> {
     let price = fetch_prove_price(network).await?;
     let usd_micros = price.usd_micros;
+    let as_of = price.as_of;
     *cache.write().await = Some(price);
+    let age_secs = (OffsetDateTime::now_utc() - as_of).whole_seconds().max(0) as f64;
+    metrics.prove_usd_age_seconds.set(age_secs);
     Ok(usd_micros)
 }
 
 /// Fetch the current PROVE/USD reading. `as_of` tracks the upstream `last_updated`
 /// timestamp so cache age reflects feed freshness.
 async fn fetch_prove_price(network: &mut ProverNetworkClient<Channel>) -> Result<ProvePrice> {
-    let resp = network
-        .get_prove_price(GetProvePriceRequest {})
-        .await?
-        .into_inner();
+    let resp = network.get_prove_price(GetProvePriceRequest {}).await?.into_inner();
     Ok(ProvePrice::parse(&resp.price, resp.last_updated)?)
 }
 
