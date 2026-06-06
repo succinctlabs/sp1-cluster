@@ -133,5 +133,5 @@ fn default_refresh_interval_secs() -> u64 {
 }
 
 fn default_staleness_max_secs() -> u64 {
-    720
+    1800
 }
