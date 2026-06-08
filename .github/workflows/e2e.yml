@@ -1,0 +1,71 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RUST_LOG: info
+
+jobs:
+  e2e-smoke-gpu:
+    name: E2E smoke (gpu flavor)
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 120
+    runs-on:
+      [
+        "runs-on",
+        "family=g6.4xlarge",
+        "hdd=200",
+        "ami=ami-0a63dc9cb9e934ba3",
+        "spot=false",
+        "run-id=${{ github.run_id }}",
+      ]
+    steps:
+      - name: Checkout repository and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PRIVATE_PULL_TOKEN }}
+      - uses: ./.github/actions/e2e-setup
+      - name: Run smoke suite (gpu)
+        run: cargo run --release --bin sp1-test-cluster --features gpu -- suite smoke
+      - name: Upload scenario logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-smoke-gpu-logs
+          path: target/test-cluster-logs/
+
+  e2e-full-gpu:
+    name: E2E full (gpu flavor)
+    # if: github.event_name != 'pull_request'
+    timeout-minutes: 360
+    runs-on:
+      [
+        "runs-on",
+        "family=g6.4xlarge",
+        "hdd=200",
+        "ami=ami-0a63dc9cb9e934ba3",
+        "spot=false",
+        "run-id=${{ github.run_id }}",
+      ]
+    steps:
+      - name: Checkout repository and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PRIVATE_PULL_TOKEN }}
+      - uses: ./.github/actions/e2e-setup
+      - name: Run full suite (gpu)
+        run: cargo run --release --bin sp1-test-cluster --features gpu -- suite full
+      - name: Upload scenario logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-full-gpu-logs
+          path: target/test-cluster-logs/

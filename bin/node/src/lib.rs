@@ -426,6 +426,12 @@ async fn run_worker_inner(
         }
     });
 
+    // Abort the spawned worker loop if this future is dropped (abrupt cancellation, or a
+    // harness killing the node component): a detached loop would otherwise keep streaming
+    // and answering heartbeats forever, so the coordinator never notices the worker died.
+    let _abort_guard =
+        sp1_cluster_worker::utils::DeferGuard::new(main_handle.abort_handle(), |h| h.abort());
+
     tracing::info!("Waiting for main loop...");
 
     main_handle.await?;

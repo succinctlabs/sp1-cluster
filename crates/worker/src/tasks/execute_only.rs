@@ -46,10 +46,12 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
 
         // Execute the program.
         let mut context = SP1Context::default();
-        // Stop execution if the cycle limit is reached, + 1 to account for >= executor max_cycles check:
+        // Stop execution if the cycle limit is reached, + 1 to account for >= executor max_cycles check.
+        // saturating_add so the u64::MAX "unlimited" sentinel doesn't wrap to 0 (which would enforce a
+        // 0-cycle limit and make every request unfulfillable) in release builds.
         if let Some(cycle_limit) = cycle_limit {
             if cycle_limit != 0 {
-                context.max_cycles = Some(cycle_limit + 1);
+                context.max_cycles = Some(cycle_limit.saturating_add(1));
             }
         }
 

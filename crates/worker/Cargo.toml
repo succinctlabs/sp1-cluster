@@ -10,6 +10,8 @@ categories.workspace = true
 default = ["native-gnark"]
 native-gnark = ["sp1-sdk/native-gnark"]
 gpu = ["dep:sp1-gpu-prover", "dep:sp1-gpu-cudart"]
+# Test-only fault injection (TEST_FAIL_TASK); enabled only by the e2e harness.
+test-hooks = []
 
 [dependencies]
 sp1-cluster-artifact = { workspace = true }

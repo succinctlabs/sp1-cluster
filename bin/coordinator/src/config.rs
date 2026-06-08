@@ -10,10 +10,20 @@ pub struct Settings {
     /// ClusterService gRPC URL to claim proofs / push status (`COORDINATOR_CLUSTER_RPC`).
     #[serde(default = "default_cluster_rpc")]
     pub cluster_rpc: String,
+    #[serde(default = "default_metrics_addr")]
+    pub metrics_addr: String,
     #[serde(default)]
     pub disable_proof_status_update: bool,
     #[serde(default)]
     pub execute_only_mode: bool,
+    /// Seconds a worker can be inactive before it is considered dead and its tasks
+    /// requeue (`COORDINATOR_WORKER_HEARTBEAT_TIMEOUT_SECS`, default 30).
+    #[serde(default = "default_worker_heartbeat_timeout_secs")]
+    pub worker_heartbeat_timeout_secs: u64,
+}
+
+fn default_worker_heartbeat_timeout_secs() -> u64 {
+    crate::DEFAULT_WORKER_HEARTBEAT_TIMEOUT
 }
 
 // Server
@@ -23,6 +33,10 @@ fn default_addr() -> String {
 
 fn default_cluster_rpc() -> String {
     "http://127.0.0.1:50051".to_string()
+}
+
+fn default_metrics_addr() -> String {
+    "0.0.0.0:9090".to_string()
 }
 
 impl Settings {

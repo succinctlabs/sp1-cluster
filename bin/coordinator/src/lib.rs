@@ -68,8 +68,9 @@ fn enable_proof_fail(task_type: TaskType) -> bool {
 /// The number of retries a task can have before failing fatally.
 const MAX_TASK_RETRIES: u8 = 3;
 
-/// The number of seconds a worker can be inactive before it is considered dead.
-const WORKER_HEARTBEAT_TIMEOUT: u64 = 30;
+/// The default number of seconds a worker can be inactive before it is considered dead.
+/// Configurable per-coordinator via `Settings::worker_heartbeat_timeout_secs`.
+pub const DEFAULT_WORKER_HEARTBEAT_TIMEOUT: u64 = 30;
 
 /// The default weight of a GPU instance
 pub const DEFAULT_GPU_INSTANCE_WEIGHT: u32 = 24;
@@ -152,6 +153,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 shutting_down: false,
                 policy: P::default(),
                 execute_only_mode: false,
+                worker_heartbeat_timeout_secs: DEFAULT_WORKER_HEARTBEAT_TIMEOUT,
             })),
             subscribers: DashMap::new(),
             task_channels: DashMap::new(),
@@ -221,6 +223,9 @@ pub struct CoordinatorState<P: AssignmentPolicy> {
     /// Whether coordinator is an execute-only cluster. If so all proof requests only trigger
     /// EXECUTE_ONLY tasks instead of the default CONTROLLER task.
     pub execute_only_mode: bool,
+
+    /// Seconds a worker can be inactive before it is considered dead and its tasks requeue.
+    pub worker_heartbeat_timeout_secs: u64,
 }
 
 #[derive(Clone)]
@@ -436,6 +441,15 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire_write"))
             .await
             .execute_only_mode = execute_only_mode;
+    }
+
+    /// Set the dead-worker heartbeat timeout (seconds).
+    pub async fn set_worker_heartbeat_timeout(&self, secs: u64) {
+        self.state
+            .write()
+            .instrument(tracing::debug_span!("acquire_write"))
+            .await
+            .worker_heartbeat_timeout_secs = secs;
     }
 
     /// Place a task in the queue.
@@ -749,7 +763,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             // (worker_id, worker_type, heartbeat_age_secs at time of cleanup)
             let mut dead_workers: Vec<(String, WorkerType, u64)> = vec![];
             for (id, worker) in &state.workers {
-                if worker.last_heartbeat + WORKER_HEARTBEAT_TIMEOUT < now {
+                if worker.last_heartbeat + state.worker_heartbeat_timeout_secs < now {
                     let heartbeat_age = now.saturating_sub(worker.last_heartbeat);
                     tracing::warn!(
                         "worker {} has timed out (last heartbeat {}s ago)",

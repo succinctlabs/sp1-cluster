@@ -1,0 +1,123 @@
+use std::process::Stdio;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result};
+
+use crate::scenario::{resolve, Flavor, Scenario, Tier};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Pass,
+    Fail,
+    Timeout,
+}
+
+pub struct ScenarioResult {
+    pub name: &'static str,
+    pub outcome: Outcome,
+    pub duration: Duration,
+    pub log_path: std::path::PathBuf,
+}
+
+/// Run every (tier, flavor) scenario as a child process of this same binary.
+/// A failure does not stop the suite. Returns true iff everything passed.
+pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<bool> {
+    let scenarios = resolve(all, tier, flavor);
+    let logs_dir = std::path::PathBuf::from("target/test-cluster-logs");
+    std::fs::create_dir_all(&logs_dir).context("create logs dir")?;
+    let exe = std::env::current_exe().context("current_exe")?;
+
+    let mut results = Vec::new();
+    for s in scenarios {
+        let log_path = logs_dir.join(format!("{}.log", s.name));
+        let log = std::fs::File::create(&log_path)
+            .with_context(|| format!("create {}", log_path.display()))?;
+        tracing::info!(
+            "=== running scenario {} (timeout {:?}) ===",
+            s.name,
+            s.timeout
+        );
+        let started = Instant::now();
+        let mut child = tokio::process::Command::new(&exe)
+            .arg("run")
+            .arg(s.name)
+            .stdout(Stdio::from(log.try_clone().context("clone log handle")?))
+            .stderr(Stdio::from(log))
+            .kill_on_drop(true)
+            .spawn()
+            .with_context(|| format!("spawn scenario {}", s.name))?;
+
+        let outcome = match tokio::time::timeout(s.timeout, child.wait()).await {
+            Ok(Ok(status)) if status.success() => Outcome::Pass,
+            Ok(Ok(_)) => Outcome::Fail,
+            Ok(Err(e)) => return Err(e).context("wait for scenario child"),
+            Err(_elapsed) => {
+                // Kill the scenario process; its testcontainers are reaped by ryuk
+                // once the connection drops.
+                let _ = child.kill().await;
+                Outcome::Timeout
+            }
+        };
+        let duration = started.elapsed();
+        tracing::info!(
+            "=== scenario {} -> {:?} in {:?} ===",
+            s.name,
+            outcome,
+            duration
+        );
+        results.push(ScenarioResult {
+            name: s.name,
+            outcome,
+            duration,
+            log_path,
+        });
+    }
+
+    println!("{}", render_table(&results));
+    Ok(results.iter().all(|r| r.outcome == Outcome::Pass))
+}
+
+pub fn render_table(results: &[ScenarioResult]) -> String {
+    let mut out = String::from(
+        "\n  scenario                  result    duration    log\n  \
+         ------------------------------------------------------------\n",
+    );
+    for r in results {
+        out.push_str(&format!(
+            "  {:<25} {:<9} {:>8.0?}    {}\n",
+            r.name,
+            format!("{:?}", r.outcome).to_uppercase(),
+            r.duration,
+            r.log_path.display()
+        ));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_renders_all_outcomes() {
+        let results = vec![
+            ScenarioResult {
+                name: "quick",
+                outcome: Outcome::Pass,
+                duration: Duration::from_secs(61),
+                log_path: "target/test-cluster-logs/quick.log".into(),
+            },
+            ScenarioResult {
+                name: "execute-only",
+                outcome: Outcome::Timeout,
+                duration: Duration::from_secs(2700),
+                log_path: "target/test-cluster-logs/execute-only.log".into(),
+            },
+        ];
+        let table = render_table(&results);
+        assert!(table.contains("quick"));
+        assert!(table.contains("PASS"));
+        assert!(table.contains("TIMEOUT"));
+        assert!(table.contains("execute-only.log"));
+    }
+}

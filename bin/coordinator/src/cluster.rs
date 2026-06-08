@@ -60,20 +60,29 @@ fn reissue_lost_status_write(
     });
 }
 
-/// Spawn a task to update proof statuses with the cluster API given a channel of proof completions.
+/// Spawn a task to update proof statuses with the cluster API given a channel of proof
+/// completions. Stops when `token` fires (or all senders drop).
 pub fn spawn_proof_status_task<P: AssignmentPolicy>(
     api_client: Arc<ClusterServiceClient>,
     task_map: Arc<DashMap<String, TaskState>>,
     mut completed_rx: mpsc::UnboundedReceiver<ProofResult<P>>,
+    token: tokio_util::sync::CancellationToken,
 ) -> JoinHandle<()> {
     tokio::task::spawn(async move {
-        while let Some(ProofResult {
-            id,
-            success,
-            metadata,
-            extra_data,
-        }) = completed_rx.recv().await
-        {
+        loop {
+            let next = tokio::select! {
+                next = completed_rx.recv() => next,
+                _ = token.cancelled() => break,
+            };
+            let Some(ProofResult {
+                id,
+                success,
+                metadata,
+                extra_data,
+            }) = next
+            else {
+                break;
+            };
             match task_map.get(&id).map(|s| matches!(*s, TaskState::Pending)) {
                 None => {
                     tracing::error!("proof {} not found", id);
@@ -118,12 +127,13 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
     })
 }
 
-/// Spawn a task to claim proofs from the cluster API.
+/// Spawn a task to claim proofs from the cluster API. Stops when `token` fires.
 pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
     api_client: Arc<ClusterServiceClient>,
     coordinator: Arc<Coordinator<P>>,
     task_map: Arc<DashMap<String, TaskState>>,
     metrics: Arc<CoordinatorMetrics>,
+    token: tokio_util::sync::CancellationToken,
 ) -> JoinHandle<()> {
     tokio::task::spawn({
         async move {
@@ -265,7 +275,10 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                         tracing::error!("Failed to get filtered tasks: {}", e);
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
+                    _ = token.cancelled() => break,
+                }
             }
         }
     })
