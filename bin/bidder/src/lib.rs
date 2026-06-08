@@ -15,10 +15,10 @@ use tracing::{error, info, instrument, warn};
 
 use spn_network_types::{
     prover_network_client::ProverNetworkClient, BidRequest, BidRequestBody, FulfillmentStatus,
-    GetNonceRequest, GetOwnerRequest, GetProvePriceRequest, MessageFormat, ProofMode, Signable,
-    TransactionVariant,
+    GetNonceRequest, GetOwnerRequest, GetProofRequestParamsRequest, GetProvePriceRequest,
+    MessageFormat, ProofMode, Signable, TransactionVariant,
 };
-use spn_pricing::ProvePrice;
+use spn_pricing::{round_down_to_tick, ProvePrice};
 use spn_utils::time_now;
 
 pub mod config;
@@ -73,6 +73,10 @@ pub struct Bidder {
     ///
     /// BPGU = 10⁹ PGU; see `UsdFloorConfig` for the unit convention.
     usd_floor: UsdFloorConfig,
+    /// Auction tick in wei per PGU; every bid must be a multiple of this value or the
+    /// RPC rejects it. Fetched once at startup — the tick is RPC config, changing
+    /// requires a redeploy.
+    tick_size: U256,
     /// Cache of the last fetched PROVE/USD price. Populated by the refresh task spawned
     /// in `run()` when `usd_floor.enabled`.
     prove_usd_cache: Arc<RwLock<Option<ProvePrice>>>,
@@ -115,6 +119,7 @@ impl Bidder {
             aggressive_mode,
             min_deadline_secs,
             usd_floor,
+            tick_size: U256::ZERO,
             prove_usd_cache: Arc::new(RwLock::new(None)),
         }
     }
@@ -170,7 +175,7 @@ impl Bidder {
             (c.usd_micros, age_secs)
         });
         let usd_floor = self.usd_floor.enabled.then_some(&self.usd_floor);
-        match bid_amount_outcome(usd_floor, cache_snapshot, self.bid_amount) {
+        match bid_amount_outcome(usd_floor, cache_snapshot, self.bid_amount, self.tick_size) {
             BidAmountOutcome::Static(v) => {
                 self.metrics.static_floor_used_total.increment(1);
                 v
@@ -225,6 +230,17 @@ impl Bidder {
     /// Runs the bidder loop.
     pub async fn run(mut self) -> Result<()> {
         info!("starting the bidder");
+
+        // Tick alignment applies to every bid (RPC validates regardless of USD-floor state),
+        // so fetch unconditionally. Hard-fail: without the tick, no bid can be safely aligned.
+        self.tick_size = fetch_tick_size(&mut self.network.clone())
+            .await
+            .context("startup tick_size fetch failed")?;
+        info!(tick_size = %self.tick_size, "fetched network tick_size");
+
+        // Validate operator-configured bid amount. Catches misconfig at startup instead of
+        // producing silently-rejected bids.
+        validate_bid_amount(self.bid_amount, self.tick_size).context("bid_amount")?;
 
         if self.usd_floor.enabled {
             self.prime_prove_usd_cache().await;
@@ -452,6 +468,7 @@ fn bid_amount_outcome(
     usd_floor: Option<&UsdFloorConfig>,
     cache_snapshot: Option<(u64, u64)>,
     static_bid: U256,
+    tick_size: U256,
 ) -> BidAmountOutcome {
     let Some(usd_floor) = usd_floor else {
         return BidAmountOutcome::Static(static_bid);
@@ -468,7 +485,19 @@ fn bid_amount_outcome(
         return BidAmountOutcome::Static(static_bid);
     }
     match spn_pricing::compute_max_price_per_pgu_wei(usd_floor.target, prove_usd_micros) {
-        Ok(wei) => BidAmountOutcome::Dynamic(wei),
+        Ok(wei) => {
+            // Floor to the tick; sub-tick anchors round to zero and fall back to static.
+            let aligned = round_down_to_tick(wei, tick_size);
+            if aligned.is_zero() {
+                warn!(
+                    raw_wei = %wei,
+                    tick_size = %tick_size,
+                    "USD-anchored bid is below one tick; falling back to static bid"
+                );
+                return BidAmountOutcome::Static(static_bid);
+            }
+            BidAmountOutcome::Dynamic(aligned)
+        }
         Err(e) => {
             warn!(
                 error = %e,
@@ -478,6 +507,39 @@ fn bid_amount_outcome(
             BidAmountOutcome::Static(static_bid)
         }
     }
+}
+
+/// Fallback tick when the RPC doesn't advertise one (e.g. it predates the `tick_size`
+/// field and returns the protobuf default `0`).
+const DEFAULT_TICK_SIZE: u64 = 10_000_000;
+
+fn validate_bid_amount(value: U256, tick: U256) -> Result<()> {
+    if value.is_zero() {
+        anyhow::bail!("must be > 0");
+    }
+    if value % tick != U256::ZERO {
+        anyhow::bail!("{value} is not a multiple of tick_size={tick}");
+    }
+    Ok(())
+}
+
+async fn fetch_tick_size(network: &mut ProverNetworkClient<Channel>) -> Result<U256> {
+    let resp = network
+        .get_proof_request_params(GetProofRequestParamsRequest {
+            mode: ProofMode::Compressed.into(),
+        })
+        .await?
+        .into_inner();
+    let tick = if resp.tick_size == 0 {
+        warn!(
+            default = DEFAULT_TICK_SIZE,
+            "RPC returned tick_size=0; using default"
+        );
+        DEFAULT_TICK_SIZE
+    } else {
+        resp.tick_size
+    };
+    Ok(U256::from(tick))
 }
 
 #[cfg(test)]
@@ -502,10 +564,13 @@ mod tests {
         U256::from(1_000u64)
     }
 
+    /// Sentinel tick used by tests that don't exercise the tick-alignment branch.
+    const TICK_DISABLED: U256 = U256::from_limbs([1, 0, 0, 0]);
+
     /// Helper receives `None` when the feature is off — falls back to static `bid_amount`.
     #[test]
     fn no_usd_floor_returns_static() {
-        let out = bid_amount_outcome(None, None, static_bid());
+        let out = bid_amount_outcome(None, None, static_bid(), TICK_DISABLED);
         assert_eq!(out, BidAmountOutcome::Static(static_bid()));
     }
 
@@ -513,7 +578,7 @@ mod tests {
     #[test]
     fn missing_cache_returns_static() {
         let cfg = floor(3600);
-        let out = bid_amount_outcome(Some(&cfg), None, static_bid());
+        let out = bid_amount_outcome(Some(&cfg), None, static_bid(), TICK_DISABLED);
         assert_eq!(out, BidAmountOutcome::Static(static_bid()));
     }
 
@@ -521,7 +586,12 @@ mod tests {
     #[test]
     fn stale_cache_returns_static() {
         let cfg = floor(60);
-        let out = bid_amount_outcome(Some(&cfg), Some((PROVE_USD_MICROS, 120)), static_bid());
+        let out = bid_amount_outcome(
+            Some(&cfg),
+            Some((PROVE_USD_MICROS, 120)),
+            static_bid(),
+            TICK_DISABLED,
+        );
         assert_eq!(out, BidAmountOutcome::Static(static_bid()));
     }
 
@@ -530,7 +600,12 @@ mod tests {
     #[test]
     fn fresh_cache_returns_dynamic() {
         let cfg = floor(3600);
-        let out = bid_amount_outcome(Some(&cfg), Some((PROVE_USD_MICROS, 10)), static_bid());
+        let out = bid_amount_outcome(
+            Some(&cfg),
+            Some((PROVE_USD_MICROS, 10)),
+            static_bid(),
+            TICK_DISABLED,
+        );
         assert_eq!(
             out,
             BidAmountOutcome::Dynamic(U256::from(EXPECTED_DYNAMIC_WEI))
@@ -543,7 +618,32 @@ mod tests {
     #[test]
     fn math_error_returns_static() {
         let cfg = floor(3600);
-        let out = bid_amount_outcome(Some(&cfg), Some((0, 10)), static_bid());
+        let out = bid_amount_outcome(Some(&cfg), Some((0, 10)), static_bid(), TICK_DISABLED);
+        assert_eq!(out, BidAmountOutcome::Static(static_bid()));
+    }
+
+    /// Anchored wei is rounded down to a multiple of the configured tick before submission.
+    #[test]
+    fn dynamic_bid_rounds_down_to_tick() {
+        // $0.12/BPGU at PROVE=$0.1867 → 642_742_367 wei (not a 10M multiple); floored to 640M.
+        let cfg = UsdFloorConfig {
+            target: 120_000,
+            ..floor(3600)
+        };
+        let tick = U256::from(10_000_000u64);
+        let out = bid_amount_outcome(Some(&cfg), Some((186_700, 10)), static_bid(), tick);
+        assert_eq!(out, BidAmountOutcome::Dynamic(U256::from(640_000_000u64)));
+    }
+
+    /// Sub-tick anchor rounds to zero → fall back to static rather than submit a zero bid.
+    #[test]
+    fn sub_tick_dynamic_falls_back_to_static() {
+        let cfg = UsdFloorConfig {
+            target: 1,
+            ..floor(3600)
+        };
+        let tick = U256::from(10_000_000u64);
+        let out = bid_amount_outcome(Some(&cfg), Some((1_000_000_000, 10)), static_bid(), tick);
         assert_eq!(out, BidAmountOutcome::Static(static_bid()));
     }
 }
