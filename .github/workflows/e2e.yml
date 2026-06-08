@@ -1,0 +1,147 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RUST_LOG: info
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-e2e:
+    name: Build e2e suite (gpu flavor)
+    timeout-minutes: 90
+    runs-on:
+      [
+        "runs-on",
+        "runner=64cpu-linux-x64",
+        "hdd=200",
+        "ami=ami-0f60240de60e318f9",
+        "run-id=${{ github.run_id }}",
+        "spot=false",
+        "tag=build-e2e",
+      ]
+    steps:
+      - name: Checkout repository and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PRIVATE_PULL_TOKEN }}
+
+      - name: rust-cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.rustup/
+          key: build-e2e-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: build-e2e-${{ runner.os }}-
+
+      - name: Build suite binary
+        env:
+          RUSTFLAGS: -C link-arg=-B/usr/local/libexec/wild
+        run: cargo build --release --bin sp1-test-cluster --features gpu
+
+      - name: Upload suite binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: sp1-test-cluster-gpu
+          path: target/release/sp1-test-cluster
+          retention-days: 3
+
+  e2e-gpu:
+    name: E2E ${{ matrix.tier }} (gpu flavor)
+    needs: build-e2e
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tier: smoke
+            family: g6.4xlarge
+            timeout: 60
+          - tier: full
+            family: g6.8xlarge
+            timeout: 240
+    runs-on:
+      [
+        "runs-on",
+        "family=${{ matrix.family }}",
+        "hdd=200",
+        "ami=ami-0f60240de60e318f9",
+        "spot=false",
+        "run-id=${{ github.run_id }}",
+      ]
+    steps:
+      - name: Checkout repository and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PRIVATE_PULL_TOKEN }}
+
+      - name: Size /dev/shm to RAM
+        run: sudo mount -o remount,size=100% /dev/shm && df -h /dev/shm
+
+      - name: Download suite binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sp1-test-cluster-gpu
+
+      - name: GPU diagnostics
+        run: |
+          echo "--- nvidia-smi ---"; nvidia-smi || echo "nvidia-smi FAILED (driver not ready?)"
+          echo "--- device nodes ---"; ls -l /dev/nvidia* 2>&1 || true
+          echo "--- nvidia kernel modules ---"; lsmod | grep -i nvidia || echo "no nvidia modules loaded"
+          echo "--- CUDA libs resolved by the suite binary ---"
+          ldd ./sp1-test-cluster | grep -Ei "cuda|nvrtc|nvtools|not found" || echo "no cuda-related dynamic deps"
+
+      - name: Initialize docker
+        run: |
+          sudo systemctl stop docker
+          sudo rm -rf /var/lib/docker/* 2>/dev/null || true
+          sudo systemctl start docker
+          docker info
+
+      - name: Pre-pull container images
+        run: |
+          docker pull -q bitnamisecure/redis:latest
+          docker pull -q bitnamisecure/postgresql:latest
+          docker pull -q minio/minio:latest
+
+      - name: Compute circuit cache key
+        id: sp1
+        run: echo "version=$(awk '/^name = "sp1-sdk"$/ {found=1} found && /^version = / {gsub(/"/, "", $3); print $3; exit}' Cargo.lock)" >> "$GITHUB_OUTPUT"
+
+      - name: circuit-artifacts-cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.sp1/circuits
+          key: sp1-circuits-${{ steps.sp1.outputs.version }}
+          restore-keys: sp1-circuits-
+
+      - name: Run suite
+        run: |
+          chmod +x ./sp1-test-cluster
+          ./sp1-test-cluster suite ${{ matrix.tier }}
+
+      - name: Upload scenario logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.tier }}-gpu-logs
+          path: target/test-cluster-logs/

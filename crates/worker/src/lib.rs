@@ -139,6 +139,14 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
         let result = async {
             let context = parent_context.unwrap_or_else(Context::current);
 
+            #[cfg(feature = "test-hooks")]
+            if test_hook_should_fail(task_type) {
+                return Err(TaskError::Retryable(anyhow::anyhow!(
+                    "TEST_FAIL_TASK injected retryable failure for {:?}",
+                    task_type
+                )));
+            }
+
             match task_type {
                 TaskType::Controller => self.process_sp1_controller(context, task).await,
                 TaskType::ProveShard => self.process_sp1_prove_shard(task).await,
@@ -273,5 +281,28 @@ pub async fn try_unclaim_proof<W: WorkerClient, E: std::fmt::Debug>(
         .await
     {
         log::error!("while unclaiming proof: {err:?}");
+    }
+}
+
+/// Test-only fault injection: `TEST_FAIL_TASK=<TASK_TYPE_NAME>:<n>` makes the first `n`
+/// attempts of that task type fail with a retryable error. Compiled out of production
+/// builds (gated behind the `test-hooks` feature, enabled only by the e2e test harness).
+#[cfg(feature = "test-hooks")]
+fn test_hook_should_fail(task_type: TaskType) -> bool {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::sync::LazyLock;
+    static REMAINING: LazyLock<Option<(String, AtomicI64)>> = LazyLock::new(|| {
+        let spec = std::env::var("TEST_FAIL_TASK").ok()?;
+        let (name, n) = spec.split_once(':')?;
+        Some((
+            name.trim().to_string(),
+            AtomicI64::new(n.trim().parse().ok()?),
+        ))
+    });
+    match REMAINING.as_ref() {
+        Some((name, left)) if name == task_type.as_str_name() => {
+            left.fetch_sub(1, Ordering::SeqCst) > 0
+        }
+        _ => false,
     }
 }

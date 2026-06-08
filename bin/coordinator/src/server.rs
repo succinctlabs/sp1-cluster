@@ -532,7 +532,7 @@ fn spawn_subscriber_channel_task<P: Send + Sync + 'static>(
 /// Start the coordinator server and return the coordinator instance along with a future that completes when the server shuts down.
 /// This allows spawning additional tasks with access to the coordinator instance.
 pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Sync + 'static>(
-) -> Result<(Arc<Coordinator<P>>, impl Future<Output = ()>)> {
+) -> Result<(Arc<Coordinator<P>>, impl Future<Output = eyre::Result<()>>)> {
     dotenv::dotenv().ok();
 
     logger::init(opentelemetry_sdk::Resource::new(vec![]));
@@ -550,14 +550,23 @@ pub async fn start_coordinator_server_custom<
 >(
     config: Settings,
     token: CancellationToken,
-) -> Result<(Arc<Coordinator<P>>, impl Future<Output = ()>)> {
+) -> Result<(Arc<Coordinator<P>>, impl Future<Output = eyre::Result<()>>)> {
     let addr = config.addr.parse::<SocketAddr>().unwrap();
 
     let mut service = GenericWorkerService::<P>::default();
 
+    let metrics_addr = config.metrics_addr.parse().map_err(|e| {
+        eyre::eyre!(
+            "Failed to parse metrics addr ({}): {e}",
+            &config.metrics_addr
+        )
+    })?;
+
     // Initialize metrics server and metrics
     let (metrics, mut metrics_server_handle, metrics_shutdown_tx) =
-        initialize_metrics().await.map_err(|e| eyre::eyre!(e))?;
+        initialize_metrics(metrics_addr)
+            .await
+            .map_err(|e| eyre::eyre!(e))?;
 
     // Set metrics in the coordinator
     Arc::get_mut(&mut service.coordinator)
@@ -574,9 +583,18 @@ pub async fn start_coordinator_server_custom<
         .set_execute_only_mode(config.execute_only_mode)
         .await;
     tracing::info!("execute_only_mode={}", config.execute_only_mode);
+    service
+        .coordinator
+        .set_worker_heartbeat_timeout(config.worker_heartbeat_timeout_secs)
+        .await;
 
     if !config.disable_proof_status_update {
-        spawn_proof_status_task(api_client.clone(), task_map.clone(), completed_rx);
+        spawn_proof_status_task(
+            api_client.clone(),
+            task_map.clone(),
+            completed_rx,
+            token.clone(),
+        );
     } else {
         tracing::info!(
             "COORDINATOR_DISABLE_PROOF_STATUS_UPDATE=true, will not update proof statuses"
@@ -588,11 +606,12 @@ pub async fn start_coordinator_server_custom<
         service.coordinator.clone(),
         task_map.clone(),
         metrics.clone(),
+        token.clone(),
     );
 
-    spawn_heartbeat_task(service.coordinator.clone());
+    spawn_heartbeat_task(service.coordinator.clone(), token.clone());
 
-    spawn_coordinator_periodic_task(service.coordinator.clone());
+    spawn_coordinator_periodic_task(service.coordinator.clone(), token.clone());
 
     tracing::info!(
         "coordinator (version {}) listening on {}",
@@ -618,13 +637,17 @@ pub async fn start_coordinator_server_custom<
         )
         .serve(addr);
 
-    // Create the server future
+    // Create the server future. Resolves Err if the gRPC server itself dies (e.g. failed
+    // bind / AddrInUse) so callers can fail fast instead of running headless with only the
+    // periodic tasks alive.
     let server_future = async move {
+        let mut result: eyre::Result<()> = Ok(());
         // Wait for server to finish or shutdown signal
         tokio::select! {
-            result = server => {
-                if let Err(e) = result {
+            server_result = server => {
+                if let Err(e) = server_result {
                     tracing::error!("Server error: {:?}", e);
+                    result = Err(eyre::eyre!("coordinator gRPC server exited: {e:?}"));
                 }
             }
             _ = token.cancelled() => {
@@ -643,6 +666,7 @@ pub async fn start_coordinator_server_custom<
                 }
             } => {
                 tracing::error!("Metrics server task exited unexpectedly");
+                result = Err(eyre::eyre!("coordinator metrics server exited unexpectedly"));
             }
         }
 
@@ -653,6 +677,7 @@ pub async fn start_coordinator_server_custom<
         }
 
         tracing::info!("Graceful shutdown complete");
+        result
     };
 
     Ok((coordinator, server_future))
@@ -663,6 +688,5 @@ pub async fn start_coordinator_server_custom<
 pub async fn run_coordinator_server<P: AssignmentPolicy + Default + Send + Sync + 'static>(
 ) -> Result<()> {
     let (_, server_future) = start_coordinator_server::<P>().await?;
-    server_future.await;
-    Ok(())
+    server_future.await
 }
