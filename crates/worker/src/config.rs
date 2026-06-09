@@ -7,11 +7,15 @@ use sp1_prover::worker::SP1WorkerConfig;
 /// `SP1_CLUSTER_LOG2_SHARD_SIZE`.
 const DEFAULT_LOG2_SHARD_SIZE: u32 = 24;
 
-/// Sharding `element_threshold` offset below `ELEMENT_THRESHOLD`, matching
-/// sp1-gpu's 24GB tier. Sizing this above the tier produces shards smaller
-/// than the GPU can fill, adding per-shard overhead. Override with
-/// `SP1_CLUSTER_SHARD_THRESHOLD`.
-const DEFAULT_SHARD_THRESHOLD_OFFSET: u64 = (1 << 26) + (1 << 25);
+/// Sharding `element_threshold` offset below `ELEMENT_THRESHOLD`.
+///
+/// Deliberately more conservative than sp1-gpu's tuning. Shard data is held in
+/// *host* RAM for every in-flight task, so the safe threshold scales with
+/// `host RAM / concurrent task weight` — not GPU VRAM, which sp1-gpu's
+/// single-proof profile tunes for. A larger threshold over-commits host memory
+/// on workers running many concurrent tasks; deployments with the headroom can
+/// raise it via `SP1_CLUSTER_SHARD_THRESHOLD`.
+const DEFAULT_SHARD_THRESHOLD_OFFSET: u64 = (1 << 27) + (1 << 26);
 
 fn read_env<T: std::str::FromStr>(name: &str) -> Option<T> {
     std::env::var(name).ok().and_then(|s| s.parse().ok())
@@ -19,10 +23,10 @@ fn read_env<T: std::str::FromStr>(name: &str) -> Option<T> {
 
 /// The core opts for the cluster.
 ///
-/// Hand-maintained copy of `local_gpu_opts()`'s ≤30GB GPU tier; can drift from
-/// upstream. Can't import it directly — it does a CUDA memory probe and panics
-/// off-GPU, but this config also runs on CPU workers. TODO: upstream a pure tier
-/// table (no hardware probe) in `sp1-gpu` that both can share.
+/// Loosely follows sp1-gpu's `local_gpu_opts()` but with a more conservative
+/// sharding threshold (see [`DEFAULT_SHARD_THRESHOLD_OFFSET`]). Can't import
+/// it directly — it does a CUDA memory probe and panics off-GPU, but this
+/// config also runs on CPU workers.
 pub fn cluster_opts() -> SP1CoreOpts {
     let mut opts = SP1CoreOpts::default();
 
