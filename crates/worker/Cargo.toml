@@ -36,6 +36,7 @@ eyre.workspace = true
 futures.workspace = true
 hashbrown = { workspace = true, features = ["serde"] }
 lazy_static.workspace = true
+libc.workspace = true
 log.workspace = true
 lru.workspace = true
 mti.workspace = true
