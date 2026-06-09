@@ -46,13 +46,22 @@ cpu-node:
         # Change this to any desired path on the host where circuit artifacts should be stored.
         path: /tmp/.sp1/circuits
         type: DirectoryOrCreate
+    # Memory-backed /dev/shm. Without it, k8s gives /dev/shm a tiny default that
+    # floors the worker's auto-detected max_weight = min(RAM, /dev/shm) to ~0.
+    # Size this to the memory limit.
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 96Gi
   volumeMounts:
     - name: sp1-circuits
       mountPath: /root/.sp1/circuits
+    - name: dshm
+      mountPath: /dev/shm
   extraEnv:
     NODE_COORDINATOR_RPC: http://coordinator-grpc:50051
-    # Set this based on how many GB of RAM is available.
-    WORKER_MAX_WEIGHT_OVERRIDE: "96"
+    # WORKER_MAX_WEIGHT_OVERRIDE is auto-detected from the pod's cgroup
+    # memory limit; only set it if the auto-detect picks the wrong value.
     NODE_ARTIFACT_STORE: redis
     NODE_REDIS_NODES:
       valueFrom:
