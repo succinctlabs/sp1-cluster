@@ -8472,6 +8472,7 @@ dependencies = [
  "opentelemetry",
  "rand 0.9.2",
  "reqwest",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
  "sp1-cluster-artifact",

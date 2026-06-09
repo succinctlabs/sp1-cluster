@@ -42,6 +42,7 @@ mti.workspace = true
 opentelemetry.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 spn-metrics.workspace = true
