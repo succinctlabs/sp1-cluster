@@ -5,23 +5,12 @@ use crate::MAX_WEIGHT_OVERRIDE;
 /// Execution children mmap their buffers into this tmpfs, so its size bounds concurrent execution
 /// independently of total RAM.
 fn dev_shm_gb() -> Option<u64> {
-    // SAFETY: `libc::statvfs` is a `repr(C)` POD struct (integer fields + reserved padding, no
-    // references or niche'd types), so an all-zero bit pattern is a valid starting value. `c"…"` is
-    // a 'static NUL-terminated string; we pass a unique `&mut` to fully-initialized memory and read
-    // its fields only after the return code confirms the call succeeded.
-    let stat = unsafe {
-        let mut stat: libc::statvfs = std::mem::zeroed();
-        if libc::statvfs(c"/dev/shm".as_ptr(), &mut stat) != 0 {
-            return None;
-        }
-        stat
-    };
+    let stat = rustix::fs::statvfs("/dev/shm").ok()?;
     // total bytes = blocks × fragment size; a 0 in either means "unknown", not a 0-GiB budget.
     if stat.f_frsize == 0 || stat.f_blocks == 0 {
         return None;
     }
-    let bytes = (stat.f_blocks as u64).saturating_mul(stat.f_frsize as u64);
-    Some(bytes / 1024 / 1024 / 1024)
+    Some(stat.f_blocks.saturating_mul(stat.f_frsize) / 1024 / 1024 / 1024)
 }
 
 /// Pure budget computation, split from the syscalls in [`get_max_weight`] so the

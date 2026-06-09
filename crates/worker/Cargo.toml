@@ -36,13 +36,13 @@ eyre.workspace = true
 futures.workspace = true
 hashbrown = { workspace = true, features = ["serde"] }
 lazy_static.workspace = true
-libc.workspace = true
 log.workspace = true
 lru.workspace = true
 mti.workspace = true
 opentelemetry.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 spn-metrics.workspace = true
