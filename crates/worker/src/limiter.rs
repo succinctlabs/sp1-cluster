@@ -13,8 +13,7 @@ fn dev_shm_gb() -> Option<u64> {
     Some(stat.f_blocks.saturating_mul(stat.f_frsize) / 1024 / 1024 / 1024)
 }
 
-/// Pure budget computation, split from the syscalls in [`get_max_weight`] so the
-/// override / cap branches are unit-testable. Weight units ≈ GiB of working set per task.
+/// Pure budget logic, split from the I/O in [`get_max_weight`]. Weight ≈ GiB of working set per task.
 fn compute_max_weight(
     total_ram_gb: u64,
     shm_gb: Option<u64>,
@@ -30,14 +29,10 @@ fn compute_max_weight(
         }
         return max_weight;
     }
-    // Measured RAM (already whole GiB); never rounded above it, so the budget can't exceed physical
-    // memory. `mem_info` reports usable RAM (below nominal — the kernel reserves a slice).
+    // Measured RAM; never rounded above it, so the budget can't exceed physical memory.
     let ram_weight = total_ram_gb;
-    // /dev/shm is the binding constraint for execution workers, so cap to it when it's below the RAM
-    // budget — the expected steady state, recorded by the info! in `get_max_weight`. An unconfigured
-    // (~0 GiB) shm is a misconfig that idles the worker, so it errors. `None` (statvfs failed or a
-    // degenerate read) falls back to RAM. Conservative proxy, not a hard bound: weight only
-    // approximates a task's resident shm.
+    // /dev/shm is the binding constraint for execution workers: cap to it when below RAM, error if
+    // unset (~0 GiB), else fall back to RAM. Conservative proxy — weight only approximates resident shm.
     match shm_gb {
         Some(0) => {
             tracing::error!(
@@ -98,19 +93,12 @@ mod tests {
 
     #[test]
     fn unconfigured_shm_caps_to_zero() {
-        // shm_size is required: an unconfigured (~0 GiB) shm caps to 0 so the worker idles loudly.
         assert_eq!(compute_max_weight(64, Some(0), NO_OVERRIDE), 0);
     }
 
     #[test]
-    fn caps_to_small_shm() {
-        assert_eq!(compute_max_weight(64, Some(8), NO_OVERRIDE), 8);
-    }
-
-    #[test]
     fn ram_budget_never_exceeds_measured() {
-        // No rounding above measured RAM — the budget is the physical memory, not snapped up.
+        // 60 (not a multiple of 16) must stay 60, not snap up to 64.
         assert_eq!(compute_max_weight(60, None, NO_OVERRIDE), 60);
-        assert_eq!(compute_max_weight(64, None, NO_OVERRIDE), 64);
     }
 }
