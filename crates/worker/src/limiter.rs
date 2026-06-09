@@ -41,8 +41,9 @@ fn compute_max_weight(
         }
         return max_weight;
     }
-    // Round up to nearest 16 GB.
-    let ram_weight = total_ram_gb.div_ceil(16) * 16;
+    // Measured RAM (already whole GiB); never rounded above it, so the budget can't exceed physical
+    // memory. `mem_info` reports usable RAM (below nominal — the kernel reserves a slice).
+    let ram_weight = total_ram_gb;
     // /dev/shm is the binding constraint for execution workers, so cap to it when it's below the RAM
     // budget — the expected steady state, recorded by the info! in `get_max_weight`. An unconfigured
     // (~0 GiB) shm is a misconfig that idles the worker, so it errors. `None` (statvfs failed or a
@@ -118,7 +119,9 @@ mod tests {
     }
 
     #[test]
-    fn rounds_ram_up_to_nearest_16() {
-        assert_eq!(compute_max_weight(60, None, NO_OVERRIDE), 64);
+    fn ram_budget_never_exceeds_measured() {
+        // No rounding above measured RAM — the budget is the physical memory, not snapped up.
+        assert_eq!(compute_max_weight(60, None, NO_OVERRIDE), 60);
+        assert_eq!(compute_max_weight(64, None, NO_OVERRIDE), 64);
     }
 }
