@@ -42,6 +42,14 @@ async fn main() -> anyhow::Result<()> {
         )
     }
 
+    // Size the in-process workers from the machine's RAM (crates/worker's limiter
+    // formula), never from an ambient override: a CI runner env shipped
+    // WORKER_MAX_WEIGHT_OVERRIDE=60, on which PlonkWrap (weight 60) can never
+    // schedule next to the Controller (weight 1) on the single cpu worker — the
+    // plonk scenario hung forever with 59/60 capacity free. Must run before the
+    // first get_max_weight() call (lazy_static reads the env once).
+    std::env::remove_var("WORKER_MAX_WEIGHT_OVERRIDE");
+
     sp1_cluster_common::logger::init(opentelemetry_sdk::Resource::empty());
 
     let args: Vec<String> = std::env::args().skip(1).collect();

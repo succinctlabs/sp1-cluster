@@ -68,7 +68,10 @@ pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<b
             duration
         );
         if outcome != Outcome::Pass {
-            print_log_tail(&log_path, s.name, 200);
+            // 2000 lines, not less: the cluster's 2s status polling fills ~150
+            // lines/minute, and a 200-line tail held nothing but that noise when
+            // the plonk scenario wedged.
+            print_log_tail(&log_path, s.name, 2000);
         }
         results.push(ScenarioResult {
             name: s.name,

@@ -37,8 +37,10 @@ pub fn scenarios() -> Vec<Scenario> {
             // gnark's plonk.Prove peaks at ~57GB scenario RSS and takes ~5min when RAM
             // is plentiful; on <64GB machines it livelocks silently (kernel reclaim /
             // Go GC thrash), which is why the full tier runs on a 128GB g6.8xlarge.
+            // The gpu timeout is deliberately aggressive so a wedge fails fast with
+            // logs; bump it if a healthy wrap ever brushes against it.
             cpu_timeout: Duration::from_secs(2 * 60 * 60),
-            gpu_timeout: Duration::from_secs(10 * 60),
+            gpu_timeout: Duration::from_secs(5 * 60),
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Plonk)) },
         },
         Scenario {
