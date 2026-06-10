@@ -1,6 +1,6 @@
 # AMI for the e2e CI runners (.github/workflows/e2e.yml), both the CPU build job
 # and the GPU suite jobs. Bakes everything those jobs otherwise install per run:
-# NVIDIA driver 565, CUDA toolkit 12.8, Go, protoc, rustup (nightly), mold + wild
+# NVIDIA driver 570, CUDA toolkit 12.8, Go, protoc, rustup (nightly), mold + wild
 # linkers, cmake, docker (+ nvidia-container-toolkit).
 #
 # Build (needs AWS credentials for account 421253708207, region us-east-1):
@@ -106,7 +106,7 @@ source "amazon-ebs" "e2e_runner" {
   subnet_id                   = var.subnet_id
 
   ami_name        = "sp1-cluster-e2e-runner-${local.timestamp}"
-  ami_description = "sp1-cluster e2e runner: NVIDIA driver 565, CUDA 12.8, Go ${var.go_version}, protoc, rustup nightly, mold+wild, cmake, docker"
+  ami_description = "sp1-cluster e2e runner: NVIDIA driver 570, CUDA 12.8, Go ${var.go_version}, protoc, rustup nightly, mold+wild, cmake, docker"
 
   tags = {
     Name = "sp1-cluster e2e runner"
@@ -171,15 +171,26 @@ build {
   }
 
   # CUDA toolkit 12.8 (12.8.1 is the final point release the -12-8 metapackage
-  # resolves to) + the 565 driver branch it is paired with in CI. Verified live:
-  # this instance type has a GPU, so a broken driver fails the bake, not a CI run.
+  # resolves to) + the 570 driver branch. 570 is the LTS branch CUDA 12.8 ships
+  # with (570.26); the 565 branch the workflow installs on the old AMI is EOL and
+  # its dkms module no longer compiles against jammy's current 6.8 HWE kernel.
+  # Verified live: this instance type has a GPU, so a broken driver fails the
+  # bake, not a CI run.
   provisioner "shell" {
     environment_vars = ["DEBIAN_FRONTEND=noninteractive"]
     inline = [
+      # The 6.8 HWE kernel is built with CONFIG_INIT_STACK_ALL_ZERO, so module
+      # builds get -ftrivial-auto-var-init=zero — unknown to jammy's default
+      # gcc-11. Make gcc-12 (the kernel's own compiler; the headers package
+      # already depends on it) the system cc before the driver's dkms build.
+      "sudo apt-get install -y gcc-12 g++-12",
+      "sudo update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-12 100",
+      "sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100",
+      "sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100",
       "wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb",
       "sudo dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb",
       "sudo apt-get update",
-      "sudo apt-get install -y cuda-toolkit-12-8 nvidia-driver-565",
+      "sudo apt-get install -y cuda-toolkit-12-8 nvidia-driver-570",
       "sudo modprobe nvidia",
       "nvidia-smi",
       "/usr/local/cuda/bin/nvcc --version",
