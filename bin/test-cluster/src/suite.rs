@@ -23,6 +23,7 @@ pub struct ScenarioResult {
 /// A failure does not stop the suite. Returns true iff everything passed.
 pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<bool> {
     let scenarios = resolve(all, tier, flavor);
+    prefetch_circuit_artifacts(&scenarios).await;
     let logs_dir = std::path::PathBuf::from("target/test-cluster-logs");
     std::fs::create_dir_all(&logs_dir).context("create logs dir")?;
     let exe = std::env::current_exe().context("current_exe")?;
@@ -79,6 +80,31 @@ pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<b
 
     println!("{}", render_table(&results));
     Ok(results.iter().all(|r| r.outcome == Outcome::Pass))
+}
+
+/// The wrap-mode trusted-setup artifacts are a tens-of-GB download on a cold
+/// ~/.sp1/circuits. Download them up front, outside the per-scenario timeouts: those
+/// are sized for proving work (the gpu ones tightly, to catch wedged workers fast),
+/// not for first-run downloads on an uncached runner.
+async fn prefetch_circuit_artifacts(scenarios: &[&Scenario]) {
+    for (scenario_name, kind) in [
+        ("proof-mode-plonk", "plonk"),
+        ("proof-mode-groth16", "groth16"),
+    ] {
+        if scenarios.iter().any(|s| s.name == scenario_name) {
+            let started = Instant::now();
+            tracing::info!("prefetching {kind} circuit artifacts (not counted against scenario timeouts)");
+            match sp1_sdk::install::try_install_circuit_artifacts(kind).await {
+                Ok(_) => {
+                    tracing::info!("{kind} circuit artifacts ready in {:?}", started.elapsed())
+                }
+                // Don't fail the suite from here: the scenario downloads on demand as
+                // well, and if the artifacts are truly unfetchable it fails with the
+                // real error in its own log.
+                Err(e) => tracing::warn!("prefetch of {kind} circuit artifacts failed: {e:#}"),
+            }
+        }
+    }
 }
 
 /// Dump the tail of a failed scenario's log to stdout so CI failures are diagnosable
