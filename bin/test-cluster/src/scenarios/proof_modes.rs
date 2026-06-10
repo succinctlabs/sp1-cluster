@@ -6,7 +6,7 @@ use crate::assert::{assert_proof_artifact_downloadable, wait_proof_status};
 use crate::cluster::Cluster;
 use crate::programs;
 use crate::request::{submit_proof_requests_sequential, ClusterProofRequest, ClusterProofRequests};
-use crate::scenario::{Flavors, Scenario, ScenarioFuture};
+use crate::scenario::{Scenario, ScenarioFuture};
 use sp1_cluster_common::proto::ProofRequestStatus;
 
 /// One scenario per proof mode, each a single request against a fresh cluster in a fresh
@@ -22,29 +22,31 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             name: "proof-mode-core",
-            flavors: Flavors::Both,
             timeout: Duration::from_secs(30 * 60),
+            skip_in_full: false,
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Core)) },
         },
         Scenario {
             name: "proof-mode-compressed",
-            flavors: Flavors::Both,
             timeout: Duration::from_secs(30 * 60),
+            skip_in_full: false,
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Compressed)) },
         },
         Scenario {
             name: "proof-mode-plonk",
-            flavors: Flavors::Both,
             timeout: Duration::from_secs(2 * 60 * 60),
-            // gnark's plonk.Prove peaks at ~57GB scenario RSS (measured); the full-tier
-            // job runs on a 128GB GPU instance to accommodate it. On smaller machines it
-            // degrades into a silent memory-thrash livelock.
+            // The plonk wrap wedges silently on the g6.4xlarge runner (zero log output
+            // for 2h after ShrinkWrap completes; gnark plonk SRS/pk load on 64GB RAM).
+            // groth16 on the same finalize path takes ~112s. Excluded from `suite full`
+            // until the prover-side hang is understood or the runner gets more RAM;
+            // still runnable manually via `run proof-mode-plonk`.
+            skip_in_full: true,
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Plonk)) },
         },
         Scenario {
             name: "proof-mode-groth16",
-            flavors: Flavors::Both,
             timeout: Duration::from_secs(60 * 60),
+            skip_in_full: false,
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Groth16)) },
         },
     ]

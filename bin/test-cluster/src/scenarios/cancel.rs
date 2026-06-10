@@ -6,7 +6,7 @@ use crate::assert::{get_proof_request, poll_until, wait_proof_status, wait_stats
 use crate::cluster::Cluster;
 use crate::programs;
 use crate::request::request_only;
-use crate::scenario::{Flavors, Scenario, ScenarioFuture};
+use crate::scenario::{Scenario, ScenarioFuture};
 use crate::scenarios::long_program;
 use sp1_cluster_common::proto::{
     CancelProofRequest, ProofRequestCancelRequest, ProofRequestStatus,
@@ -16,14 +16,14 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             name: "cancel-pending",
-            flavors: Flavors::Both,
             timeout: Duration::from_secs(20 * 60),
+            skip_in_full: false,
             run: || -> ScenarioFuture { Box::pin(run_pending()) },
         },
         Scenario {
             name: "cancel-active",
-            flavors: Flavors::Both,
             timeout: Duration::from_secs(45 * 60),
+            skip_in_full: false,
             run: || -> ScenarioFuture { Box::pin(run_active()) },
         },
     ]

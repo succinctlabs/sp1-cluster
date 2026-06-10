@@ -6,14 +6,14 @@ use crate::assert::{assert_proof_artifact_downloadable, wait_proof_status, wait_
 use crate::cluster::Cluster;
 use crate::programs;
 use crate::request::request_only;
-use crate::scenario::{Flavor, Flavors, Scenario, ScenarioFuture};
+use crate::scenario::{Flavor, Scenario, ScenarioFuture};
 use sp1_cluster_common::proto::ProofRequestStatus;
 
 pub fn scenario() -> Scenario {
     Scenario {
         name: "multi-worker",
-        flavors: Flavors::Both,
         timeout: Duration::from_secs(60 * 60),
+        skip_in_full: false,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }

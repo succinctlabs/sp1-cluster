@@ -27,28 +27,6 @@ impl Flavor {
     }
 }
 
-/// Which flavors a scenario can run under. Every current scenario is `Both`; the
-/// flavor-specific variants exist for full-tier scenarios that only make sense on one
-/// flavor (kept for Plan 2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Flavors {
-    #[allow(dead_code)]
-    Gpu,
-    #[allow(dead_code)]
-    CpuOnly,
-    Both,
-}
-
-impl Flavors {
-    pub fn supports(self, flavor: Flavor) -> bool {
-        match self {
-            Flavors::Both => true,
-            Flavors::Gpu => flavor == Flavor::Gpu,
-            Flavors::CpuOnly => flavor == Flavor::CpuOnly,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     Smoke,
@@ -57,12 +35,16 @@ pub enum Tier {
 
 pub type ScenarioFuture = Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>;
 
+/// Every scenario runs under both build flavors (gpu and cpu-only); per-flavor
+/// differences live inside the scenario bodies (cluster shape, workload size).
 pub struct Scenario {
     pub name: &'static str,
-    pub flavors: Flavors,
     /// Hard per-scenario timeout enforced by the suite runner (generous: first runs
     /// include circuit-artifact downloads).
     pub timeout: Duration,
+    /// Excluded from `suite full` (still runnable via `run <name>`): for scenarios with
+    /// known environment-level blockers, with the reason documented at the definition.
+    pub skip_in_full: bool,
     pub run: fn() -> ScenarioFuture,
 }
 
@@ -91,7 +73,7 @@ pub fn resolve(all: &[Scenario], tier: Tier, flavor: Flavor) -> Vec<&Scenario> {
                     .unwrap_or_else(|| panic!("smoke scenario {name} not in registry"))
             })
             .collect(),
-        Tier::Full => all.iter().filter(|s| s.flavors.supports(flavor)).collect(),
+        Tier::Full => all.iter().filter(|s| !s.skip_in_full).collect(),
     }
 }
 
@@ -99,43 +81,36 @@ pub fn resolve(all: &[Scenario], tier: Tier, flavor: Flavor) -> Vec<&Scenario> {
 mod tests {
     use super::*;
 
-    fn dummy(name: &'static str, flavors: Flavors) -> Scenario {
+    fn dummy(name: &'static str) -> Scenario {
         Scenario {
             name,
-            flavors,
             timeout: Duration::from_secs(1),
+            skip_in_full: false,
             run: || Box::pin(async { Ok(()) }),
         }
     }
 
     #[test]
-    fn full_tier_filters_by_flavor() {
-        let all = vec![
-            dummy("a", Flavors::Both),
-            dummy("b", Flavors::Gpu),
-            dummy("c", Flavors::CpuOnly),
-        ];
-        let gpu: Vec<_> = resolve(&all, Tier::Full, Flavor::Gpu)
+    fn full_tier_excludes_skipped_scenarios() {
+        let mut skipped = dummy("b");
+        skipped.skip_in_full = true;
+        let all = vec![dummy("a"), skipped, dummy("c")];
+        let names: Vec<_> = resolve(&all, Tier::Full, Flavor::Gpu)
             .iter()
             .map(|s| s.name)
             .collect();
-        assert_eq!(gpu, vec!["a", "b"]);
-        let cpu: Vec<_> = resolve(&all, Tier::Full, Flavor::CpuOnly)
-            .iter()
-            .map(|s| s.name)
-            .collect();
-        assert_eq!(cpu, vec!["a", "c"]);
+        assert_eq!(names, vec!["a", "c"]);
     }
 
     #[test]
     fn smoke_tier_is_explicit_per_flavor() {
         let all = vec![
-            dummy("quick", Flavors::Both),
-            dummy("proof-mode-core", Flavors::Both),
-            dummy("proof-mode-compressed", Flavors::Both),
-            dummy("proof-mode-plonk", Flavors::Both),
-            dummy("proof-mode-groth16", Flavors::Both),
-            dummy("execute-only", Flavors::Both),
+            dummy("quick"),
+            dummy("proof-mode-core"),
+            dummy("proof-mode-compressed"),
+            dummy("proof-mode-plonk"),
+            dummy("proof-mode-groth16"),
+            dummy("execute-only"),
         ];
         let gpu: Vec<_> = resolve(&all, Tier::Smoke, Flavor::Gpu)
             .iter()
@@ -155,7 +130,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "not in registry")]
     fn smoke_panics_on_missing_scenario() {
-        let all = vec![dummy("quick", Flavors::Both)];
+        let all = vec![dummy("quick")];
         resolve(&all, Tier::Smoke, Flavor::Gpu);
     }
 }

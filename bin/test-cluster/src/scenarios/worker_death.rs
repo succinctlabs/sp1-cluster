@@ -5,15 +5,15 @@ use sp1_sdk::SP1ProofMode;
 use crate::assert::{assert_proof_artifact_downloadable, wait_proof_status, wait_stats};
 use crate::cluster::Cluster;
 use crate::request::request_only;
-use crate::scenario::{Flavors, Scenario, ScenarioFuture};
+use crate::scenario::{Scenario, ScenarioFuture};
 use crate::scenarios::long_program;
 use sp1_cluster_common::proto::ProofRequestStatus;
 
 pub fn scenario() -> Scenario {
     Scenario {
         name: "worker-death-requeue",
-        flavors: Flavors::Both,
         timeout: Duration::from_secs(90 * 60),
+        skip_in_full: false,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }

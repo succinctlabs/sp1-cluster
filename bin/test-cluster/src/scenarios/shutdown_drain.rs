@@ -5,14 +5,14 @@ use sp1_sdk::SP1ProofMode;
 use crate::assert::wait_stats;
 use crate::cluster::{Cluster, API_GRPC_ADDR, COORDINATOR_ADDR, GATEWAY_GRPC_ADDR};
 use crate::request::request_only;
-use crate::scenario::{Flavors, Scenario, ScenarioFuture};
+use crate::scenario::{Scenario, ScenarioFuture};
 use crate::scenarios::long_program;
 
 pub fn scenario() -> Scenario {
     Scenario {
         name: "shutdown-drain",
-        flavors: Flavors::Both,
         timeout: Duration::from_secs(45 * 60),
+        skip_in_full: false,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }

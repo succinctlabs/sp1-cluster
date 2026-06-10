@@ -51,10 +51,7 @@ async fn main() -> anyhow::Result<()> {
     match cmd {
         Cmd::List => {
             for s in scenarios::all() {
-                println!(
-                    "{:<24} flavors={:?} timeout={:?}",
-                    s.name, s.flavors, s.timeout
-                );
+                println!("{:<24} timeout={:?}", s.name, s.timeout);
             }
             Ok(())
         }
@@ -64,12 +61,6 @@ async fn main() -> anyhow::Result<()> {
                 .iter()
                 .find(|s| s.name == name)
                 .ok_or_else(|| anyhow::anyhow!("unknown scenario {name:?} (see `list`)"))?;
-            if !s.flavors.supports(flavor) {
-                anyhow::bail!(
-                    "scenario {name} does not support the {} flavor of this binary",
-                    flavor.as_str()
-                );
-            }
             tracing::info!("running scenario {name} (flavor {})", flavor.as_str());
             (s.run)().await?;
             tracing::info!("scenario {name} PASSED");
