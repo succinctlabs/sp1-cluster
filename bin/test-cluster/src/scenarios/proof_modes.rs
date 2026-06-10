@@ -35,7 +35,9 @@ pub fn scenarios() -> Vec<Scenario> {
         Scenario {
             name: "proof-mode-plonk",
             flavors: Flavors::Both,
-            timeout: Duration::from_secs(60 * 60),
+            // The plonk wrap (proving-key build + prove) ran >56 min on a 16-vCPU
+            // g6.4xlarge; give it real headroom.
+            timeout: Duration::from_secs(2 * 60 * 60),
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Plonk)) },
         },
         Scenario {
