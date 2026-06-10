@@ -27,6 +27,8 @@ jobs:
   # Compile once on a cheap CPU-heavy machine (sp1-gpu-sys needs nvcc but no GPU at
   # build time); the GPU jobs only run the prebuilt binary, so the expensive GPU
   # instances spend no time compiling.
+  # The runner AMI (infra/packer/e2e-runner.pkr.hcl) bakes the whole toolchain:
+  # CUDA 12.8 toolkit, gcc-12, Go, protoc, cmake, wild/mold, rustup, docker.
   build-e2e:
     name: Build e2e suite (gpu flavor)
     timeout-minutes: 90
@@ -35,6 +37,7 @@ jobs:
         "runs-on",
         "runner=64cpu-linux-x64",
         "hdd=200",
+        "ami=ami-0f60240de60e318f9",
         "run-id=${{ github.run_id }}",
         "spot=false",
         "tag=build-e2e",
@@ -45,68 +48,6 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.PRIVATE_PULL_TOKEN }}
-
-      # The dependency set the node images use (infra/Dockerfile.node_gpu), minus
-      # CUDA itself which is installed below.
-      - name: Install system build dependencies
-        run: |
-          # apt upgrades of docker/containerd restart the daemon mid-job and break
-          # /var/lib/docker (ephemeral-disk data-root) — pin whatever is running.
-          sudo apt-mark hold docker-ce docker-ce-cli docker.io containerd.io containerd runc 2>/dev/null || true
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            openssl libssl-dev pkg-config build-essential libclang-dev python3-pip \
-            diffutils gcc m4 make libnvtoolsext1 wget tar unzip git curl openssh-client
-
-      # sp1-gpu-sys (sppark) needs CMake >= 3.24; ubuntu22's apt ships 3.22.
-      - name: Install CMake >= 3.24
-        run: |
-          sudo pip3 install --upgrade cmake 2>/dev/null || pip3 install --user --upgrade cmake
-          cmake --version | head -1
-
-      # sp1-gpu-sys compiles CUDA kernels: needs nvcc. Build with CUDA 12.8 so the GPU
-      # jobs only need a 565-series driver — a CUDA 13 build demands driver >= 580, and
-      # replacing the AMI's driver stack with 580 proved fragile. (The node prod images
-      # build with CUDA 13 inside nvidia/cuda devel containers instead, see
-      # infra/Dockerfile.node_gpu.)
-      - name: Install CUDA toolkit 12.8.1
-        uses: Jimver/cuda-toolkit@v0.2.35
-        with:
-          cuda: "12.8.1"
-          # Versioned apt packages from NVIDIA's repo instead of the ~4GB local
-          # runfile. The build only compiles and statically device-links kernels:
-          # nvcc, cudart-dev (cuda_runtime.h, libcudart, libcudadevrt, cccl/cub),
-          # and nvtx for the CUDA::nvToolsExt CMake target sppark links on CUDA < 13.
-          # (nvcc pulls the other two transitively; listed to document the need.)
-          method: network
-          sub-packages: '["nvcc", "cudart-dev", "nvtx"]'
-
-      # Needed by sp1-recursion-gnark-ffi's build.rs (native-gnark builds a Go library).
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.22.1"
-          # No go.sum at the repo root; the default dependency cache only warns.
-          cache: false
-
-      - name: Install protoc
-        run: |
-          PROTOC_ZIP=protoc-29.4-linux-x86_64.zip
-          curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v29.4/$PROTOC_ZIP
-          sudo unzip -o $PROTOC_ZIP -d /usr/local bin/protoc
-          sudo unzip -o $PROTOC_ZIP -d /usr/local 'include/*'
-          rm -f $PROTOC_ZIP
-
-      # Link with wild instead of GNU ld: the suite binary is huge (CUDA fatbins plus
-      # debug info) and the final link is a serial chunk of every rebuild. The -B shim
-      # makes cc's collect2 pick up the `ld` symlink, so no clang is needed.
-      - name: Install wild linker
-        run: |
-          curl -sSfL https://github.com/davidlattimore/wild/releases/download/0.9.0/wild-linker-0.9.0-x86_64-unknown-linux-musl.tar.gz \
-            | sudo tar -xz --strip-components=1 -C /usr/local/bin --wildcards '*/wild'
-          sudo mkdir -p /usr/local/libexec/wild
-          sudo ln -sf /usr/local/bin/wild /usr/local/libexec/wild/ld
-          wild --version
 
       - name: rust-cache
         uses: actions/cache@v3
@@ -132,7 +73,10 @@ jobs:
           override: true
 
       # Not stripped: the GPU jobs diagnose scenario failures from backtraces in the
-      # uploaded logs, and those need symbols.
+      # uploaded logs, and those need symbols. Linked with the AMI's wild via the -B
+      # shim (cc's collect2 picks up the `ld` symlink, no clang needed) — the final
+      # link of the huge binary (CUDA fatbins + debug info) is a serial chunk of
+      # every rebuild.
       - name: Build suite binary
         env:
           RUSTFLAGS: -C link-arg=-B/usr/local/libexec/wild
@@ -168,7 +112,7 @@ jobs:
         "runs-on",
         "family=${{ matrix.family }}",
         "hdd=200",
-        "ami=ami-0a63dc9cb9e934ba3",
+        "ami=ami-0f60240de60e318f9",
         "spot=false",
         "run-id=${{ github.run_id }}",
       ]
@@ -179,13 +123,9 @@ jobs:
           submodules: recursive
           token: ${{ secrets.PRIVATE_PULL_TOKEN }}
 
-      # The prover needs the full CUDA runtime library set, not just cudart: it does
-      # runtime kernel codegen via NVRTC and uses NVTX — same reason the node's runtime
-      # image is an nvidia/cuda runtime image (see infra/Dockerfile.node_gpu). Without
-      # libnvrtc the GPU worker wedges during prover init and never registers, and
-      # every scenario times out waiting for workers. cuda-libraries-12-8 is the
-      # runtime metapackage (cudart+nvrtc+cublas+...) matching the 12.8.1 toolkit the
-      # suite binary is built with.
+      # The AMI bakes the full CUDA 12.8 toolkit (superset of the runtime libraries
+      # the prover needs — cudart, NVRTC for runtime kernel codegen, NVTX), so this
+      # is a guard that no-ops there and only installs if the AMI ever drifts.
       - name: Install CUDA runtime libraries
         run: |
           repo="ubuntu$(. /etc/os-release; echo ${VERSION_ID//./})"
@@ -197,19 +137,19 @@ jobs:
           fi
           echo "LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
 
-      # The stock runner AMI ships driver 560, on which the suite binary has wedged at
-      # prover init (cudart reports an insufficient driver); run on the 565 branch the
-      # CUDA 12.8 build is paired with. The AMI's preinstalled stack conflicts with it
-      # in apt's resolver (held and interdependent nvidia/libnvidia packages) — purge
-      # it and install fresh.
-      - name: Install NVIDIA driver 565
+      # The AMI bakes driver 570 (the LTS branch CUDA 12.8 ships with), so this is a
+      # guard that no-ops there: CUDA 12.x binaries need a driver >= the 565 era, and
+      # anything older (e.g. the old runner AMI's 560) wedges the GPU worker at prover
+      # init. If the driver is ever too old, replace it — purge first, the preinstalled
+      # stack conflicts in apt's resolver (held and interdependent nvidia packages).
+      - name: Install NVIDIA driver
         run: |
           DRIVER_MAJOR=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | cut -d. -f1)
           if [ -z "$DRIVER_MAJOR" ] || [ "$DRIVER_MAJOR" -lt 565 ]; then
-            echo "driver ${DRIVER_MAJOR:-absent} < 565; replacing with nvidia-driver-565"
+            echo "driver ${DRIVER_MAJOR:-absent} < 565; replacing with nvidia-driver-570"
             sudo apt-get remove -y --purge 'nvidia-*' 'libnvidia-*' 2>/dev/null || true
             sudo apt-get autoremove -y -qq || true
-            sudo apt-get install -y --allow-change-held-packages nvidia-driver-565
+            sudo apt-get install -y --allow-change-held-packages nvidia-driver-570
             sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
             sudo modprobe nvidia
           fi
