@@ -16,7 +16,7 @@ use sp1_sdk::network::signer::NetworkSigner;
 use spn_network_types::ProofRequestError;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashSet, sync::Arc, time::Duration};
-use tokio::{task::JoinSet, time::sleep};
+use tokio::{sync::Mutex, task::JoinSet, time::sleep};
 use tracing::{debug, error, info, instrument};
 
 pub mod config;
@@ -69,6 +69,10 @@ pub struct Fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork
     name: Option<String>,
     /// How often the fulfiller polls for new/completed requests.
     refresh_interval: Duration,
+    /// Serializes signed network submissions. Each submission fetches the signer's nonce before
+    /// submitting; without serialization, concurrent submissions sign the same nonce and all but
+    /// one fail verification. Guards a single process only — replicas sharing a signer still race.
+    nonce_lock: Arc<Mutex<()>>,
 }
 
 impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N> {
@@ -102,6 +106,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             request_probability,
             name,
             refresh_interval: Duration::from_secs(refresh_interval_sec),
+            nonce_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -189,6 +194,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                         if VK_MISMATCH_STRINGS.iter().any(|s| err_text.contains(s)) {
                             // ProofRequestError::VerificationKeyMismatch = 2
                             const VK_MISMATCH_ERROR: i32 = 2;
+                            let _nonce_guard = self_clone.nonce_lock.lock().await;
                             match self_clone
                                 .network
                                 .fail_request_with_error(
@@ -255,6 +261,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 
         // Submit the fulfill request to the network.
         if !self.disable_fulfillment {
+            let _nonce_guard = self.nonce_lock.lock().await;
             self.network
                 .submit_request(&request, proof_bytes, self.domain.as_slice(), &self.signer)
                 .await?;
@@ -329,6 +336,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
     async fn fail_request(&self, request: ProofRequest) -> Result<()> {
         // Send the failed fulfillment to the network.
         if !self.disable_fulfillment {
+            let _nonce_guard = self.nonce_lock.lock().await;
             self.network
                 .fail_request(&request, self.domain.as_slice(), &self.signer)
                 .await?;
@@ -413,6 +421,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
     /// Releases the request on the network by failing its fulfillment.
     async fn cancel_on_network(&self, request_id: &str) -> Result<()> {
         if !self.disable_fulfillment {
+            let _nonce_guard = self.nonce_lock.lock().await;
             self.network
                 .cancel_request(request_id, &self.signer)
                 .await?;
