@@ -29,7 +29,8 @@ runs:
         DRIVER_MAJOR=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | cut -d. -f1)
         if [ -z "$DRIVER_MAJOR" ] || [ "$DRIVER_MAJOR" -lt 580 ]; then
           echo "driver ${DRIVER_MAJOR:-absent} < 580; installing cuda-drivers"
-          sudo apt-get install -y -qq cuda-drivers
+          # The AMI holds its driver packages; allow apt to move them.
+          sudo apt-get install -y -qq --allow-change-held-packages cuda-drivers
           sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
           sudo modprobe nvidia
           nvidia-smi
