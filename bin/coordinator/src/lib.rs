@@ -1800,17 +1800,21 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         for task_id in &task_ids {
             self.close_task_channel(task_id);
         }
-        // Close all sub channels.
+        // Close all sub channels. A subscriber may already be gone during shutdown —
+        // a closed channel is not an error here.
         let mut subs = 0;
         for entry in &self.subscribers {
-            entry
+            if entry
                 .value()
                 .tx
                 .send(ServerSubMessage {
                     msg_id: "msg".create_type_id::<V7>().to_string(),
                     message: Some(server_sub_message::Message::EndOfStream(EndOfStream {})),
                 })
-                .unwrap();
+                .is_err()
+            {
+                tracing::debug!("subscriber channel already closed during shutdown");
+            }
             subs += 1;
         }
         tracing::info!("Closed {} subscribers", subs);
