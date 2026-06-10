@@ -17,6 +17,12 @@ defaults:
   run:
     shell: bash
 
+# A superseded push to a PR cancels that PR's in-flight run (the GPU jobs are the
+# expensive part); main pushes always run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Compile once on a cheap CPU-heavy machine (sp1-gpu-sys needs nvcc but no GPU at
   # build time); the GPU jobs only run the prebuilt binary, so the expensive GPU
@@ -80,6 +86,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.22.1"
+          # No go.sum at the repo root; the default dependency cache only warns.
+          cache: false
 
       - name: Install protoc
         run: |
@@ -137,17 +145,28 @@ jobs:
           path: target/release/sp1-test-cluster
           retention-days: 3
 
-  # PRs run the smoke tier on a g6.4xlarge; pushes to main and manual dispatches run
-  # the full tier on a g6.8xlarge — its 128GB RAM is required because gnark's plonk
-  # wrap peaks at ~57GB scenario RSS (measured) and livelocks on 64GB machines.
+  # Both tiers run on every event for now, to prove the full tier is stable before it
+  # becomes post-merge-only. smoke gives a fast signal on a g6.4xlarge; full needs the
+  # g6.8xlarge's 128GB RAM because gnark's plonk wrap peaks at ~57GB scenario RSS
+  # (measured) and livelocks on 64GB machines.
   e2e-gpu:
-    name: E2E ${{ github.event_name == 'pull_request' && 'smoke' || 'full' }} (gpu flavor)
+    name: E2E ${{ matrix.tier }} (gpu flavor)
     needs: build-e2e
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 60 || 240 }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tier: smoke
+            family: g6.4xlarge
+            timeout: 60
+          - tier: full
+            family: g6.8xlarge
+            timeout: 240
     runs-on:
       [
         "runs-on",
-        "family=${{ github.event_name == 'pull_request' && 'g6.4xlarge' || 'g6.8xlarge' }}",
+        "family=${{ matrix.family }}",
         "hdd=200",
         "ami=ami-0a63dc9cb9e934ba3",
         "spot=false",
@@ -212,11 +231,24 @@ jobs:
           echo "--- CUDA libs resolved by the suite binary ---"
           ldd ./sp1-test-cluster | grep -Ei "cuda|nvrtc|nvtools|not found" || echo "no cuda-related dynamic deps"
 
+      # ~/.sp1/circuits holds the plonk/groth16 trusted-setup artifacts (a multi-GB
+      # download). They only change when the sp1-sdk release changes (the sdk pins
+      # SP1_CIRCUIT_VERSION), so key on that version instead of the whole Cargo.lock:
+      # unrelated dep bumps keep the hit exact, and an exact hit also skips the
+      # post-job cache upload.
+      - name: Compute circuit cache key
+        id: sp1
+        run: |
+          version=$(awk '/^name = "sp1-sdk"$/ {found=1} found && /^version = / {gsub(/"/, "", $3); print $3; exit}' Cargo.lock)
+          echo "sp1-sdk version: $version"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: circuit-artifacts-cache
         uses: actions/cache@v3
         with:
           path: ~/.sp1/circuits
-          key: sp1-circuits-${{ hashFiles('Cargo.lock') }}
+          key: sp1-circuits-${{ steps.sp1.outputs.version }}
           restore-keys: sp1-circuits-
 
       # Scenarios pull these via testcontainers; parallel cold pulls have hit docker
@@ -241,11 +273,11 @@ jobs:
       - name: Run suite
         run: |
           chmod +x ./sp1-test-cluster
-          ./sp1-test-cluster suite ${{ github.event_name == 'pull_request' && 'smoke' || 'full' }}
+          ./sp1-test-cluster suite ${{ matrix.tier }}
 
       - name: Upload scenario logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-${{ github.event_name == 'pull_request' && 'smoke' || 'full' }}-gpu-logs
+          name: e2e-${{ matrix.tier }}-gpu-logs
           path: target/test-cluster-logs/
