@@ -87,9 +87,13 @@ runs:
     - name: Pre-pull container images
       shell: bash
       run: |
-        # Heal the daemon if an earlier package op restarted it into a broken state.
-        sudo mkdir -p /var/lib/docker/tmp
-        docker info >/dev/null 2>&1 || sudo systemctl restart docker
+        # The runner's docker data-root lives on the ephemeral RAID and has shipped with
+        # corrupt overlay state (layer registration / GetImageBlob failures on every
+        # pull). Re-initialize it from scratch before pulling anything.
+        sudo systemctl stop docker
+        sudo rm -rf /var/lib/docker/* 2>/dev/null || true
+        sudo systemctl start docker
+        docker info >/dev/null
         for img in bitnamisecure/redis:latest bitnamisecure/postgresql:latest minio/minio:latest; do
           for attempt in 1 2 3; do
             docker pull -q "$img" && break
