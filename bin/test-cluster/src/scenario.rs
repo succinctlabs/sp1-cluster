@@ -39,10 +39,24 @@ pub type ScenarioFuture = Pin<Box<dyn std::future::Future<Output = anyhow::Resul
 /// differences live inside the scenario bodies (cluster shape, workload size).
 pub struct Scenario {
     pub name: &'static str,
-    /// Hard per-scenario timeout enforced by the suite runner (generous: first runs
-    /// include circuit-artifact downloads).
-    pub timeout: Duration,
+    /// Hard timeout on the cpu-only flavor, enforced by the suite runner. Generous:
+    /// CPU proving is slow, and first runs include circuit-artifact downloads.
+    pub cpu_timeout: Duration,
+    /// Hard timeout on the gpu flavor. Tight on purpose: GPU proving is fast (full-tier
+    /// scenarios measure ~15s-10m on a g6.8xlarge), and the historical GPU failure mode
+    /// is a wedged worker that never registers — that should fail the suite in minutes,
+    /// not consume the job timeout.
+    pub gpu_timeout: Duration,
     pub run: fn() -> ScenarioFuture,
+}
+
+impl Scenario {
+    pub fn timeout(&self, flavor: Flavor) -> Duration {
+        match flavor {
+            Flavor::Gpu => self.gpu_timeout,
+            Flavor::CpuOnly => self.cpu_timeout,
+        }
+    }
 }
 
 /// Smoke tier is an explicit per-flavor list (spec Section 2 "Tiers"). Proof modes are
@@ -81,7 +95,8 @@ mod tests {
     fn dummy(name: &'static str) -> Scenario {
         Scenario {
             name,
-            timeout: Duration::from_secs(1),
+            cpu_timeout: Duration::from_secs(1),
+            gpu_timeout: Duration::from_secs(1),
             run: || Box::pin(async { Ok(()) }),
         }
     }

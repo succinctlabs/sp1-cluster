@@ -22,25 +22,29 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             name: "proof-mode-core",
-            timeout: Duration::from_secs(30 * 60),
+            cpu_timeout: Duration::from_secs(30 * 60),
+            gpu_timeout: Duration::from_secs(10 * 60),
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Core)) },
         },
         Scenario {
             name: "proof-mode-compressed",
-            timeout: Duration::from_secs(30 * 60),
+            cpu_timeout: Duration::from_secs(30 * 60),
+            gpu_timeout: Duration::from_secs(10 * 60),
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Compressed)) },
         },
         Scenario {
             name: "proof-mode-plonk",
-            timeout: Duration::from_secs(2 * 60 * 60),
-            // KNOWN ISSUE: the plonk wrap has wedged silently on a g6.4xlarge runner
-            // (zero log output for 2h after ShrinkWrap; groth16's finalize takes ~112s
-            // on the same path). Needs prover-side investigation or more runner RAM.
+            // gnark's plonk.Prove peaks at ~57GB scenario RSS and takes ~5min when RAM
+            // is plentiful; on <64GB machines it livelocks silently (kernel reclaim /
+            // Go GC thrash), which is why the full tier runs on a 128GB g6.8xlarge.
+            cpu_timeout: Duration::from_secs(2 * 60 * 60),
+            gpu_timeout: Duration::from_secs(10 * 60),
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Plonk)) },
         },
         Scenario {
             name: "proof-mode-groth16",
-            timeout: Duration::from_secs(60 * 60),
+            cpu_timeout: Duration::from_secs(60 * 60),
+            gpu_timeout: Duration::from_secs(10 * 60),
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Groth16)) },
         },
     ]

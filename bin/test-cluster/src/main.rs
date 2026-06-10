@@ -51,7 +51,10 @@ async fn main() -> anyhow::Result<()> {
     match cmd {
         Cmd::List => {
             for s in scenarios::all() {
-                println!("{:<24} timeout={:?}", s.name, s.timeout);
+                println!(
+                    "{:<24} cpu_timeout={:?} gpu_timeout={:?}",
+                    s.name, s.cpu_timeout, s.gpu_timeout
+                );
             }
             Ok(())
         }

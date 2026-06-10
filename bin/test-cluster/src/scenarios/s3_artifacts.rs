@@ -12,7 +12,8 @@ use sp1_cluster_common::proto::ProofRequestStatus;
 pub fn scenario() -> Scenario {
     Scenario {
         name: "s3-artifacts",
-        timeout: Duration::from_secs(90 * 60),
+        cpu_timeout: Duration::from_secs(90 * 60),
+        gpu_timeout: Duration::from_secs(20 * 60),
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }

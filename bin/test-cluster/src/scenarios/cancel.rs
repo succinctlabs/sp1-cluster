@@ -16,12 +16,14 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             name: "cancel-pending",
-            timeout: Duration::from_secs(20 * 60),
+            cpu_timeout: Duration::from_secs(20 * 60),
+            gpu_timeout: Duration::from_secs(10 * 60),
             run: || -> ScenarioFuture { Box::pin(run_pending()) },
         },
         Scenario {
             name: "cancel-active",
-            timeout: Duration::from_secs(45 * 60),
+            cpu_timeout: Duration::from_secs(45 * 60),
+            gpu_timeout: Duration::from_secs(10 * 60),
             run: || -> ScenarioFuture { Box::pin(run_active()) },
         },
     ]

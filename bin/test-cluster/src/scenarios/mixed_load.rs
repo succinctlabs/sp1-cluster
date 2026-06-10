@@ -13,7 +13,8 @@ use sp1_cluster_common::proto::ProofRequestStatus;
 pub fn scenario() -> Scenario {
     Scenario {
         name: "mixed-load",
-        timeout: Duration::from_secs(90 * 60),
+        cpu_timeout: Duration::from_secs(90 * 60),
+        gpu_timeout: Duration::from_secs(20 * 60),
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }

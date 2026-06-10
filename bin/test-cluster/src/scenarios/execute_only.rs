@@ -16,7 +16,8 @@ const EXPECTED_FIBONACCI_GAS: u64 = 20173;
 pub fn scenario() -> Scenario {
     Scenario {
         name: "execute-only",
-        timeout: Duration::from_secs(45 * 60),
+        cpu_timeout: Duration::from_secs(45 * 60),
+        gpu_timeout: Duration::from_secs(10 * 60),
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }

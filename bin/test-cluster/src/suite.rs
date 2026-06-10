@@ -32,10 +32,11 @@ pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<b
         let log_path = logs_dir.join(format!("{}.log", s.name));
         let log = std::fs::File::create(&log_path)
             .with_context(|| format!("create {}", log_path.display()))?;
+        let timeout = s.timeout(flavor);
         tracing::info!(
             "=== running scenario {} (timeout {:?}) ===",
             s.name,
-            s.timeout
+            timeout
         );
         let started = Instant::now();
         let mut child = tokio::process::Command::new(&exe)
@@ -47,7 +48,7 @@ pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<b
             .spawn()
             .with_context(|| format!("spawn scenario {}", s.name))?;
 
-        let outcome = match tokio::time::timeout(s.timeout, child.wait()).await {
+        let outcome = match tokio::time::timeout(timeout, child.wait()).await {
             Ok(Ok(status)) if status.success() => Outcome::Pass,
             Ok(Ok(_)) => Outcome::Fail,
             Ok(Err(e)) => return Err(e).context("wait for scenario child"),

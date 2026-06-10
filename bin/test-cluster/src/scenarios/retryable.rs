@@ -12,7 +12,8 @@ use sp1_cluster_common::proto::ProofRequestStatus;
 pub fn scenario() -> Scenario {
     Scenario {
         name: "retryable-then-success",
-        timeout: Duration::from_secs(45 * 60),
+        cpu_timeout: Duration::from_secs(45 * 60),
+        gpu_timeout: Duration::from_secs(10 * 60),
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
