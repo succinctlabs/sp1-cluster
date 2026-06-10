@@ -14,6 +14,7 @@ pub fn scenario() -> Scenario {
         name: "coordinator-restart",
         flavors: Flavors::Both,
         timeout: Duration::from_secs(60 * 60),
+        skip_in_full: false,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }

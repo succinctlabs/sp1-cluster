@@ -63,6 +63,9 @@ pub struct Scenario {
     /// Hard per-scenario timeout enforced by the suite runner (generous: first runs
     /// include circuit-artifact downloads).
     pub timeout: Duration,
+    /// Excluded from `suite full` (still runnable via `run <name>`): for scenarios with
+    /// known environment-level blockers, with the reason documented at the definition.
+    pub skip_in_full: bool,
     pub run: fn() -> ScenarioFuture,
 }
 
@@ -91,7 +94,10 @@ pub fn resolve(all: &[Scenario], tier: Tier, flavor: Flavor) -> Vec<&Scenario> {
                     .unwrap_or_else(|| panic!("smoke scenario {name} not in registry"))
             })
             .collect(),
-        Tier::Full => all.iter().filter(|s| s.flavors.supports(flavor)).collect(),
+        Tier::Full => all
+            .iter()
+            .filter(|s| s.flavors.supports(flavor) && !s.skip_in_full)
+            .collect(),
     }
 }
 
@@ -104,6 +110,7 @@ mod tests {
             name,
             flavors,
             timeout: Duration::from_secs(1),
+            skip_in_full: false,
             run: || Box::pin(async { Ok(()) }),
         }
     }

@@ -24,26 +24,33 @@ pub fn scenarios() -> Vec<Scenario> {
             name: "proof-mode-core",
             flavors: Flavors::Both,
             timeout: Duration::from_secs(30 * 60),
+            skip_in_full: false,
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Core)) },
         },
         Scenario {
             name: "proof-mode-compressed",
             flavors: Flavors::Both,
             timeout: Duration::from_secs(30 * 60),
+            skip_in_full: false,
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Compressed)) },
         },
         Scenario {
             name: "proof-mode-plonk",
             flavors: Flavors::Both,
-            // The plonk wrap (proving-key build + prove) ran >56 min on a 16-vCPU
-            // g6.4xlarge; give it real headroom.
             timeout: Duration::from_secs(2 * 60 * 60),
+            // The plonk wrap wedges silently on the g6.4xlarge runner (zero log output
+            // for 2h after ShrinkWrap completes; gnark plonk SRS/pk load on 64GB RAM).
+            // groth16 on the same finalize path takes ~112s. Excluded from `suite full`
+            // until the prover-side hang is understood or the runner gets more RAM;
+            // still runnable manually via `run proof-mode-plonk`.
+            skip_in_full: true,
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Plonk)) },
         },
         Scenario {
             name: "proof-mode-groth16",
             flavors: Flavors::Both,
             timeout: Duration::from_secs(60 * 60),
+            skip_in_full: false,
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Groth16)) },
         },
     ]
