@@ -22,6 +22,7 @@ jobs:
       [
         "runs-on",
         "runner=32cpu-linux-x64",
+        "hdd=200",
         "run-id=${{ github.run_id }}",
         "spot=false",
         "tag=build-e2e",
