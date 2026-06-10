@@ -129,6 +129,11 @@ build {
   provisioner "shell" {
     environment_vars = ["DEBIAN_FRONTEND=noninteractive"]
     inline = [
+      # First boot races cloud-init: it is still writing /etc/apt/sources.list when
+      # packer connects, so an early apt-get update fetches nothing and every install
+      # after it fails with "no installation candidate". Wait it out (|| true: a
+      # degraded-but-done boot is fine for a bake — anything real fails loudly below).
+      "cloud-init status --wait || true",
       "sudo apt-get update",
       "sudo apt-get upgrade -y",
       "sudo apt-get install -y --no-install-recommends openssl libssl-dev pkg-config build-essential libclang-dev python3-pip diffutils gcc m4 make libnvtoolsext1 wget tar unzip git curl openssh-client ca-certificates gnupg linux-headers-generic",
@@ -146,6 +151,8 @@ build {
     pause_before     = "15s"
     environment_vars = ["DEBIAN_FRONTEND=noninteractive"]
     inline = [
+      # Same cloud-init race applies to the post-reboot boot.
+      "cloud-init status --wait || true",
       # docker (upstream repo, same set the previous runner AMI carried)
       "sudo install -m 0755 -d /etc/apt/keyrings",
       "sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc",
