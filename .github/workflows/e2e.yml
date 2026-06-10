@@ -210,6 +210,15 @@ jobs:
             done
           done
 
+      # The worker budgets its concurrency by min(RAM, /dev/shm) (crates/worker's
+      # limiter; execution children mmap buffers into that tmpfs). The kernel default
+      # tmpfs is 50% of RAM — 60GB on the g6.8xlarge — and PlonkWrap (task weight 60)
+      # can never schedule next to the Controller (weight 1) under a 60 budget: the
+      # plonk scenario hangs forever at 1/60 utilization. Size it to RAM, the same
+      # contract the prod node containers get via shm_size.
+      - name: Size /dev/shm to RAM
+        run: sudo mount -o remount,size=100% /dev/shm && df -h /dev/shm
+
       - name: Run suite
         run: |
           chmod +x ./sp1-test-cluster
