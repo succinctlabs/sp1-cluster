@@ -23,6 +23,19 @@ runs:
         fi
         echo "LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
 
+    # The GPU worker has wedged at prover init on these runners without a clear error.
+    # Print the device/driver/linkage state up front so a wedge is diagnosable from the
+    # job log alone.
+    - name: GPU diagnostics
+      shell: bash
+      run: |
+        echo "--- nvidia-smi ---"; nvidia-smi || echo "nvidia-smi FAILED (driver not ready?)"
+        echo "--- device nodes ---"; ls -l /dev/nvidia* 2>&1 || true
+        echo "--- nvidia kernel modules ---"; lsmod | grep -i nvidia || echo "no nvidia modules loaded"
+        echo "--- CUDA libs resolved by the suite binary ---"
+        BIN=$(find . -name sp1-test-cluster -type f 2>/dev/null | head -1)
+        [ -n "$BIN" ] && (LD_LIBRARY_PATH=/usr/local/cuda/lib64 ldd "$BIN" | grep -Ei "cuda|nvrtc|nvtools|not found" || echo "no cuda-related dynamic deps")
+
     - name: circuit-artifacts-cache
       uses: actions/cache@v3
       with:
