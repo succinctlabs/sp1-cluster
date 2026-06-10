@@ -18,14 +18,12 @@ pub fn scenarios() -> Vec<Scenario> {
             name: "cancel-pending",
             flavors: Flavors::Both,
             timeout: Duration::from_secs(20 * 60),
-            skip_in_full: false,
             run: || -> ScenarioFuture { Box::pin(run_pending()) },
         },
         Scenario {
             name: "cancel-active",
             flavors: Flavors::Both,
             timeout: Duration::from_secs(45 * 60),
-            skip_in_full: false,
             run: || -> ScenarioFuture { Box::pin(run_active()) },
         },
     ]
