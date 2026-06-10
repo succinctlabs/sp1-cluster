@@ -13,7 +13,6 @@ pub fn scenario() -> Scenario {
     Scenario {
         name: "retryable-then-success",
         timeout: Duration::from_secs(45 * 60),
-        skip_in_full: false,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }

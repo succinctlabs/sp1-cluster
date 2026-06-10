@@ -42,9 +42,6 @@ pub struct Scenario {
     /// Hard per-scenario timeout enforced by the suite runner (generous: first runs
     /// include circuit-artifact downloads).
     pub timeout: Duration,
-    /// Excluded from `suite full` (still runnable via `run <name>`): for scenarios with
-    /// known environment-level blockers, with the reason documented at the definition.
-    pub skip_in_full: bool,
     pub run: fn() -> ScenarioFuture,
 }
 
@@ -73,7 +70,7 @@ pub fn resolve(all: &[Scenario], tier: Tier, flavor: Flavor) -> Vec<&Scenario> {
                     .unwrap_or_else(|| panic!("smoke scenario {name} not in registry"))
             })
             .collect(),
-        Tier::Full => all.iter().filter(|s| !s.skip_in_full).collect(),
+        Tier::Full => all.iter().collect(),
     }
 }
 
@@ -85,21 +82,18 @@ mod tests {
         Scenario {
             name,
             timeout: Duration::from_secs(1),
-            skip_in_full: false,
             run: || Box::pin(async { Ok(()) }),
         }
     }
 
     #[test]
-    fn full_tier_excludes_skipped_scenarios() {
-        let mut skipped = dummy("b");
-        skipped.skip_in_full = true;
-        let all = vec![dummy("a"), skipped, dummy("c")];
+    fn full_tier_includes_everything() {
+        let all = vec![dummy("a"), dummy("b"), dummy("c")];
         let names: Vec<_> = resolve(&all, Tier::Full, Flavor::Gpu)
             .iter()
             .map(|s| s.name)
             .collect();
-        assert_eq!(names, vec!["a", "c"]);
+        assert_eq!(names, vec!["a", "b", "c"]);
     }
 
     #[test]

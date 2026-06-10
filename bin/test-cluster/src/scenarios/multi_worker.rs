@@ -13,7 +13,6 @@ pub fn scenario() -> Scenario {
     Scenario {
         name: "multi-worker",
         timeout: Duration::from_secs(60 * 60),
-        skip_in_full: false,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }

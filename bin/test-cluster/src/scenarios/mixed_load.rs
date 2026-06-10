@@ -14,7 +14,6 @@ pub fn scenario() -> Scenario {
     Scenario {
         name: "mixed-load",
         timeout: Duration::from_secs(90 * 60),
-        skip_in_full: false,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
