@@ -67,11 +67,13 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.35
         with:
           cuda: "12.8.1"
-          # The local .run installer is ~4GB: don't let it churn the GitHub cache
-          # (it would evict the rust cache), and the runners are ephemeral so a
-          # local tool cache never survives anyway.
-          use-github-cache: false
-          use-local-cache: false
+          # Versioned apt packages from NVIDIA's repo instead of the ~4GB local
+          # runfile. The build only compiles and statically device-links kernels:
+          # nvcc, cudart-dev (cuda_runtime.h, libcudart, libcudadevrt, cccl/cub),
+          # and nvtx for the CUDA::nvToolsExt CMake target sppark links on CUDA < 13.
+          # (nvcc pulls the other two transitively; listed to document the need.)
+          method: network
+          sub-packages: '["nvcc", "cudart-dev", "nvtx"]'
 
       # Needed by sp1-recursion-gnark-ffi's build.rs (native-gnark builds a Go library).
       - name: Install Go
