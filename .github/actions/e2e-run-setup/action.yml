@@ -4,17 +4,22 @@ description: Runtime-only setup for GPU e2e jobs running the prebuilt suite bina
 runs:
   using: composite
   steps:
-    # The prebuilt binary links libcudart dynamically; install just the CUDA runtime
-    # (the GPU AMI provides the driver). Tiny compared to the full toolkit.
+    # The prover needs the full CUDA RUNTIME library set, not just cudart: it does
+    # runtime kernel codegen via NVRTC and uses NVTX — same reason the node's runtime
+    # image is nvidia/cuda:13.0.1-runtime (see infra/Dockerfile.node_gpu). Without
+    # libnvrtc the GPU worker wedges during prover init and never registers, and every
+    # scenario times out waiting for workers. cuda-libraries-13-0 is the runtime
+    # metapackage (cudart+nvrtc+cublas+...), still far smaller than the toolkit; the
+    # GPU AMI provides the driver.
     - name: Install CUDA runtime libraries
       shell: bash
       run: |
-        if ! ldconfig -p | grep -q libcudart.so.13; then
+        if ! ldconfig -p | grep -q libnvrtc.so.13; then
           repo="ubuntu$(. /etc/os-release; echo ${VERSION_ID//./})"
           wget -q "https://developer.download.nvidia.com/compute/cuda/repos/${repo}/x86_64/cuda-keyring_1.1-1_all.deb"
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cuda-cudart-13-0
+          sudo apt-get install -y -qq cuda-libraries-13-0 libnvtoolsext1
         fi
         echo "LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
 
