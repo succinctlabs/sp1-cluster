@@ -65,6 +65,9 @@ pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<b
             outcome,
             duration
         );
+        if outcome != Outcome::Pass {
+            print_log_tail(&log_path, s.name, 200);
+        }
         results.push(ScenarioResult {
             name: s.name,
             outcome,
@@ -75,6 +78,28 @@ pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<b
 
     println!("{}", render_table(&results));
     Ok(results.iter().all(|r| r.outcome == Outcome::Pass))
+}
+
+/// Dump the tail of a failed scenario's log to stdout so CI failures are diagnosable
+/// inline, without downloading the log artifact.
+fn print_log_tail(path: &std::path::Path, name: &str, max_lines: usize) {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(max_lines);
+            println!(
+                "\n===== {name} FAILED — last {} of {} log lines ({}) =====",
+                lines.len() - start,
+                lines.len(),
+                path.display()
+            );
+            for line in &lines[start..] {
+                println!("{line}");
+            }
+            println!("===== end of {name} log =====\n");
+        }
+        Err(e) => println!("could not read scenario log {}: {e}", path.display()),
+    }
 }
 
 pub fn render_table(results: &[ScenarioResult]) -> String {
