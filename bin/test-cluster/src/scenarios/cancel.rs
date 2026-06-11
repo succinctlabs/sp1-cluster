@@ -16,14 +16,14 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             name: "cancel-pending",
-            cpu_timeout: Duration::from_secs(20 * 60),
-            gpu_timeout: Duration::from_secs(10 * 60),
+            cpu_timeout: Duration::from_mins(20),
+            gpu_timeout: Duration::from_mins(10),
             run: || -> ScenarioFuture { Box::pin(run_pending()) },
         },
         Scenario {
             name: "cancel-active",
-            cpu_timeout: Duration::from_secs(45 * 60),
-            gpu_timeout: Duration::from_secs(10 * 60),
+            cpu_timeout: Duration::from_mins(45),
+            gpu_timeout: Duration::from_mins(10),
             run: || -> ScenarioFuture { Box::pin(run_active()) },
         },
     ]
@@ -50,7 +50,7 @@ async fn run_pending() -> anyhow::Result<()> {
     wait_stats(
         &mut coordinator,
         "request claimed into the queue",
-        Duration::from_secs(2 * 60),
+        Duration::from_mins(2),
         |s| s.active_proofs > 0,
     )
     .await?;
@@ -67,7 +67,7 @@ async fn run_pending() -> anyhow::Result<()> {
         &api,
         &proof_id,
         ProofRequestStatus::Cancelled,
-        Duration::from_secs(60),
+        Duration::from_mins(1),
     )
     .await?;
     anyhow::ensure!(pr.proof_status() == ProofRequestStatus::Cancelled);
@@ -76,7 +76,7 @@ async fn run_pending() -> anyhow::Result<()> {
     wait_stats(
         &mut coordinator,
         "queued work dropped after cancel",
-        Duration::from_secs(2 * 60),
+        Duration::from_mins(2),
         |s| s.active_proofs == 0 && s.active_tasks == 0,
     )
     .await?;
@@ -114,7 +114,7 @@ async fn run_active() -> anyhow::Result<()> {
     wait_stats(
         &mut coordinator,
         "proof actively running",
-        Duration::from_secs(5 * 60),
+        Duration::from_mins(5),
         |s| s.active_tasks > 0,
     )
     .await?;
@@ -125,7 +125,7 @@ async fn run_active() -> anyhow::Result<()> {
         &api,
         &proof_id,
         ProofRequestStatus::Cancelled,
-        Duration::from_secs(60),
+        Duration::from_mins(1),
     )
     .await?;
 
@@ -133,7 +133,7 @@ async fn run_active() -> anyhow::Result<()> {
     wait_stats(
         &mut coordinator,
         "active work drained after cancel",
-        Duration::from_secs(5 * 60),
+        Duration::from_mins(5),
         |s| s.active_proofs == 0 && s.active_tasks == 0,
     )
     .await?;

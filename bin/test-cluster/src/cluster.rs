@@ -33,7 +33,7 @@ pub const MINIO_BUCKET: &str = "sp1-test-cluster-artifacts";
 
 /// How long `start()` waits for all requested workers to register with the coordinator.
 /// Generous: CPU nodes download groth16+plonk circuit artifacts before connecting.
-const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const WORKER_READY_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// Marker bound for everything the cluster needs from an artifact store.
 pub trait StoreClient: ArtifactClient + CompressedUpload + Clone {}
@@ -136,7 +136,7 @@ impl<A: StoreClient> Cluster<A> {
         tracing::info!("stopping component {name} (cancel + await)");
         c.token.cancel();
         if let Some(handle) = c.handle.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(60), handle).await;
+            let _ = tokio::time::timeout(Duration::from_mins(1), handle).await;
         }
         Ok(())
     }
@@ -171,7 +171,7 @@ impl<A: StoreClient> Cluster<A> {
         self.root.cancel();
         for (name, c) in self.components.drain() {
             let Some(handle) = c.handle else { continue };
-            match tokio::time::timeout(Duration::from_secs(60), handle).await {
+            match tokio::time::timeout(Duration::from_mins(1), handle).await {
                 Ok(_) => tracing::info!("component {name} exited"),
                 Err(_) => tracing::warn!("component {name} did not exit within 60s"),
             }

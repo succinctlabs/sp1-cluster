@@ -16,8 +16,8 @@ const EXPECTED_FIBONACCI_GAS: u64 = 20173;
 pub fn scenario() -> Scenario {
     Scenario {
         name: "execute-only",
-        cpu_timeout: Duration::from_secs(45 * 60),
-        gpu_timeout: Duration::from_secs(10 * 60),
+        cpu_timeout: Duration::from_mins(45),
+        gpu_timeout: Duration::from_mins(10),
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -54,7 +54,7 @@ async fn run() -> anyhow::Result<()> {
         &api,
         &proof_id,
         ProofRequestStatus::Completed,
-        Duration::from_secs(10 * 60),
+        Duration::from_mins(10),
     )
     .await?;
     let er = assert_execution_result(
@@ -87,7 +87,7 @@ async fn run() -> anyhow::Result<()> {
         &api,
         &fail_id,
         ProofRequestStatus::Failed,
-        Duration::from_secs(10 * 60),
+        Duration::from_mins(10),
     )
     .await?;
     let er = assert_execution_result(

@@ -12,8 +12,8 @@ use sp1_cluster_common::proto::ProofRequestStatus;
 pub fn scenario() -> Scenario {
     Scenario {
         name: "worker-restart",
-        cpu_timeout: Duration::from_secs(60 * 60),
-        gpu_timeout: Duration::from_secs(10 * 60),
+        cpu_timeout: Duration::from_mins(60),
+        gpu_timeout: Duration::from_mins(10),
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -38,7 +38,7 @@ async fn run() -> anyhow::Result<()> {
         &api,
         &proof_a,
         ProofRequestStatus::Completed,
-        Duration::from_secs(30 * 60),
+        Duration::from_mins(30),
     )
     .await?;
     tracing::info!("proof A completed; restarting cpu worker gracefully");
@@ -47,7 +47,7 @@ async fn run() -> anyhow::Result<()> {
     wait_stats(
         &mut coordinator,
         "stopped worker deregistered",
-        Duration::from_secs(2 * 60),
+        Duration::from_mins(2),
         |s| s.cpu_workers == 0,
     )
     .await?;
@@ -55,7 +55,7 @@ async fn run() -> anyhow::Result<()> {
     wait_stats(
         &mut coordinator,
         "worker re-registered",
-        Duration::from_secs(10 * 60),
+        Duration::from_mins(10),
         |s| s.cpu_workers >= 1,
     )
     .await?;
@@ -71,7 +71,7 @@ async fn run() -> anyhow::Result<()> {
         &api,
         &proof_b,
         ProofRequestStatus::Completed,
-        Duration::from_secs(30 * 60),
+        Duration::from_mins(30),
     )
     .await?;
     assert_proof_artifact_downloadable(&pr, &cluster.artifact_client()).await?;

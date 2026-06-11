@@ -13,8 +13,8 @@ use sp1_cluster_common::proto::ProofRequestStatus;
 pub fn scenario() -> Scenario {
     Scenario {
         name: "fatal-failure",
-        cpu_timeout: Duration::from_secs(45 * 60),
-        gpu_timeout: Duration::from_secs(10 * 60),
+        cpu_timeout: Duration::from_mins(45),
+        gpu_timeout: Duration::from_mins(10),
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -42,7 +42,7 @@ async fn run() -> anyhow::Result<()> {
         &api,
         &proof_id,
         ProofRequestStatus::Failed,
-        Duration::from_secs(15 * 60),
+        Duration::from_mins(15),
     )
     .await?;
     let extra_data = pr

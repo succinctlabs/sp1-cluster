@@ -12,8 +12,8 @@ use sp1_cluster_common::proto::ProofRequestStatus;
 pub fn scenario() -> Scenario {
     Scenario {
         name: "api-outage",
-        cpu_timeout: Duration::from_secs(90 * 60),
-        gpu_timeout: Duration::from_secs(20 * 60),
+        cpu_timeout: Duration::from_mins(90),
+        gpu_timeout: Duration::from_mins(20),
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -38,7 +38,7 @@ async fn run() -> anyhow::Result<()> {
     wait_stats(
         &mut coordinator,
         "proof actively running",
-        Duration::from_secs(5 * 60),
+        Duration::from_mins(5),
         |s| s.active_tasks > 0,
     )
     .await?;
@@ -58,7 +58,7 @@ async fn run() -> anyhow::Result<()> {
         &api,
         &proof_id,
         ProofRequestStatus::Completed,
-        Duration::from_secs(60 * 60),
+        Duration::from_mins(60),
     )
     .await?;
     assert_proof_artifact_downloadable(&pr, &cluster.artifact_client()).await?;

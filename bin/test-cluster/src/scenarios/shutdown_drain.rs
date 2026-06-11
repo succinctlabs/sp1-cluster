@@ -11,8 +11,8 @@ use crate::scenarios::long_program;
 pub fn scenario() -> Scenario {
     Scenario {
         name: "shutdown-drain",
-        cpu_timeout: Duration::from_secs(45 * 60),
-        gpu_timeout: Duration::from_secs(10 * 60),
+        cpu_timeout: Duration::from_mins(45),
+        gpu_timeout: Duration::from_mins(10),
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -36,7 +36,7 @@ async fn run() -> anyhow::Result<()> {
     wait_stats(
         &mut coordinator,
         "proof actively running",
-        Duration::from_secs(5 * 60),
+        Duration::from_mins(5),
         |s| s.active_tasks > 0,
     )
     .await?;

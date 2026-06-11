@@ -167,7 +167,7 @@ mod tests {
             ScenarioResult {
                 name: "execute-only",
                 outcome: Outcome::Timeout,
-                duration: Duration::from_secs(2700),
+                duration: Duration::from_mins(45),
                 log_path: "target/test-cluster-logs/execute-only.log".into(),
             },
         ];

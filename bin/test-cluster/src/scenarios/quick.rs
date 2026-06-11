@@ -12,8 +12,8 @@ use sp1_cluster_common::proto::ProofRequestStatus;
 pub fn scenario() -> Scenario {
     Scenario {
         name: "quick",
-        cpu_timeout: Duration::from_secs(45 * 60),
-        gpu_timeout: Duration::from_secs(10 * 60),
+        cpu_timeout: Duration::from_mins(45),
+        gpu_timeout: Duration::from_mins(10),
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -48,7 +48,7 @@ async fn run() -> anyhow::Result<()> {
             &api,
             proof_id,
             ProofRequestStatus::Completed,
-            Duration::from_secs(5 * 60),
+            Duration::from_mins(5),
         )
         .await?;
         assert_proof_artifact_downloadable(&pr, &cluster.artifact_client()).await?;

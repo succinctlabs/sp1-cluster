@@ -22,14 +22,14 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             name: "proof-mode-core",
-            cpu_timeout: Duration::from_secs(30 * 60),
-            gpu_timeout: Duration::from_secs(10 * 60),
+            cpu_timeout: Duration::from_mins(30),
+            gpu_timeout: Duration::from_mins(10),
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Core)) },
         },
         Scenario {
             name: "proof-mode-compressed",
-            cpu_timeout: Duration::from_secs(30 * 60),
-            gpu_timeout: Duration::from_secs(10 * 60),
+            cpu_timeout: Duration::from_mins(30),
+            gpu_timeout: Duration::from_mins(10),
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Compressed)) },
         },
         Scenario {
@@ -40,14 +40,14 @@ pub fn scenarios() -> Vec<Scenario> {
             // The wrap alone is ~5min of the 10min gpu budget. NB: PlonkWrap's task
             // weight (60) needs a worker budget >60 to schedule at all — see the
             // /dev/shm sizing step in .github/workflows/e2e.yml.
-            cpu_timeout: Duration::from_secs(2 * 60 * 60),
-            gpu_timeout: Duration::from_secs(10 * 60),
+            cpu_timeout: Duration::from_mins(120),
+            gpu_timeout: Duration::from_mins(10),
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Plonk)) },
         },
         Scenario {
             name: "proof-mode-groth16",
-            cpu_timeout: Duration::from_secs(60 * 60),
-            gpu_timeout: Duration::from_secs(10 * 60),
+            cpu_timeout: Duration::from_mins(60),
+            gpu_timeout: Duration::from_mins(10),
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Groth16)) },
         },
     ]
@@ -74,7 +74,7 @@ async fn run(mode: SP1ProofMode) -> anyhow::Result<()> {
             &api,
             proof_id,
             ProofRequestStatus::Completed,
-            Duration::from_secs(5 * 60),
+            Duration::from_mins(5),
         )
         .await?;
         assert_proof_artifact_downloadable(&pr, &cluster.artifact_client()).await?;
