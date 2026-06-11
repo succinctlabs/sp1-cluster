@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use crate::{config::UsdFloorConfig, metrics::BidderMetrics};
+use crate::{config::UsdBidConfig, metrics::BidderMetrics};
 use alloy::primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::{Context, Result};
@@ -66,19 +66,19 @@ pub struct Bidder {
     aggressive_mode: bool,
     /// Minimum deadline in seconds to bid on (optional safety check, even in aggressive mode)
     min_deadline_secs: Option<u64>,
-    /// USD-pegged bidding parameters. When `usd_floor.enabled`, the bidder polls
-    /// `GetProvePrice` and converts the target to PROVE wei via
-    /// `target * 10^9 / prove_usd_micros`. Otherwise the bidder stays on the static
+    /// USD-denominated bid parameters. `Some` routes bids through the dynamic path
+    /// (poll `GetProvePrice`, convert target to PROVE wei via
+    /// `target * 10^9 / prove_usd_micros`). `None` keeps the bidder on the static
     /// `bid_amount` path.
     ///
-    /// BPGU = 10⁹ PGU; see `UsdFloorConfig` for the unit convention.
-    usd_floor: UsdFloorConfig,
+    /// BPGU = 10⁹ PGU; see `UsdBidConfig` for the unit convention.
+    usd_bid: Option<UsdBidConfig>,
     /// Auction tick in wei per PGU; every bid must be a multiple of this value or the
     /// RPC rejects it. Fetched once at startup — the tick is RPC config, changing
     /// requires a redeploy.
     tick_size: U256,
     /// Cache of the last fetched PROVE/USD price. Populated by the refresh task spawned
-    /// in `run()` when `usd_floor.enabled`.
+    /// in `run()` when the USD bid is enabled.
     prove_usd_cache: Arc<RwLock<Option<ProvePrice>>>,
 }
 
@@ -100,7 +100,7 @@ impl Bidder {
         plonk_enabled: bool,
         aggressive_mode: bool,
         min_deadline_secs: Option<u64>,
-        usd_floor: UsdFloorConfig,
+        usd_bid: Option<UsdBidConfig>,
     ) -> Self {
         Self {
             network,
@@ -118,7 +118,7 @@ impl Bidder {
             plonk_enabled,
             aggressive_mode,
             min_deadline_secs,
-            usd_floor,
+            usd_bid,
             tick_size: U256::ZERO,
             prove_usd_cache: Arc::new(RwLock::new(None)),
         }
@@ -166,7 +166,7 @@ impl Bidder {
 
     /// Returns the bid amount to use for this iteration.
     ///
-    /// Uses the USD-pegged amount when the USD floor is enabled and the cached PROVE/USD
+    /// Uses the dynamic amount when the USD bid is enabled and the cached PROVE/USD
     /// reading is fresh; otherwise falls back to the static `bid_amount`.
     async fn effective_bid_amount(&self) -> U256 {
         let cache_snapshot = self.prove_usd_cache.read().await.as_ref().map(|c| {
@@ -174,14 +174,18 @@ impl Bidder {
             let age_secs = (OffsetDateTime::now_utc() - c.as_of).whole_seconds().max(0) as u64;
             (c.usd_micros, age_secs)
         });
-        let usd_floor = self.usd_floor.enabled.then_some(&self.usd_floor);
-        match bid_amount_outcome(usd_floor, cache_snapshot, self.bid_amount, self.tick_size) {
+        match bid_amount_outcome(
+            self.usd_bid.as_ref(),
+            cache_snapshot,
+            self.bid_amount,
+            self.tick_size,
+        ) {
             BidAmountOutcome::Static(v) => {
-                self.metrics.static_floor_used_total.increment(1);
+                self.metrics.static_bid_used_total.increment(1);
                 v
             }
             BidAmountOutcome::Dynamic(v) => {
-                self.metrics.dynamic_floor_used_total.increment(1);
+                self.metrics.dynamic_bid_used_total.increment(1);
                 v
             }
         }
@@ -209,11 +213,11 @@ impl Bidder {
     /// Spawn a background task that polls `GetProvePrice` on a tick and refreshes the cache.
     /// Keeps the *cache* fresh, not the upstream price (alert on the indexer's
     /// `prove_price_latest_age_seconds` gauge for that).
-    fn spawn_prove_usd_refresh(&self) {
+    fn spawn_prove_usd_refresh(&self, refresh_interval_secs: u64) {
         let cache = self.prove_usd_cache.clone();
         let mut network = self.network.clone();
         let metrics = self.metrics.clone();
-        let mut ticker = interval(Duration::from_secs(self.usd_floor.refresh_interval_secs));
+        let mut ticker = interval(Duration::from_secs(refresh_interval_secs));
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         tokio::spawn(async move {
@@ -231,7 +235,7 @@ impl Bidder {
     pub async fn run(mut self) -> Result<()> {
         info!("starting the bidder");
 
-        // Tick alignment applies to every bid (RPC validates regardless of USD-floor state),
+        // Tick alignment applies to every bid (RPC validates regardless of USD-bid state),
         // so fetch unconditionally. Hard-fail: without the tick, no bid can be safely aligned.
         self.tick_size = fetch_tick_size(&mut self.network.clone())
             .await
@@ -242,9 +246,21 @@ impl Bidder {
         // producing silently-rejected bids.
         validate_bid_amount(self.bid_amount, self.tick_size).context("bid_amount")?;
 
-        if self.usd_floor.enabled {
-            self.prime_prove_usd_cache().await;
-            self.spawn_prove_usd_refresh();
+        match self.usd_bid.as_ref() {
+            Some(bid) => {
+                info!(
+                    target_micros_per_bpgu = bid.target,
+                    refresh_interval_secs = bid.refresh_interval_secs,
+                    staleness_max_secs = bid.staleness_max_secs,
+                    "USD bid enabled; starting dynamic path"
+                );
+                let refresh_interval_secs = bid.refresh_interval_secs;
+                self.prime_prove_usd_cache().await;
+                self.spawn_prove_usd_refresh(refresh_interval_secs);
+            }
+            None => {
+                info!(bid_amount = %self.bid_amount, "USD bid disabled; static-only path");
+            }
         }
 
         // Get the prover.
@@ -459,32 +475,32 @@ enum BidAmountOutcome {
 }
 
 /// Pure logic behind [`Bidder::effective_bid_amount`]. Falls back to `Static(static_bid)`
-/// when the USD floor is disabled, the cache is empty, the cache is stale, or the pricing
+/// when the USD bid is disabled, the cache is empty, the cache is stale, or the pricing
 /// math errors. Only returns `Dynamic(_)` on a fresh cache with successful math.
 ///
 /// `cache_snapshot` is `(prove_usd_micros, age_secs)` captured by the caller — keeps the
 /// helper free of clock types so it can be unit-tested directly.
 fn bid_amount_outcome(
-    usd_floor: Option<&UsdFloorConfig>,
+    usd_bid: Option<&UsdBidConfig>,
     cache_snapshot: Option<(u64, u64)>,
     static_bid: U256,
     tick_size: U256,
 ) -> BidAmountOutcome {
-    let Some(usd_floor) = usd_floor else {
+    let Some(usd_bid) = usd_bid else {
         return BidAmountOutcome::Static(static_bid);
     };
     let Some((prove_usd_micros, age_secs)) = cache_snapshot else {
         return BidAmountOutcome::Static(static_bid);
     };
-    if age_secs >= usd_floor.staleness_max_secs {
+    if age_secs >= usd_bid.staleness_max_secs {
         warn!(
             age_secs,
-            max_secs = usd_floor.staleness_max_secs,
+            max_secs = usd_bid.staleness_max_secs,
             "PROVE/USD cache is stale; falling back to static bid"
         );
         return BidAmountOutcome::Static(static_bid);
     }
-    match spn_pricing::compute_max_price_per_pgu_wei(usd_floor.target, prove_usd_micros) {
+    match spn_pricing::compute_max_price_per_pgu_wei(usd_bid.target, prove_usd_micros) {
         Ok(wei) => {
             // Floor to the tick; sub-tick anchors round to zero and fall back to static.
             let aligned = round_down_to_tick(wei, tick_size);
@@ -492,7 +508,7 @@ fn bid_amount_outcome(
                 warn!(
                     raw_wei = %wei,
                     tick_size = %tick_size,
-                    "USD-anchored bid is below one tick; falling back to static bid"
+                    "dynamic bid is below one tick; falling back to static bid"
                 );
                 return BidAmountOutcome::Static(static_bid);
             }
@@ -501,7 +517,7 @@ fn bid_amount_outcome(
         Err(e) => {
             warn!(
                 error = %e,
-                target_micros_per_bpgu = usd_floor.target,
+                target_micros_per_bpgu = usd_bid.target,
                 prove_usd_micros, "USD→wei conversion failed; falling back to static bid",
             );
             BidAmountOutcome::Static(static_bid)
@@ -551,9 +567,8 @@ mod tests {
     const PROVE_USD_MICROS: u64 = 400_000;
     const EXPECTED_DYNAMIC_WEI: u64 = 500_000_000;
 
-    fn floor(staleness_max_secs: u64) -> UsdFloorConfig {
-        UsdFloorConfig {
-            enabled: true,
+    fn bid_cfg(staleness_max_secs: u64) -> UsdBidConfig {
+        UsdBidConfig {
             target: TARGET_MICROS_PER_BPGU,
             refresh_interval_secs: 60,
             staleness_max_secs,
@@ -569,7 +584,7 @@ mod tests {
 
     /// Helper receives `None` when the feature is off — falls back to static `bid_amount`.
     #[test]
-    fn no_usd_floor_returns_static() {
+    fn no_usd_bid_returns_static() {
         let out = bid_amount_outcome(None, None, static_bid(), TICK_DISABLED);
         assert_eq!(out, BidAmountOutcome::Static(static_bid()));
     }
@@ -577,7 +592,7 @@ mod tests {
     /// Cold start: empty cache → static `bid_amount` until the refresh task seeds it.
     #[test]
     fn missing_cache_returns_static() {
-        let cfg = floor(3600);
+        let cfg = bid_cfg(3600);
         let out = bid_amount_outcome(Some(&cfg), None, static_bid(), TICK_DISABLED);
         assert_eq!(out, BidAmountOutcome::Static(static_bid()));
     }
@@ -585,7 +600,7 @@ mod tests {
     /// Cache older than `staleness_max_secs` → static `bid_amount` (don't act on stale data).
     #[test]
     fn stale_cache_returns_static() {
-        let cfg = floor(60);
+        let cfg = bid_cfg(60);
         let out = bid_amount_outcome(
             Some(&cfg),
             Some((PROVE_USD_MICROS, 120)),
@@ -599,7 +614,7 @@ mod tests {
     /// `spn_pricing::compute_max_price_per_pgu_wei`. Anchor: $0.20/BPGU at PROVE=$0.40 → 500M wei/PGU.
     #[test]
     fn fresh_cache_returns_dynamic() {
-        let cfg = floor(3600);
+        let cfg = bid_cfg(3600);
         let out = bid_amount_outcome(
             Some(&cfg),
             Some((PROVE_USD_MICROS, 10)),
@@ -617,7 +632,7 @@ mod tests {
     /// `fetch_prove_price` rejects non-positive prices, but the branch is kept covered.
     #[test]
     fn math_error_returns_static() {
-        let cfg = floor(3600);
+        let cfg = bid_cfg(3600);
         let out = bid_amount_outcome(Some(&cfg), Some((0, 10)), static_bid(), TICK_DISABLED);
         assert_eq!(out, BidAmountOutcome::Static(static_bid()));
     }
@@ -626,9 +641,9 @@ mod tests {
     #[test]
     fn dynamic_bid_rounds_down_to_tick() {
         // $0.12/BPGU at PROVE=$0.1867 → 642_742_367 wei (not a 10M multiple); floored to 640M.
-        let cfg = UsdFloorConfig {
+        let cfg = UsdBidConfig {
             target: 120_000,
-            ..floor(3600)
+            ..bid_cfg(3600)
         };
         let tick = U256::from(10_000_000u64);
         let out = bid_amount_outcome(Some(&cfg), Some((186_700, 10)), static_bid(), tick);
@@ -638,9 +653,9 @@ mod tests {
     /// Sub-tick anchor rounds to zero → fall back to static rather than submit a zero bid.
     #[test]
     fn sub_tick_dynamic_falls_back_to_static() {
-        let cfg = UsdFloorConfig {
+        let cfg = UsdBidConfig {
             target: 1,
-            ..floor(3600)
+            ..bid_cfg(3600)
         };
         let tick = U256::from(10_000_000u64);
         let out = bid_amount_outcome(Some(&cfg), Some((1_000_000_000, 10)), static_bid(), tick);
