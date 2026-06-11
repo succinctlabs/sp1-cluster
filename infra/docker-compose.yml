@@ -241,8 +241,8 @@ services:
       - BIDDER_BID_AMOUNT=500000000
       # USD-pegged bid floor is enabled by default. USD revenue per PGU stays predictable
       # across PROVE-price moves, and your bids stay within requester price limits.
-      # Override the target via BIDDER_USD_FLOOR__TARGET=<µUSD per BPGU> or opt out
-      # entirely with BIDDER_USD_FLOOR__ENABLED=false (falls back to BIDDER_BID_AMOUNT —
+      # Override the target via BIDDER_USD_FLOOR_TARGET=<µUSD per BPGU> or opt out
+      # entirely with BIDDER_USD_FLOOR_ENABLED=false (falls back to BIDDER_BID_AMOUNT —
       # PROVE revenue is then fixed, but bids can fall outside requester limits when
       # PROVE moves significantly).
     command: ["/bin/sh", "-c", "/bidder"]

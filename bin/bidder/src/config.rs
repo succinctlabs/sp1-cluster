@@ -46,12 +46,12 @@ pub struct Settings {
     ///
     /// BPGU = 10⁹ PGU; the wire-level `max_price_per_pgu` is wei per PGU. BPGU is a
     /// billing-side convenience for stating targets at human scale.
-    #[serde(default)]
+    #[serde(flatten)]
     pub usd_floor: UsdFloorConfig,
 }
 
 /// USD-pegged bidding parameters. Enabled by default with sensible defaults so the bidder
-/// runs USD-pegged out of the box; set `BIDDER_USD_FLOOR__ENABLED=false` to fall back to
+/// runs USD-pegged out of the box; set `BIDDER_USD_FLOOR_ENABLED=false` to fall back to
 /// the static `bid_amount` (wei/PGU) path.
 ///
 /// USD-pegged mode pins your USD revenue per PGU: earnings stay predictable across
@@ -62,17 +62,23 @@ pub struct Settings {
 pub struct UsdFloorConfig {
     /// Master switch. `true` (default) routes bids through the USD-pegged path; `false`
     /// keeps the bidder on the static `bid_amount` path unconditionally.
-    #[serde(default = "default_enabled")]
+    #[serde(rename = "usd_floor_enabled", default = "default_enabled")]
     pub enabled: bool,
     /// USD floor target in µUSD per BPGU (1 BPGU = 10⁹ PGU). Tune to your cost basis.
-    #[serde(default = "default_target")]
+    #[serde(rename = "usd_floor_target", default = "default_target")]
     pub target: u64,
     /// How often to refresh the PROVE/USD cache, in seconds.
-    #[serde(default = "default_refresh_interval_secs")]
+    #[serde(
+        rename = "usd_floor_refresh_interval_secs",
+        default = "default_refresh_interval_secs"
+    )]
     pub refresh_interval_secs: u64,
     /// Cached PROVE/USD older than this is treated as stale; bidder falls back to
     /// `bid_amount` until the cache refreshes.
-    #[serde(default = "default_staleness_max_secs")]
+    #[serde(
+        rename = "usd_floor_staleness_max_secs",
+        default = "default_staleness_max_secs"
+    )]
     pub staleness_max_secs: u64,
 }
 
