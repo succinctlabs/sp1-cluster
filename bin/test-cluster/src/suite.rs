@@ -96,7 +96,9 @@ async fn prefetch_circuit_artifacts(scenarios: &[&Scenario]) {
     ] {
         if scenarios.iter().any(|s| s.name == scenario_name) {
             let started = Instant::now();
-            tracing::info!("prefetching {kind} circuit artifacts (not counted against scenario timeouts)");
+            tracing::info!(
+                "prefetching {kind} circuit artifacts (not counted against scenario timeouts)"
+            );
             match sp1_sdk::install::try_install_circuit_artifacts(kind).await {
                 Ok(_) => {
                     tracing::info!("{kind} circuit artifacts ready in {:?}", started.elapsed())
