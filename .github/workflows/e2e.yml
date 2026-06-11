@@ -11,24 +11,15 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   RUST_LOG: info
 
-# Explicit `shell: bash` (unlike the implicit default) turns on pipefail, which the
-# curl-into-tar installs below rely on.
 defaults:
   run:
     shell: bash
 
-# A superseded push to a PR cancels that PR's in-flight run (the GPU jobs are the
-# expensive part); main pushes always run to completion.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Compile once on a cheap CPU-heavy machine (sp1-gpu-sys needs nvcc but no GPU at
-  # build time); the GPU jobs only run the prebuilt binary, so the expensive GPU
-  # instances spend no time compiling.
-  # The runner AMI (infra/packer/e2e-runner.pkr.hcl) bakes the whole toolchain:
-  # CUDA 12.8 toolkit, gcc-12, Go, protoc, cmake, wild/mold, rustup, docker.
   build-e2e:
     name: Build e2e suite (gpu flavor)
     timeout-minutes: 90
@@ -58,25 +49,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.rustup/
-            target/
-          # v2: CUDA 12.8 + wild changed every crate's fingerprint; don't restore
-          # caches built with the old toolchain/flags.
-          key: e2e-v2-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: e2e-v2-${{ runner.os }}-
+          key: build-e2e-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: build-e2e-${{ runner.os }}-
 
-      - name: Setup Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          # Must match rust-toolchain.toml — stable trips rustc depth-limit errors in alloy.
-          toolchain: nightly-2025-10-15
-          profile: minimal
-          override: true
-
-      # Not stripped: the GPU jobs diagnose scenario failures from backtraces in the
-      # uploaded logs, and those need symbols. Linked with the AMI's wild via the -B
-      # shim (cc's collect2 picks up the `ld` symlink, no clang needed) — the final
-      # link of the huge binary (CUDA fatbins + debug info) is a serial chunk of
-      # every rebuild.
       - name: Build suite binary
         env:
           RUSTFLAGS: -C link-arg=-B/usr/local/libexec/wild
@@ -89,10 +64,6 @@ jobs:
           path: target/release/sp1-test-cluster
           retention-days: 3
 
-  # Both tiers run on every event for now, to prove the full tier is stable before it
-  # becomes post-merge-only. smoke gives a fast signal on a g6.4xlarge; full needs the
-  # g6.8xlarge's 128GB RAM because gnark's plonk wrap peaks at ~57GB scenario RSS
-  # (measured) and livelocks on 64GB machines.
   e2e-gpu:
     name: E2E ${{ matrix.tier }} (gpu flavor)
     needs: build-e2e
@@ -123,46 +94,9 @@ jobs:
           submodules: recursive
           token: ${{ secrets.PRIVATE_PULL_TOKEN }}
 
-      # The AMI bakes the full CUDA 12.8 toolkit (superset of the runtime libraries
-      # the prover needs — cudart, NVRTC for runtime kernel codegen, NVTX), so this
-      # is a guard that no-ops there and only installs if the AMI ever drifts.
-      - name: Install CUDA runtime libraries
-        run: |
-          repo="ubuntu$(. /etc/os-release; echo ${VERSION_ID//./})"
-          wget -q "https://developer.download.nvidia.com/compute/cuda/repos/${repo}/x86_64/cuda-keyring_1.1-1_all.deb"
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt-get update -qq
-          if ! ldconfig -p | grep -q libnvrtc.so.12; then
-            sudo apt-get install -y -qq cuda-libraries-12-8 libnvtoolsext1
-          fi
-          echo "LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+      - name: Size /dev/shm to RAM
+        run: sudo mount -o remount,size=100% /dev/shm && df -h /dev/shm
 
-      # The AMI bakes driver 570 (the LTS branch CUDA 12.8 ships with), so this is a
-      # guard that no-ops there: CUDA 12.x binaries need a driver >= the 565 era, and
-      # anything older (e.g. the old runner AMI's 560) wedges the GPU worker at prover
-      # init. If the driver is ever too old, replace it — purge first, the preinstalled
-      # stack conflicts in apt's resolver (held and interdependent nvidia packages).
-      - name: Install NVIDIA driver
-        run: |
-          DRIVER_MAJOR=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | cut -d. -f1)
-          if [ -z "$DRIVER_MAJOR" ] || [ "$DRIVER_MAJOR" -lt 565 ]; then
-            echo "driver ${DRIVER_MAJOR:-absent} < 565; replacing with nvidia-driver-570"
-            sudo apt-get remove -y --purge 'nvidia-*' 'libnvidia-*' 2>/dev/null || true
-            sudo apt-get autoremove -y -qq || true
-            sudo apt-get install -y --allow-change-held-packages nvidia-driver-570
-            sudo rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
-            sudo modprobe nvidia
-          fi
-          nvidia-smi
-
-      - name: Download suite binary
-        uses: actions/download-artifact@v4
-        with:
-          name: sp1-test-cluster-gpu
-
-      # The GPU worker has wedged at prover init on these runners without a clear
-      # error. Print the device/driver/linkage state up front so a wedge is
-      # diagnosable from the job log alone.
       - name: GPU diagnostics
         run: |
           echo "--- nvidia-smi ---"; nvidia-smi || echo "nvidia-smi FAILED (driver not ready?)"
@@ -171,18 +105,16 @@ jobs:
           echo "--- CUDA libs resolved by the suite binary ---"
           ldd ./sp1-test-cluster | grep -Ei "cuda|nvrtc|nvtools|not found" || echo "no cuda-related dynamic deps"
 
-      # ~/.sp1/circuits holds the plonk/groth16 trusted-setup artifacts (a multi-GB
-      # download). They only change when the sp1-sdk release changes (the sdk pins
-      # SP1_CIRCUIT_VERSION), so key on that version instead of the whole Cargo.lock:
-      # unrelated dep bumps keep the hit exact, and an exact hit also skips the
-      # post-job cache upload.
+      - name: Initialize docker
+        run: |
+          sudo systemctl stop docker
+          sudo rm -rf /var/lib/docker/* 2>/dev/null || true
+          sudo systemctl start docker
+          docker info
+
       - name: Compute circuit cache key
         id: sp1
-        run: |
-          version=$(awk '/^name = "sp1-sdk"$/ {found=1} found && /^version = / {gsub(/"/, "", $3); print $3; exit}' Cargo.lock)
-          echo "sp1-sdk version: $version"
-          test -n "$version"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(awk '/^name = "sp1-sdk"$/ {found=1} found && /^version = / {gsub(/"/, "", $3); print $3; exit}' Cargo.lock)" >> "$GITHUB_OUTPUT"
 
       - name: circuit-artifacts-cache
         uses: actions/cache@v3
@@ -191,33 +123,16 @@ jobs:
           key: sp1-circuits-${{ steps.sp1.outputs.version }}
           restore-keys: sp1-circuits-
 
-      # Scenarios pull these via testcontainers; parallel cold pulls have hit docker
-      # blob races on fresh runners (GetImageBlob: no such file or directory).
-      # Pre-pull sequentially with retries so the suite starts from a warm image cache.
+      - name: Download suite binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sp1-test-cluster-gpu
+
       - name: Pre-pull container images
         run: |
-          # The runner's docker data-root lives on the ephemeral RAID and has shipped
-          # with corrupt overlay state (layer registration / GetImageBlob failures on
-          # every pull). Re-initialize it from scratch before pulling anything.
-          sudo systemctl stop docker
-          sudo rm -rf /var/lib/docker/* 2>/dev/null || true
-          sudo systemctl start docker
-          docker info >/dev/null
-          for img in bitnamisecure/redis:latest bitnamisecure/postgresql:latest minio/minio:latest; do
-            for attempt in 1 2 3; do
-              docker pull -q "$img" && break
-              echo "pull $img failed (attempt $attempt); retrying" && sleep 5
-            done
-          done
-
-      # The worker budgets its concurrency by min(RAM, /dev/shm) (crates/worker's
-      # limiter; execution children mmap buffers into that tmpfs). The kernel default
-      # tmpfs is 50% of RAM — 60GB on the g6.8xlarge — and PlonkWrap (task weight 60)
-      # can never schedule next to the Controller (weight 1) under a 60 budget: the
-      # plonk scenario hangs forever at 1/60 utilization. Size it to RAM, the same
-      # contract the prod node containers get via shm_size.
-      - name: Size /dev/shm to RAM
-        run: sudo mount -o remount,size=100% /dev/shm && df -h /dev/shm
+          docker pull -q bitnamisecure/redis:latest
+          docker pull -q bitnamisecure/postgresql:latest
+          docker pull -q minio/minio:latest
 
       - name: Run suite
         run: |
