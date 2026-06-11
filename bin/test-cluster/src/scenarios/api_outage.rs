@@ -48,7 +48,7 @@ async fn run() -> anyhow::Result<()> {
     // Outage window: long enough that in-window completions lose their terminal write.
     tokio::time::sleep(Duration::from_secs(20)).await;
     cluster.restart("api").await?;
-    crate::utils::wait_for_tcp(crate::cluster::API_GRPC_ADDR, "restarted api").await?;
+    crate::utils::wait_for_tcp(&cluster.addrs.api_grpc, "restarted api").await?;
     tracing::info!("api restored");
 
     // The proof must reach Completed in the API despite the outage (either it finished

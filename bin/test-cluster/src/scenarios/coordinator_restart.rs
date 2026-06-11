@@ -50,7 +50,7 @@ async fn run() -> anyhow::Result<()> {
 
     cluster.kill("coordinator")?;
     cluster.restart("coordinator").await?;
-    crate::utils::wait_for_tcp(crate::cluster::COORDINATOR_ADDR, "restarted coordinator").await?;
+    crate::utils::wait_for_tcp(&cluster.addrs.coordinator, "restarted coordinator").await?;
 
     // The workers' streams died with the old coordinator; roll them too.
     let gpu_nodes = if cfg!(feature = "gpu") { 1 } else { 0 };

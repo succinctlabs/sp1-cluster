@@ -35,17 +35,9 @@ pub enum Tier {
 
 pub type ScenarioFuture = Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>>;
 
-/// Every scenario runs under both build flavors (gpu and cpu-only); per-flavor
-/// differences live inside the scenario bodies (cluster shape, workload size).
 pub struct Scenario {
     pub name: &'static str,
-    /// Hard timeout on the cpu-only flavor, enforced by the suite runner. Generous:
-    /// CPU proving is slow, and first runs include circuit-artifact downloads.
     pub cpu_timeout: Duration,
-    /// Hard timeout on the gpu flavor. Tight on purpose: GPU proving is fast (full-tier
-    /// scenarios measure ~15s-10m on a g6.8xlarge), and the historical GPU failure mode
-    /// is a wedged worker that never registers — that should fail the suite in minutes,
-    /// not consume the job timeout.
     pub gpu_timeout: Duration,
     pub run: fn() -> ScenarioFuture,
 }

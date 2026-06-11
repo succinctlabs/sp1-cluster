@@ -8,13 +8,9 @@ pub static FIBONACCI_ELF: LazyLock<Elf> =
 pub static FIBONACCI_STDIN: LazyLock<SP1Stdin> =
     LazyLock::new(|| load_stdin(include_bytes!("../programs/fibonacci.stdin.zst")));
 
-/// Large program for long-running proofs and large artifacts (full-tier scenarios, Plan 2).
-#[allow(unused)]
 pub static RSP_ELF: LazyLock<Elf> =
     LazyLock::new(|| load_elf(include_bytes!("../programs/rsp.elf.zst")));
 
-/// See [`RSP_ELF`].
-#[allow(unused)]
 pub static RSP_STDIN: LazyLock<SP1Stdin> =
     LazyLock::new(|| load_stdin(include_bytes!("../programs/rsp.stdin.zst")));
 

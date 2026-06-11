@@ -15,8 +15,8 @@ use sp1_cluster_common::proto::ProofRequestStatus;
 /// Why not one scenario looping all four modes: (a) the in-process GPU worker's
 /// device-memory high-water mark grows per request, OOMing on shared desktop GPUs (see
 /// quick.rs); (b) components leak detached tokio tasks on token-cancel (api's spawned gRPC
-/// server, coordinator periodic pollers, gateway), so a second Cluster in the same process
-/// talks to zombie servers bound to the fixed ports whose backing stores are gone.
+/// server, coordinator periodic pollers, gateway); before ports were per-cluster, a second
+/// Cluster in the same process talked to zombie servers whose backing stores were gone.
 /// (b) is prod-relevant shutdown behavior to fix with the Plan-2 restart scenarios.
 pub fn scenarios() -> Vec<Scenario> {
     vec![

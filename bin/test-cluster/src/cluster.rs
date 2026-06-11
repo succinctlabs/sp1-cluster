@@ -23,13 +23,44 @@ use tonic::transport::Channel;
 use crate::{env, utils};
 
 pub const REDIS_POOL_MAX_SIZE: usize = 1;
-pub const GATEWAY_GRPC_ADDR: &str = "127.0.0.1:50061";
-pub const GATEWAY_HTTP_ADDR: &str = "127.0.0.1:8081";
-pub const API_HTTP_ADDR: &str = "127.0.0.1:3000";
-pub const API_GRPC_ADDR: &str = "127.0.0.1:50051";
-pub const COORDINATOR_ADDR: &str = "127.0.0.1:50052";
-pub const COORDINATOR_METRICS_ADDR: &str = "0.0.0.0:9090";
 pub const MINIO_BUCKET: &str = "sp1-test-cluster-artifacts";
+
+/// Listen addresses for the in-process components, on OS-assigned free ports so the
+/// cluster can't collide with whatever else is listening on the machine. Allocated once
+/// per cluster and stable for its lifetime: component restarts re-bind the same port.
+#[derive(Debug, Clone)]
+pub struct ClusterAddrs {
+    pub gateway_grpc: String,
+    pub gateway_http: String,
+    pub api_http: String,
+    pub api_grpc: String,
+    pub coordinator: String,
+    pub coordinator_metrics: String,
+}
+
+impl ClusterAddrs {
+    fn allocate() -> Result<Self> {
+        let listeners: Vec<std::net::TcpListener> = (0..6)
+            .map(|_| std::net::TcpListener::bind(("127.0.0.1", 0)))
+            .collect::<std::io::Result<_>>()
+            .context("allocating free ports")?;
+        let mut addrs = listeners
+            .iter()
+            .map(|l| l.local_addr().map(|a| a.to_string()))
+            .collect::<std::io::Result<Vec<_>>>()
+            .context("reading allocated ports")?
+            .into_iter();
+        let mut next = move || addrs.next().expect("six listeners bound");
+        Ok(Self {
+            gateway_grpc: next(),
+            gateway_http: next(),
+            api_http: next(),
+            api_grpc: next(),
+            coordinator: next(),
+            coordinator_metrics: next(),
+        })
+    }
+}
 
 /// How long `start()` waits for all requested workers to register with the coordinator.
 /// Generous: CPU nodes download groth16+plonk circuit artifacts before connecting.
@@ -65,6 +96,7 @@ pub struct ClusterBuilder {
 
 pub struct Cluster<A: StoreClient> {
     pub root: CancellationToken,
+    pub addrs: ClusterAddrs,
     components: HashMap<String, Component>,
     // Containers stop when dropped; keep them alive for the cluster lifetime.
     _redis: Option<env::Redis>,
@@ -93,7 +125,7 @@ impl Cluster<RedisArtifactClient> {
 
 impl<A: StoreClient> Cluster<A> {
     pub fn gateway_rpc_url(&self) -> String {
-        format!("http://{GATEWAY_GRPC_ADDR}")
+        format!("http://{}", self.addrs.gateway_grpc)
     }
 
     pub fn artifact_client(&self) -> A {
@@ -101,13 +133,13 @@ impl<A: StoreClient> Cluster<A> {
     }
 
     pub async fn api_client(&self) -> Result<ClusterServiceClient> {
-        ClusterServiceClient::new(format!("http://{API_GRPC_ADDR}"))
+        ClusterServiceClient::new(format!("http://{}", self.addrs.api_grpc))
             .await
             .map_err(|e| anyhow!("failed to connect to cluster api: {e}"))
     }
 
     pub async fn coordinator_client(&self) -> Result<RawCoordinatorClient<Channel>> {
-        RawCoordinatorClient::connect(format!("http://{COORDINATOR_ADDR}"))
+        RawCoordinatorClient::connect(format!("http://{}", self.addrs.coordinator))
             .await
             .context("failed to connect to coordinator")
     }
@@ -323,14 +355,16 @@ impl ClusterBuilder {
         gateway_redis_nodes: Option<Vec<String>>,
     ) -> Result<Cluster<A>> {
         let mut components: HashMap<String, Component> = HashMap::new();
+        let addrs = ClusterAddrs::allocate()?;
 
         // api
         {
             let postgres_uri = postgres.addr().to_string();
+            let (http_addr, grpc_addr) = (addrs.api_http.clone(), addrs.api_grpc.clone());
             let respawn = component_factory("api", root.clone(), move |token| {
                 let config = ApiConfig {
-                    http_addr: API_HTTP_ADDR.to_string(),
-                    grpc_addr: API_GRPC_ADDR.to_string(),
+                    http_addr: http_addr.clone(),
+                    grpc_addr: grpc_addr.clone(),
                     postgres_uri: postgres_uri.clone(),
                     postgres_auto_migrate: true,
                 };
@@ -342,14 +376,14 @@ impl ClusterBuilder {
             });
             insert_component(&mut components, &root, "api", respawn);
         }
-        utils::wait_for_tcp(API_GRPC_ADDR, "api gRPC").await?;
+        utils::wait_for_tcp(&addrs.api_grpc, "api gRPC").await?;
 
         // coordinator
         {
             let settings = CoordinatorSettings {
-                addr: COORDINATOR_ADDR.to_string(),
-                cluster_rpc: format!("http://{API_GRPC_ADDR}"),
-                metrics_addr: COORDINATOR_METRICS_ADDR.to_string(),
+                addr: addrs.coordinator.clone(),
+                cluster_rpc: format!("http://{}", addrs.api_grpc),
+                metrics_addr: addrs.coordinator_metrics.clone(),
                 disable_proof_status_update: false,
                 execute_only_mode: self.coordinator == CoordinatorKind::ExecuteOnly,
                 worker_heartbeat_timeout_secs: self.worker_heartbeat_timeout_secs,
@@ -367,15 +401,15 @@ impl ClusterBuilder {
             });
             insert_component(&mut components, &root, "coordinator", respawn);
         }
-        utils::wait_for_tcp(COORDINATOR_ADDR, "coordinator gRPC").await?;
+        utils::wait_for_tcp(&addrs.coordinator, "coordinator gRPC").await?;
 
         // gateway
         {
             let config = GatewayConfig {
-                grpc_addr: GATEWAY_GRPC_ADDR.to_string(),
-                http_addr: GATEWAY_HTTP_ADDR.to_string(),
-                public_http_url: format!("http://{GATEWAY_HTTP_ADDR}"),
-                cluster_rpc: format!("http://{API_GRPC_ADDR}"),
+                grpc_addr: addrs.gateway_grpc.clone(),
+                http_addr: addrs.gateway_http.clone(),
+                public_http_url: format!("http://{}", addrs.gateway_http),
+                cluster_rpc: format!("http://{}", addrs.api_grpc),
                 artifact_store: artifact_store_name.to_string(),
                 s3_bucket: None,
                 s3_region: None,
@@ -400,9 +434,10 @@ impl ClusterBuilder {
             });
             insert_component(&mut components, &root, "gateway", respawn);
         }
-        utils::wait_for_tcp(GATEWAY_GRPC_ADDR, "gateway gRPC").await?;
+        utils::wait_for_tcp(&addrs.gateway_grpc, "gateway gRPC").await?;
 
         // nodes
+        let coordinator_rpc = format!("http://{}", addrs.coordinator);
         for i in 0..self.cpu_nodes {
             spawn_node(
                 &mut components,
@@ -410,6 +445,7 @@ impl ClusterBuilder {
                 &artifact_client,
                 format!("cpu-node-{i}"),
                 WorkerType::Cpu,
+                coordinator_rpc.clone(),
             );
         }
         for i in 0..self.gpu_nodes {
@@ -419,11 +455,13 @@ impl ClusterBuilder {
                 &artifact_client,
                 format!("gpu-node-{i}"),
                 WorkerType::Gpu,
+                coordinator_rpc.clone(),
             );
         }
 
         let cluster = Cluster {
             root,
+            addrs,
             components,
             _redis: redis,
             _minio: minio,
@@ -447,18 +485,20 @@ fn spawn_node<A: StoreClient>(
     artifact_client: &A,
     name: String,
     worker_type: WorkerType,
+    coordinator_rpc: String,
 ) {
     let client = artifact_client.clone();
     let worker_id = format!("test-cluster-{name}");
     let respawn = component_factory(&name.clone(), root.clone(), move |token| {
         let client = client.clone();
         let worker_id = worker_id.clone();
+        let coordinator_rpc = coordinator_rpc.clone();
         async move {
             sp1_cluster_node::run(
                 sp1_cluster_node::config::NodeConfig {
                     worker_id,
                     worker_type,
-                    coordinator_rpc: format!("http://{COORDINATOR_ADDR}"),
+                    coordinator_rpc,
                     ..Default::default()
                 },
                 client,

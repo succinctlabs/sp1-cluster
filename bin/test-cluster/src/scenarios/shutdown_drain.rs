@@ -3,7 +3,7 @@ use std::time::Duration;
 use sp1_sdk::SP1ProofMode;
 
 use crate::assert::wait_stats;
-use crate::cluster::{Cluster, API_GRPC_ADDR, COORDINATOR_ADDR, GATEWAY_GRPC_ADDR};
+use crate::cluster::Cluster;
 use crate::request::request_only;
 use crate::scenario::{Scenario, ScenarioFuture};
 use crate::scenarios::long_program;
@@ -19,10 +19,11 @@ pub fn scenario() -> Scenario {
 
 /// Whole-cluster shutdown while work is in flight: every component must exit within its
 /// bound (no hang, no panic), and — the regression this exists for — nothing may keep the
-/// fixed ports bound afterwards (detached-task zombies). Port re-bindability is the
+/// cluster's ports bound afterwards (detached-task zombies). Port re-bindability is the
 /// observable proof that shutdown was actually clean.
 async fn run() -> anyhow::Result<()> {
     let cluster = Cluster::standard().start().await?;
+    let addrs = cluster.addrs.clone();
     let mut coordinator = cluster.coordinator_client().await?;
 
     let (elf, stdin) = long_program();
@@ -45,11 +46,11 @@ async fn run() -> anyhow::Result<()> {
     // shutdown() awaits every component with a 60s bound and logs stragglers.
     cluster.shutdown().await;
 
-    // All fixed ports must be re-bindable: any zombie server still listening fails this.
+    // All cluster ports must be re-bindable: any zombie server still listening fails this.
     for (addr, what) in [
-        (API_GRPC_ADDR, "api gRPC"),
-        (COORDINATOR_ADDR, "coordinator gRPC"),
-        (GATEWAY_GRPC_ADDR, "gateway gRPC"),
+        (addrs.api_grpc.as_str(), "api gRPC"),
+        (addrs.coordinator.as_str(), "coordinator gRPC"),
+        (addrs.gateway_grpc.as_str(), "gateway gRPC"),
     ] {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
