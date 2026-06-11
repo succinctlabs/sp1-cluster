@@ -26,9 +26,9 @@ pub struct BidderMetrics {
     pub prove_usd_age_seconds: Gauge,
 
     /// Number of bid evaluations where the dynamic USD-derived `bid_amount` was used.
-    pub dynamic_floor_used_total: Counter,
+    pub dynamic_bid_used_total: Counter,
 
     /// Number of bid evaluations where we fell back to the static `bid_amount`
     /// (either dynamic not configured, or the cached price is stale/absent).
-    pub static_floor_used_total: Counter,
+    pub static_bid_used_total: Counter,
 }

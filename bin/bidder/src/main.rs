@@ -75,6 +75,7 @@ async fn main() -> Result<()> {
     BidderMetrics::describe();
 
     // Initialize the Bidder with metrics.
+    let usd_bid = settings.usd_bid();
     let bidder = Bidder::new(
         network,
         settings.version,
@@ -91,7 +92,7 @@ async fn main() -> Result<()> {
         settings.plonk_enabled,
         settings.aggressive_mode,
         settings.min_deadline_secs,
-        settings.usd_floor,
+        usd_bid,
     );
 
     // Spawn the bidder task.

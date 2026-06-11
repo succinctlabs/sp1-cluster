@@ -17,7 +17,7 @@ pub struct Settings {
     pub throughput_mgas: f64,
     /// Maximum number of concurrent proofs the cluster can handle
     pub max_concurrent_proofs: u32,
-    /// Static bid per PGU in wei. Used unconditionally when `usd_floor` is `None`;
+    /// Static bid per PGU in wei. Used unconditionally when `usd_bid_enabled` is `false`;
     /// otherwise serves as the safety-net bid when the PROVE/USD cache is missing or stale.
     pub bid_amount: U256,
     /// Base safety buffer in seconds applied to all proofs
@@ -40,69 +40,55 @@ pub struct Settings {
     pub aggressive_mode: bool,
     /// Minimum deadline in seconds to bid on (optional safety check, even in aggressive mode)
     pub min_deadline_secs: Option<u64>,
-    /// USD-pegged bid floor. `enabled` polls `GetProvePrice` and converts the target to
-    /// PROVE wei per PGU; setting it to `false` keeps the bidder on the static `bid_amount`
-    /// path.
+    /// USD-denominated bid master switch. `true` (default) routes bids through the
+    /// dynamic path when fresh PROVE/USD is available; otherwise falls back to the
+    /// static `bid_amount`. `false` keeps the bidder on the static `bid_amount` path
+    /// unconditionally.
     ///
-    /// BPGU = 10⁹ PGU; the wire-level `max_price_per_pgu` is wei per PGU. BPGU is a
-    /// billing-side convenience for stating targets at human scale.
-    #[serde(flatten)]
-    pub usd_floor: UsdFloorConfig,
-}
-
-/// USD-pegged bidding parameters. Enabled by default with sensible defaults so the bidder
-/// runs USD-pegged out of the box; set `BIDDER_USD_FLOOR_ENABLED=false` to fall back to
-/// the static `bid_amount` (wei/PGU) path.
-///
-/// USD-pegged mode pins your USD revenue per PGU: earnings stay predictable across
-/// PROVE-price moves, and your bids stay within requester price limits. Static mode
-/// pins wei/PGU instead: PROVE revenue is fixed, but bids can fall outside requester
-/// limits when PROVE moves significantly.
-#[derive(Debug, Deserialize, Clone)]
-pub struct UsdFloorConfig {
-    /// Master switch. `true` (default) routes bids through the USD-pegged path; `false`
-    /// keeps the bidder on the static `bid_amount` path unconditionally.
-    #[serde(rename = "usd_floor_enabled", default = "default_enabled")]
-    pub enabled: bool,
-    /// USD floor target in µUSD per BPGU (1 BPGU = 10⁹ PGU). Tune to your cost basis.
-    #[serde(rename = "usd_floor_target", default = "default_target")]
-    pub target: u64,
+    /// Dynamic path: target denominated in USD. The bidder converts to wei using current
+    /// PROVE/USD, so your USD revenue per PGU stays steady as PROVE moves.
+    /// Static path: target denominated in wei. Your PROVE revenue per PGU stays fixed,
+    /// so the USD value moves with the PROVE price.
+    #[serde(default = "default_usd_bid_enabled")]
+    pub usd_bid_enabled: bool,
+    /// USD bid target in µUSD per BPGU (1 BPGU = 10⁹ PGU). Tune to your cost basis.
+    #[serde(default = "default_usd_bid_target")]
+    pub usd_bid_target: u64,
     /// How often to refresh the PROVE/USD cache, in seconds.
-    #[serde(
-        rename = "usd_floor_refresh_interval_secs",
-        default = "default_refresh_interval_secs"
-    )]
-    pub refresh_interval_secs: u64,
+    #[serde(default = "default_usd_bid_refresh_interval_secs")]
+    pub usd_bid_refresh_interval_secs: u64,
     /// Cached PROVE/USD older than this is treated as stale; bidder falls back to
     /// `bid_amount` until the cache refreshes.
-    #[serde(
-        rename = "usd_floor_staleness_max_secs",
-        default = "default_staleness_max_secs"
-    )]
-    pub staleness_max_secs: u64,
+    #[serde(default = "default_usd_bid_staleness_max_secs")]
+    pub usd_bid_staleness_max_secs: u64,
 }
 
-impl Default for UsdFloorConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_enabled(),
-            target: default_target(),
-            refresh_interval_secs: default_refresh_interval_secs(),
-            staleness_max_secs: default_staleness_max_secs(),
-        }
-    }
+/// Runtime view of the USD bid parameters. Built from [`Settings::usd_bid`] only when
+/// the dynamic path is enabled, so its presence is equivalent to the dynamic path being
+/// active. `target` is denominated in µUSD per BPGU (1 BPGU = 10⁹ PGU); the wire-level
+/// bid is wei per PGU, derived as `target * 10⁹ / prove_usd_micros`.
+#[derive(Debug, Clone)]
+pub struct UsdBidConfig {
+    pub target: u64,
+    pub refresh_interval_secs: u64,
+    pub staleness_max_secs: u64,
 }
 
 impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
         Config::builder()
-            .add_source(
-                Environment::with_prefix("BIDDER")
-                    .prefix_separator("_")
-                    .separator("__"),
-            )
+            .add_source(Environment::with_prefix("BIDDER"))
             .build()?
             .try_deserialize()
+    }
+
+    /// Returns `Some(UsdBidConfig)` when the dynamic path is enabled, otherwise `None`.
+    pub fn usd_bid(&self) -> Option<UsdBidConfig> {
+        self.usd_bid_enabled.then(|| UsdBidConfig {
+            target: self.usd_bid_target,
+            refresh_interval_secs: self.usd_bid_refresh_interval_secs,
+            staleness_max_secs: self.usd_bid_staleness_max_secs,
+        })
     }
 }
 
@@ -126,18 +112,18 @@ fn default_plonk_enabled() -> bool {
     true
 }
 
-fn default_enabled() -> bool {
+fn default_usd_bid_enabled() -> bool {
     true
 }
 
-fn default_target() -> u64 {
+fn default_usd_bid_target() -> u64 {
     120_000 // $0.12/BPGU
 }
 
-fn default_refresh_interval_secs() -> u64 {
+fn default_usd_bid_refresh_interval_secs() -> u64 {
     60
 }
 
-fn default_staleness_max_secs() -> u64 {
+fn default_usd_bid_staleness_max_secs() -> u64 {
     1800
 }
