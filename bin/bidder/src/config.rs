@@ -84,7 +84,7 @@ impl Settings {
 
     /// Returns `Some(UsdBidConfig)` when the dynamic path is enabled, otherwise `None`.
     pub fn usd_bid(&self) -> Option<UsdBidConfig> {
-        self.usd_bid_enabled.then(|| UsdBidConfig {
+        self.usd_bid_enabled.then_some(UsdBidConfig {
             target: self.usd_bid_target,
             refresh_interval_secs: self.usd_bid_refresh_interval_secs,
             staleness_max_secs: self.usd_bid_staleness_max_secs,
