@@ -28,24 +28,29 @@ lazy_static! {
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const MAX_RETRY_COUNT: u32 = 7;
 
+/// Whether an error is a definitive "object does not exist" from S3.
+///
+/// Covers both the GET path (`NoSuchKey`) and the HEAD path (`NotFound`,
+/// returned by `head_object` when sizing the object).
+fn is_object_missing(err: &anyhow::Error) -> bool {
+    let get_missing = err
+        .downcast_ref::<SdkError<GetObjectError>>()
+        .is_some_and(|e| e.as_service_error().is_some_and(|e| e.is_no_such_key()));
+    let head_missing = err
+        .downcast_ref::<SdkError<HeadObjectError>>()
+        .is_some_and(|e| e.as_service_error().is_some_and(|e| e.is_not_found()));
+    get_missing || head_missing
+}
+
 /// Classify a download error for the backoff layer.
 ///
-/// Only a definitive "object does not exist" is permanent. Everything else —
-/// expired credentials, connection resets, throttling that exhausted the
-/// SDK's own retries — gets retried with a fresh request (and freshly signed
-/// credentials), because a download failure here fails the entire proof.
-/// The cost of retrying a genuinely missing object is bounded by BACKOFF's
-/// 120s max elapsed time.
+/// Only a missing object is permanent. Everything else — expired credentials,
+/// connection resets, throttling that exhausted the SDK's own retries — gets
+/// retried with a fresh request (and freshly signed credentials), because a
+/// download failure here fails the entire proof. The cost of retrying a
+/// genuinely missing object is bounded by BACKOFF's 120s max elapsed time.
 fn classify_download_error(err: anyhow::Error) -> backoff::Error<anyhow::Error> {
-    let not_found = err
-        .downcast_ref::<SdkError<GetObjectError>>()
-        .map(|e| e.as_service_error().is_some_and(|e| e.is_no_such_key()))
-        .or_else(|| {
-            err.downcast_ref::<SdkError<HeadObjectError>>()
-                .map(|e| e.as_service_error().is_some_and(|e| e.is_not_found()))
-        })
-        .unwrap_or(false);
-    if not_found {
+    if is_object_missing(&err) {
         backoff::Error::permanent(err)
     } else {
         // `{:#}` logs the full error chain; SdkError's Display alone is just
@@ -59,6 +64,27 @@ fn classify_download_error(err: anyhow::Error) -> backoff::Error<anyhow::Error> 
 pub enum S3DownloadMode {
     REST(Arc<S3RestClient>),
     AwsSDK(Arc<S3SDKClient>),
+}
+
+impl S3DownloadMode {
+    async fn object_size(&self, bucket: &str, key: &str) -> Result<i64> {
+        match self {
+            S3DownloadMode::REST(client) => client.get_object_size(bucket, key).await,
+            S3DownloadMode::AwsSDK(client) => client.get_object_size(bucket, key).await,
+        }
+    }
+
+    async fn read_bytes(
+        &self,
+        bucket: &str,
+        key: &str,
+        range: Option<(i64, i64)>,
+    ) -> Result<Vec<u8>> {
+        match self {
+            S3DownloadMode::REST(client) => client.read_bytes(bucket, key, range).await,
+            S3DownloadMode::AwsSDK(client) => client.read_bytes(bucket, key, range).await,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -167,15 +193,10 @@ impl S3ArtifactClient {
         let size = backoff::future::retry(BACKOFF.clone(), || {
             let key = key.clone();
             async move {
-                let ret = match self.s3_dl_mode.clone() {
-                    S3DownloadMode::REST(dl_client_rest) => {
-                        dl_client_rest.get_object_size(&self.bucket, &key).await
-                    }
-                    S3DownloadMode::AwsSDK(dl_client_sdk) => {
-                        dl_client_sdk.get_object_size(&self.bucket, &key).await
-                    }
-                };
-                ret.map_err(classify_download_error)
+                self.s3_dl_mode
+                    .object_size(&self.bucket, &key)
+                    .await
+                    .map_err(classify_download_error)
             }
         })
         .await?;
@@ -186,15 +207,10 @@ impl S3ArtifactClient {
                 let bucket = self.bucket.clone();
                 let key = key.clone();
                 async move {
-                    let ret = match self.s3_dl_mode.clone() {
-                        S3DownloadMode::REST(dl_client_rest) => {
-                            dl_client_rest.read_bytes(&bucket, &key, None).await
-                        }
-                        S3DownloadMode::AwsSDK(dl_client_sdk) => {
-                            dl_client_sdk.read_bytes(&bucket, &key, None).await
-                        }
-                    };
-                    ret.map_err(classify_download_error)
+                    self.s3_dl_mode
+                        .read_bytes(&bucket, &key, None)
+                        .await
+                        .map_err(classify_download_error)
                 }
             })
             .await?;
@@ -222,22 +238,10 @@ impl S3ArtifactClient {
                 for (index, start) in thread_starts {
                     let end = std::cmp::min(start + CHUNK_SIZE as i64, size) - 1;
                     let body = backoff::future::retry(BACKOFF.clone(), || async {
-                        let key = key.clone();
-                        let bucket = bucket.clone();
-                        let ret = match s3_dl_mode.clone() {
-                            S3DownloadMode::REST(s3_dl_client_rest) => {
-                                s3_dl_client_rest
-                                    .read_bytes(&bucket, &key, Some((start, end)))
-                                    .await
-                            }
-                            S3DownloadMode::AwsSDK(s3_dl_client_sdk) => {
-                                s3_dl_client_sdk
-                                    .read_bytes(&bucket, &key, Some((start, end)))
-                                    .await
-                            }
-                        };
-
-                        ret.map_err(classify_download_error)
+                        s3_dl_mode
+                            .read_bytes(&bucket, &key, Some((start, end)))
+                            .await
+                            .map_err(classify_download_error)
                     })
                     .await?;
                     tx.send((index, body)).await?;
