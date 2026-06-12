@@ -236,7 +236,15 @@ services:
       - BIDDER_SP1_PRIVATE_KEY=${SP1_PRIVATE_KEY}
       - BIDDER_THROUGHPUT_MGAS=1
       - BIDDER_MAX_CONCURRENT_PROOFS=1
-      - BIDDER_BID_AMOUNT=1
+      # Static bid in wei/PGU. Safety-net when the USD bid falls back (cache missing
+      # or stale), or the unconditional bid if you opt out of the USD bid below.
+      - BIDDER_BID_AMOUNT=500000000
+      # USD-denominated bid is enabled by default. USD revenue per PGU stays predictable
+      # across PROVE-price moves, and your bids stay within requester price limits.
+      # Override the target via BIDDER_USD_BID_TARGET=<µUSD per BPGU> or opt out
+      # entirely with BIDDER_USD_BID_ENABLED=false (falls back to BIDDER_BID_AMOUNT —
+      # PROVE revenue is then fixed, but bids can fall outside requester limits when
+      # PROVE moves significantly).
     command: ["/bin/sh", "-c", "/bidder"]
 
 volumes:
