@@ -6,7 +6,6 @@ Scenario-based e2e harness for sp1-cluster. Boots the whole cluster in-process
 network gateway in hosted SDK mode, and asserts terminal API status, execution
 metadata, artifact availability, and local proof verification.
 
-Design: `docs/superpowers/specs/2026-06-09-cluster-e2e-coverage-matrix-design.md`
 CI: `.github/workflows/e2e.yml` (smoke per-PR; full post-merge/manual).
 
 ## Build flavors
