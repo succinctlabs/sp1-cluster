@@ -51,6 +51,35 @@ where
     .await
 }
 
+/// Like [`run`], but shuts down gracefully when `shutdown` fires instead of on process
+/// signals. No detached tasks survive, so callers can rebind the ports afterwards.
+pub async fn run_with_shutdown<A>(
+    cfg: Config,
+    client: A,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> Result<()>
+where
+    A: ArtifactClient + CompressedUpload + 'static,
+{
+    let cluster = ClusterServiceClient::new(cfg.cluster_rpc.clone())
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("failed to connect to cluster RPC {}: {e}", cfg.cluster_rpc)
+        })?;
+    let auth = build_auth(&cfg)?;
+    let program_store = build_program_store(&cfg)?;
+    serve(
+        cfg,
+        client,
+        cluster,
+        auth,
+        program_store,
+        shutdown.clone().cancelled_owned(),
+        shutdown.cancelled_owned(),
+    )
+    .await
+}
+
 /// Serve both endpoints against pre-built cluster + auth state.
 ///
 /// Broken out so integration tests can inject a fake ClusterServiceClient and

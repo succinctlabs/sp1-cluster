@@ -30,7 +30,17 @@ pub struct ApiConfig {
     pub postgres_auto_migrate: bool,
 }
 
+/// Run the API until the process is killed (never-resolving shutdown token).
 pub async fn run(config: ApiConfig) -> anyhow::Result<()> {
+    run_with_shutdown(config, tokio_util::sync::CancellationToken::new()).await
+}
+
+/// Run the API until `shutdown` fires. Both servers (gRPC + HTTP) stop gracefully and the
+/// function returns — no detached tasks survive, so callers can rebind the ports.
+pub async fn run_with_shutdown(
+    config: ApiConfig,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<()> {
     let pool = sqlx::postgres::PgPool::connect(&config.postgres_uri)
         .await
         .expect("Failed to connect to database");
@@ -56,12 +66,12 @@ pub async fn run(config: ApiConfig) -> anyhow::Result<()> {
         .expect("Invalid gRPC address");
     info!("Starting gRPC server on {grpc_addr}");
 
-    // Start the gRPC server in a separate task
-    tokio::spawn(async move {
+    let grpc_shutdown = shutdown.clone();
+    let grpc_task = tokio::spawn(async move {
         Server::builder()
             .accept_http1(true)
             .add_service(tonic_web::enable(grpc_service))
-            .serve(grpc_addr)
+            .serve_with_shutdown(grpc_addr, grpc_shutdown.cancelled_owned())
             .await
             .unwrap_or_else(|e| {
                 warn!("gRPC server error: {}", e);
@@ -75,7 +85,11 @@ pub async fn run(config: ApiConfig) -> anyhow::Result<()> {
 
     info!("Starting HTTP server on {}", config.http_addr);
     let listener = tokio::net::TcpListener::bind(config.http_addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.cancelled_owned())
+        .await?;
 
+    grpc_task.await.ok();
+    info!("api shut down cleanly");
     Ok(())
 }

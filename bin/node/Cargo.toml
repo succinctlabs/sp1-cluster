@@ -7,6 +7,7 @@ edition = "2021"
 default = ["native-gnark"]
 native-gnark = ["sp1-sdk/native-gnark"]
 gpu = ["dep:sp1-gpu-prover", "dep:sp1-gpu-cudart", "sp1-cluster-worker/gpu"]
+test-hooks = ["sp1-cluster-worker/test-hooks"]
 
 [dependencies]
 sp1-gpu-cudart = { workspace = true, optional = true }

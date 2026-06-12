@@ -117,7 +117,9 @@ impl CoordinatorMetrics {
     }
 }
 
-pub async fn initialize_metrics() -> Result<(
+pub async fn initialize_metrics(
+    addr: SocketAddr,
+) -> Result<(
     Arc<CoordinatorMetrics>,
     Option<JoinHandle<()>>,
     tokio::sync::broadcast::Sender<()>,
@@ -138,15 +140,10 @@ pub async fn initialize_metrics() -> Result<(
         },
     };
 
-    // Parse metrics address from env or use default
-    let metrics_addr: SocketAddr = std::env::var("COORDINATOR_METRICS_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:9090".to_string())
-        .parse()?;
-
     let (ready_tx, ready_rx) = oneshot::channel();
 
     let metrics_server_config =
-        MetricServerConfig::new(metrics_addr, version_info, "sp1-coordinator".to_string())
+        MetricServerConfig::new(addr, version_info, "sp1-coordinator".to_string())
             .with_ready_signal(ready_tx);
 
     let metrics_server = MetricServer::new(metrics_server_config);
