@@ -10,6 +10,7 @@ categories.workspace = true
 default = ["native-gnark"]
 native-gnark = ["sp1-sdk/native-gnark"]
 gpu = ["dep:sp1-gpu-prover", "dep:sp1-gpu-cudart"]
+experimental = ["sp1-prover/experimental", "sp1-gpu-prover?/experimental"]
 
 [dependencies]
 sp1-cluster-artifact = { workspace = true }
