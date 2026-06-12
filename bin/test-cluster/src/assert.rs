@@ -73,6 +73,39 @@ pub async fn wait_proof_status(
     .await
 }
 
+/// Wait for `proof_id` to reach Completed in the API, then assert its proof artifact is
+/// downloadable. The standard happy-path ending of proving scenarios.
+pub async fn assert_proof_completed(
+    api: &ClusterServiceClient,
+    proof_id: &str,
+    timeout: Duration,
+    artifact_client: &impl ArtifactClient,
+) -> Result<ProofRequest> {
+    let pr = wait_proof_status(api, proof_id, ProofRequestStatus::Completed, timeout).await?;
+    assert_proof_artifact_downloadable(&pr, artifact_client).await?;
+    Ok(pr)
+}
+
+/// Assert the proof's status stays `expected` for the whole `window` — catches a late
+/// write flipping a terminal status.
+pub async fn assert_status_holds(
+    api: &ClusterServiceClient,
+    proof_id: &str,
+    expected: ProofRequestStatus,
+    window: Duration,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + window;
+    while tokio::time::Instant::now() < deadline {
+        let pr = get_proof_request(api, proof_id).await?;
+        let status = pr.proof_status();
+        if status != expected {
+            bail!("proof {proof_id} status flipped away from {expected:?}: {status:?}");
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+    Ok(())
+}
+
 pub struct ExpectedExecution {
     pub status: ExecutionStatus,
     pub min_cycles: u64,

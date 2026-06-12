@@ -97,6 +97,11 @@ jobs:
       - name: Size /dev/shm to RAM
         run: sudo mount -o remount,size=100% /dev/shm && df -h /dev/shm
 
+      - name: Download suite binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sp1-test-cluster-gpu
+
       - name: GPU diagnostics
         run: |
           echo "--- nvidia-smi ---"; nvidia-smi || echo "nvidia-smi FAILED (driver not ready?)"
@@ -112,6 +117,12 @@ jobs:
           sudo systemctl start docker
           docker info
 
+      - name: Pre-pull container images
+        run: |
+          docker pull -q bitnamisecure/redis:latest
+          docker pull -q bitnamisecure/postgresql:latest
+          docker pull -q minio/minio:latest
+
       - name: Compute circuit cache key
         id: sp1
         run: echo "version=$(awk '/^name = "sp1-sdk"$/ {found=1} found && /^version = / {gsub(/"/, "", $3); print $3; exit}' Cargo.lock)" >> "$GITHUB_OUTPUT"
@@ -122,17 +133,6 @@ jobs:
           path: ~/.sp1/circuits
           key: sp1-circuits-${{ steps.sp1.outputs.version }}
           restore-keys: sp1-circuits-
-
-      - name: Download suite binary
-        uses: actions/download-artifact@v4
-        with:
-          name: sp1-test-cluster-gpu
-
-      - name: Pre-pull container images
-        run: |
-          docker pull -q bitnamisecure/redis:latest
-          docker pull -q bitnamisecure/postgresql:latest
-          docker pull -q minio/minio:latest
 
       - name: Run suite
         run: |

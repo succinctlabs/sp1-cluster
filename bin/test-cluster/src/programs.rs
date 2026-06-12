@@ -14,14 +14,6 @@ pub static RSP_ELF: LazyLock<Elf> =
 pub static RSP_STDIN: LazyLock<SP1Stdin> =
     LazyLock::new(|| load_stdin(include_bytes!("../programs/rsp.stdin.zst")));
 
-/// Stdin for the fibonacci program with a custom iteration count `n` — the knob for
-/// long-running proofs without committing new artifacts (the program reads one u32).
-pub fn fibonacci_stdin(n: u32) -> SP1Stdin {
-    let mut stdin = SP1Stdin::new();
-    stdin.write(&n);
-    stdin
-}
-
 fn load_elf(data_zst: &[u8]) -> Elf {
     Elf::Dynamic(
         zstd::decode_all(data_zst)

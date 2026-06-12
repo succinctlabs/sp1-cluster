@@ -22,9 +22,6 @@ use tonic::transport::Channel;
 
 use crate::{env, utils};
 
-pub const REDIS_POOL_MAX_SIZE: usize = 1;
-pub const MINIO_BUCKET: &str = "sp1-test-cluster-artifacts";
-
 /// Listen addresses for the in-process components, on OS-assigned free ports so the
 /// cluster can't collide with whatever else is listening on the machine. Allocated once
 /// per cluster and stable for its lifetime: component restarts re-bind the same port.
@@ -98,11 +95,15 @@ pub struct Cluster<A: StoreClient> {
     pub root: CancellationToken,
     pub addrs: ClusterAddrs,
     components: HashMap<String, Component>,
-    // Containers stop when dropped; keep them alive for the cluster lifetime.
-    _redis: Option<env::Redis>,
-    _minio: Option<env::Minio>,
-    _postgres: env::Postgres,
     artifact_client: A,
+    _artifact_container_handle: ArtifactContainerHandle,
+    _postgres: env::Postgres,
+}
+
+#[allow(unused)]
+pub enum ArtifactContainerHandle {
+    Redis(env::Redis),
+    Minio(env::Minio),
 }
 
 impl Cluster<RedisArtifactClient> {
@@ -116,10 +117,8 @@ impl Cluster<RedisArtifactClient> {
         }
     }
 
-    /// Spec "standard" shape: 1 CPU + 1 GPU node on the gpu flavor, 1 CPU node on cpu-only.
     pub fn standard() -> ClusterBuilder {
-        let gpu_nodes = if cfg!(feature = "gpu") { 1 } else { 0 };
-        Self::builder().cpu_nodes(1).gpu_nodes(gpu_nodes)
+        Self::builder().cpu_nodes(1).gpu_nodes(1)
     }
 }
 
@@ -142,6 +141,12 @@ impl<A: StoreClient> Cluster<A> {
         RawCoordinatorClient::connect(format!("http://{}", self.addrs.coordinator))
             .await
             .context("failed to connect to coordinator")
+    }
+
+    /// Whether a component with this name was spawned (e.g. "gpu-node-0" exists only
+    /// when the cluster actually started gpu nodes).
+    pub fn has_component(&self, name: &str) -> bool {
+        self.components.contains_key(name)
     }
 
     /// Crash a component: abort its task. Futures drop, TCP connections close, the
@@ -268,10 +273,6 @@ impl ClusterBuilder {
     }
 
     pub fn gpu_nodes(mut self, n: usize) -> Self {
-        assert!(
-            n == 0 || cfg!(feature = "gpu"),
-            "gpu_nodes requires the gpu feature"
-        );
         self.gpu_nodes = n;
         self
     }
@@ -284,12 +285,11 @@ impl ClusterBuilder {
             env::Postgres::start(root.clone()),
         )?;
         let artifact_client =
-            RedisArtifactClient::new(vec![redis.addr().into()], REDIS_POOL_MAX_SIZE);
+            RedisArtifactClient::new(vec![redis.addr().into()], env::REDIS_POOL_MAX_SIZE);
         let redis_nodes = Some(vec![redis.addr().to_string()]);
         self.boot(
             root,
-            Some(redis),
-            None,
+            ArtifactContainerHandle::Redis(redis),
             postgres,
             artifact_client,
             "redis",
@@ -307,9 +307,9 @@ impl ClusterBuilder {
             env::Minio::start(root.clone()),
             env::Postgres::start(root.clone()),
         )?;
-        std::env::set_var("AWS_ENDPOINT_URL", &minio.endpoint);
-        std::env::set_var("AWS_ACCESS_KEY_ID", env::MINIO_USER);
-        std::env::set_var("AWS_SECRET_ACCESS_KEY", env::MINIO_PASSWORD);
+        std::env::set_var("AWS_ENDPOINT_URL", minio.addr());
+        std::env::set_var("AWS_ACCESS_KEY_ID", minio.user());
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", minio.password());
         std::env::set_var("AWS_REGION", "us-east-1");
         std::env::set_var("AWS_S3_FORCE_PATH_STYLE", "1");
 
@@ -318,7 +318,7 @@ impl ClusterBuilder {
         );
         let artifact_client = S3ArtifactClient::new(
             "us-east-1".to_string(),
-            MINIO_BUCKET.to_string(),
+            minio.bucket().to_string(),
             32,
             s3_dl_mode,
         )
@@ -326,15 +326,14 @@ impl ClusterBuilder {
         artifact_client
             .sdk_client
             .create_bucket()
-            .bucket(MINIO_BUCKET)
+            .bucket(minio.bucket())
             .send()
             .await
             .context("create minio bucket")?;
 
         self.boot(
             root,
-            None,
-            Some(minio),
+            ArtifactContainerHandle::Minio(minio),
             postgres,
             artifact_client,
             "s3",
@@ -347,8 +346,7 @@ impl ClusterBuilder {
     async fn boot<A: StoreClient>(
         self,
         root: CancellationToken,
-        redis: Option<env::Redis>,
-        minio: Option<env::Minio>,
+        artifact_container_handle: ArtifactContainerHandle,
         postgres: env::Postgres,
         artifact_client: A,
         artifact_store_name: &str,
@@ -415,7 +413,7 @@ impl ClusterBuilder {
                 s3_region: None,
                 s3_concurrency: 32,
                 redis_nodes: gateway_redis_nodes,
-                redis_pool_max_size: REDIS_POOL_MAX_SIZE,
+                redis_pool_max_size: env::REDIS_POOL_MAX_SIZE,
                 balance_amount: None,
                 auth_mode: AuthMode::None,
                 auth_allowlist: None,
@@ -448,7 +446,20 @@ impl ClusterBuilder {
                 coordinator_rpc.clone(),
             );
         }
-        for i in 0..self.gpu_nodes {
+
+        // Single source of truth for the gpu node count: the same value drives the
+        // spawns below AND the worker-ready wait, so a cpu-only build never waits for
+        // gpu workers that were skipped.
+        let gpu_nodes = if option_env!("SP1_CLUSTER_CPU_ONLY").is_none() {
+            self.gpu_nodes
+        } else {
+            tracing::info!(
+                "SP1_CLUSTER_CPU_ONLY is set. Ignoring {} GPU node(s)",
+                self.gpu_nodes
+            );
+            0
+        };
+        for i in 0..gpu_nodes {
             spawn_node(
                 &mut components,
                 &root,
@@ -463,15 +474,14 @@ impl ClusterBuilder {
             root,
             addrs,
             components,
-            _redis: redis,
-            _minio: minio,
+            _artifact_container_handle: artifact_container_handle,
             _postgres: postgres,
             artifact_client,
         };
         cluster
             .wait_for_workers(
                 self.cpu_nodes as u32,
-                self.gpu_nodes as u32,
+                gpu_nodes as u32,
                 WORKER_READY_TIMEOUT,
             )
             .await?;

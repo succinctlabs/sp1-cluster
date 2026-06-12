@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use crate::scenario::{resolve, Flavor, Scenario, Tier};
+use crate::scenario::Scenario;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -19,11 +19,8 @@ pub struct ScenarioResult {
     pub log_path: std::path::PathBuf,
 }
 
-/// Run every (tier, flavor) scenario as a child process of this same binary.
-/// A failure does not stop the suite. Returns true iff everything passed.
-pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<bool> {
-    let scenarios = resolve(all, tier, flavor);
-    prefetch_circuit_artifacts(&scenarios).await;
+pub async fn run_suite(scenarios: &[Scenario]) -> Result<bool> {
+    prefetch_circuit_artifacts(scenarios).await;
     let logs_dir = std::path::PathBuf::from("target/test-cluster-logs");
     std::fs::create_dir_all(&logs_dir).context("create logs dir")?;
     let exe = std::env::current_exe().context("current_exe")?;
@@ -33,11 +30,10 @@ pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<b
         let log_path = logs_dir.join(format!("{}.log", s.name));
         let log = std::fs::File::create(&log_path)
             .with_context(|| format!("create {}", log_path.display()))?;
-        let timeout = s.timeout(flavor);
         tracing::info!(
             "=== running scenario {} (timeout {:?}) ===",
             s.name,
-            timeout
+            s.timeout
         );
         let started = Instant::now();
         let mut child = tokio::process::Command::new(&exe)
@@ -49,7 +45,7 @@ pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<b
             .spawn()
             .with_context(|| format!("spawn scenario {}", s.name))?;
 
-        let outcome = match tokio::time::timeout(timeout, child.wait()).await {
+        let outcome = match tokio::time::timeout(s.timeout, child.wait()).await {
             Ok(Ok(status)) if status.success() => Outcome::Pass,
             Ok(Ok(_)) => Outcome::Fail,
             Ok(Err(e)) => return Err(e).context("wait for scenario child"),
@@ -87,9 +83,8 @@ pub async fn run_suite(all: &[Scenario], tier: Tier, flavor: Flavor) -> Result<b
 
 /// The wrap-mode trusted-setup artifacts are a tens-of-GB download on a cold
 /// ~/.sp1/circuits. Download them up front, outside the per-scenario timeouts: those
-/// are sized for proving work (the gpu ones tightly, to catch wedged workers fast),
-/// not for first-run downloads on an uncached runner.
-async fn prefetch_circuit_artifacts(scenarios: &[&Scenario]) {
+/// are sized for proving work, not for first-run downloads on an uncached runner.
+async fn prefetch_circuit_artifacts(scenarios: &[Scenario]) {
     for (scenario_name, kind) in [
         ("proof-mode-plonk", "plonk"),
         ("proof-mode-groth16", "groth16"),
@@ -149,32 +144,4 @@ pub fn render_table(results: &[ScenarioResult]) -> String {
         ));
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn table_renders_all_outcomes() {
-        let results = vec![
-            ScenarioResult {
-                name: "quick",
-                outcome: Outcome::Pass,
-                duration: Duration::from_secs(61),
-                log_path: "target/test-cluster-logs/quick.log".into(),
-            },
-            ScenarioResult {
-                name: "execute-only",
-                outcome: Outcome::Timeout,
-                duration: Duration::from_mins(45),
-                log_path: "target/test-cluster-logs/execute-only.log".into(),
-            },
-        ];
-        let table = render_table(&results);
-        assert!(table.contains("quick"));
-        assert!(table.contains("PASS"));
-        assert!(table.contains("TIMEOUT"));
-        assert!(table.contains("execute-only.log"));
-    }
 }

@@ -2,18 +2,17 @@ use std::time::Duration;
 
 use sp1_sdk::SP1ProofMode;
 
-use crate::assert::{assert_proof_artifact_downloadable, wait_proof_status, wait_stats};
+use crate::assert::{assert_proof_completed, wait_stats};
 use crate::cluster::Cluster;
 use crate::programs;
 use crate::request::request_only;
-use crate::scenario::{Scenario, ScenarioFuture};
-use sp1_cluster_common::proto::ProofRequestStatus;
+use crate::scenario::{Scenario, ScenarioFuture, Tier};
 
 pub fn scenario() -> Scenario {
     Scenario {
         name: "coordinator-restart",
-        cpu_timeout: Duration::from_mins(60),
-        gpu_timeout: Duration::from_mins(10),
+        timeout: Duration::from_mins(10),
+        tier: Tier::Full,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -38,24 +37,24 @@ async fn run() -> anyhow::Result<()> {
         SP1ProofMode::Compressed,
     )
     .await?;
-    let pr = wait_proof_status(
+    assert_proof_completed(
         &api,
         &proof_a,
-        ProofRequestStatus::Completed,
         Duration::from_mins(30),
+        &cluster.artifact_client(),
     )
     .await?;
-    assert_proof_artifact_downloadable(&pr, &cluster.artifact_client()).await?;
     tracing::info!("proof A completed; killing coordinator");
 
     cluster.kill("coordinator")?;
     cluster.restart("coordinator").await?;
     crate::utils::wait_for_tcp(&cluster.addrs.coordinator, "restarted coordinator").await?;
 
-    // The workers' streams died with the old coordinator; roll them too.
-    let gpu_nodes = if cfg!(feature = "gpu") { 1 } else { 0 };
+    // The workers' streams died with the old coordinator; roll them too. The cluster
+    // knows whether a gpu node was actually spawned — no re-deriving the build flavor.
+    let has_gpu = cluster.has_component("gpu-node-0");
     cluster.restart("cpu-node-0").await?;
-    if gpu_nodes > 0 {
+    if has_gpu {
         cluster.restart("gpu-node-0").await?;
     }
     let mut coordinator = cluster.coordinator_client().await?;
@@ -63,7 +62,7 @@ async fn run() -> anyhow::Result<()> {
         &mut coordinator,
         "workers re-registered with restarted coordinator",
         Duration::from_mins(15),
-        |s| s.cpu_workers >= 1 && s.gpu_workers >= gpu_nodes,
+        |s| s.cpu_workers >= 1 && (!has_gpu || s.gpu_workers >= 1),
     )
     .await?;
 
@@ -75,14 +74,13 @@ async fn run() -> anyhow::Result<()> {
         SP1ProofMode::Compressed,
     )
     .await?;
-    let pr = wait_proof_status(
+    assert_proof_completed(
         &api,
         &proof_b,
-        ProofRequestStatus::Completed,
         Duration::from_mins(30),
+        &cluster.artifact_client(),
     )
     .await?;
-    assert_proof_artifact_downloadable(&pr, &cluster.artifact_client()).await?;
     tracing::info!("proof B completed on restarted coordinator");
 
     cluster.shutdown().await;

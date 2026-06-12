@@ -18,61 +18,13 @@ pub struct ClusterProofRequest {
     pub modes: Vec<SP1ProofMode>,
 }
 
-/// Submit each (request, mode) CONCURRENTLY, wait for all proofs, and verify them. Returns
-/// the cluster `proof_id` (`req_...`) for each submission, in submission order.
-/// Consumer: Plan-2 concurrency/scheduling scenarios on dedicated GPUs — smoke scenarios
-/// use [`submit_proof_requests_sequential`] instead (GPU memory headroom, see quick.rs).
-#[allow(dead_code)]
-pub async fn submit_proof_requests(input: ClusterProofRequests) -> Result<Vec<String>> {
-    let prover = Arc::new(
-        ProverClient::builder()
-            .network()
-            .hosted()
-            .rpc_url(&input.rpc_url)
-            .signer(random_local_signer())
-            .build()
-            .await,
-    );
-
-    let mut handles = Vec::new();
-
-    for req in input.requests {
-        let pk = Arc::new(prover.setup(req.elf).await?);
-        for mode in req.modes {
-            // Submit without blocking so we can capture the request id (and derive the cluster
-            // proof_id) before awaiting the proof.
-            let request_id = prover
-                .prove(&pk, req.stdin.clone())
-                .mode(mode)
-                .request()
-                .await?;
-            handles.push((
-                pk.verifying_key().clone(),
-                proof_id_from_request_id(request_id.as_slice()),
-                tokio::spawn({
-                    let prover = prover.clone();
-                    async move { prover.wait_proof(request_id, None, None).await }
-                }),
-            ));
-        }
-    }
-
-    let mut proof_ids = Vec::with_capacity(handles.len());
-    for (vk, proof_id, handle) in handles {
-        let proof = handle.await??;
-        prover.verify(&proof, &vk, None)?;
-        proof_ids.push(proof_id);
-    }
-
-    Ok(proof_ids)
-}
-
-/// Like [`submit_proof_requests`], but submits one (request, mode) at a time, awaiting and
-/// verifying each proof before submitting the next. Smoke scenarios use this: a single
-/// in-flight proof keeps GPU memory at the proven single-proof footprint, so they stay
-/// green on shared/desktop GPUs (concurrent ProveShard tasks from multiple proofs can
-/// exceed free VRAM there — observed AllocError on a desktop RTX 4090). Concurrency is
-/// exercised by the full-tier scheduling scenarios on dedicated runners instead.
+/// Submit each (request, mode) one at a time, awaiting and verifying each proof before
+/// submitting the next. Returns the cluster `proof_id` (`req_...`) for each submission,
+/// in submission order. A single in-flight proof keeps GPU memory at the proven
+/// single-proof footprint, so scenarios stay green on shared/desktop GPUs (concurrent
+/// ProveShard tasks from multiple proofs can exceed free VRAM there — observed
+/// AllocError on a desktop RTX 4090). Concurrency is exercised by the scheduling
+/// scenarios via [`request_only`] instead.
 pub async fn submit_proof_requests_sequential(input: ClusterProofRequests) -> Result<Vec<String>> {
     let prover = Arc::new(
         ProverClient::builder()

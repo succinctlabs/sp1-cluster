@@ -2,12 +2,11 @@ use std::time::Duration;
 
 use sp1_sdk::SP1ProofMode;
 
-use crate::assert::{get_proof_request, poll_until, wait_proof_status, wait_stats};
+use crate::assert::{assert_status_holds, get_proof_request, wait_proof_status, wait_stats};
 use crate::cluster::Cluster;
 use crate::programs;
 use crate::request::request_only;
-use crate::scenario::{Scenario, ScenarioFuture};
-use crate::scenarios::long_program;
+use crate::scenario::{Scenario, ScenarioFuture, Tier};
 use sp1_cluster_common::proto::{
     CancelProofRequest, ProofRequestCancelRequest, ProofRequestStatus,
 };
@@ -16,14 +15,14 @@ pub fn scenarios() -> Vec<Scenario> {
     vec![
         Scenario {
             name: "cancel-pending",
-            cpu_timeout: Duration::from_mins(20),
-            gpu_timeout: Duration::from_mins(10),
+            timeout: Duration::from_mins(10),
+            tier: Tier::Full,
             run: || -> ScenarioFuture { Box::pin(run_pending()) },
         },
         Scenario {
             name: "cancel-active",
-            cpu_timeout: Duration::from_mins(45),
-            gpu_timeout: Duration::from_mins(10),
+            timeout: Duration::from_mins(10),
+            tier: Tier::Full,
             run: || -> ScenarioFuture { Box::pin(run_active()) },
         },
     ]
@@ -63,14 +62,13 @@ async fn run_pending() -> anyhow::Result<()> {
 
     cancel_everywhere(&api, &mut coordinator, &proof_id).await?;
 
-    let pr = wait_proof_status(
+    wait_proof_status(
         &api,
         &proof_id,
         ProofRequestStatus::Cancelled,
         Duration::from_mins(1),
     )
     .await?;
-    anyhow::ensure!(pr.proof_status() == ProofRequestStatus::Cancelled);
 
     // The coordinator must drop the queued work.
     wait_stats(
@@ -82,13 +80,13 @@ async fn run_pending() -> anyhow::Result<()> {
     .await?;
 
     // Status must STAY Cancelled (no late write flips it).
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    let pr = get_proof_request(&api, &proof_id).await?;
-    anyhow::ensure!(
-        pr.proof_status() == ProofRequestStatus::Cancelled,
-        "status flipped away from Cancelled: {:?}",
-        pr.proof_status()
-    );
+    assert_status_holds(
+        &api,
+        &proof_id,
+        ProofRequestStatus::Cancelled,
+        Duration::from_secs(5),
+    )
+    .await?;
 
     cluster.shutdown().await;
     Ok(())
@@ -102,11 +100,10 @@ async fn run_active() -> anyhow::Result<()> {
     let api = cluster.api_client().await?;
     let mut coordinator = cluster.coordinator_client().await?;
 
-    let (elf, stdin) = long_program();
     let proof_id = request_only(
         &cluster.gateway_rpc_url(),
-        elf,
-        stdin,
+        programs::RSP_ELF.clone(),
+        programs::RSP_STDIN.clone(),
         SP1ProofMode::Compressed,
     )
     .await?;
@@ -139,24 +136,13 @@ async fn run_active() -> anyhow::Result<()> {
     .await?;
 
     // And the terminal status must hold.
-    poll_until(
-        "status stays Cancelled",
+    assert_status_holds(
+        &api,
+        &proof_id,
+        ProofRequestStatus::Cancelled,
         Duration::from_secs(10),
-        || async {
-            let pr = get_proof_request(&api, &proof_id).await?;
-            anyhow::ensure!(
-                pr.proof_status() == ProofRequestStatus::Cancelled,
-                "status flipped away from Cancelled: {:?}",
-                pr.proof_status()
-            );
-            // Poll the full window; only time out ending the check successfully.
-            Ok(None::<()>)
-        },
     )
-    .await
-    .err()
-    .filter(|e| !e.to_string().contains("timed out"))
-    .map_or(Ok(()), Err)?;
+    .await?;
 
     cluster.shutdown().await;
     Ok(())

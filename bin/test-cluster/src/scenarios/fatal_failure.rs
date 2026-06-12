@@ -7,14 +7,14 @@ use crate::assert::wait_proof_status;
 use crate::cluster::Cluster;
 use crate::programs;
 use crate::request::request_with_cycle_limit;
-use crate::scenario::{Scenario, ScenarioFuture};
+use crate::scenario::{Scenario, ScenarioFuture, Tier};
 use sp1_cluster_common::proto::ProofRequestStatus;
 
 pub fn scenario() -> Scenario {
     Scenario {
         name: "fatal-failure",
-        cpu_timeout: Duration::from_mins(45),
-        gpu_timeout: Duration::from_mins(10),
+        timeout: Duration::from_mins(10),
+        tier: Tier::Full,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }

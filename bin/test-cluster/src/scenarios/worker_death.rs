@@ -2,18 +2,17 @@ use std::time::Duration;
 
 use sp1_sdk::SP1ProofMode;
 
-use crate::assert::{assert_proof_artifact_downloadable, wait_proof_status, wait_stats};
+use crate::assert::{assert_proof_completed, wait_stats};
 use crate::cluster::Cluster;
+use crate::programs;
 use crate::request::request_only;
-use crate::scenario::{Scenario, ScenarioFuture};
-use crate::scenarios::long_program;
-use sp1_cluster_common::proto::ProofRequestStatus;
+use crate::scenario::{Scenario, ScenarioFuture, Tier};
 
 pub fn scenario() -> Scenario {
     Scenario {
         name: "worker-death-requeue",
-        cpu_timeout: Duration::from_mins(90),
-        gpu_timeout: Duration::from_mins(20),
+        timeout: Duration::from_mins(20),
+        tier: Tier::Full,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -25,21 +24,19 @@ pub fn scenario() -> Scenario {
 /// guaranteed to own the controller task. The heartbeat timeout is shortened to 5s so the
 /// requeue path doesn't idle for the prod default of 30s.
 async fn run() -> anyhow::Result<()> {
-    let gpu_nodes = if cfg!(feature = "gpu") { 1 } else { 0 };
     let mut cluster = Cluster::builder()
         .cpu_nodes(1)
-        .gpu_nodes(gpu_nodes)
+        .gpu_nodes(1)
         .worker_heartbeat_timeout_secs(5)
         .start()
         .await?;
     let api = cluster.api_client().await?;
     let mut coordinator = cluster.coordinator_client().await?;
 
-    let (elf, stdin) = long_program();
     let proof_id = request_only(
         &cluster.gateway_rpc_url(),
-        elf,
-        stdin,
+        programs::RSP_ELF.clone(),
+        programs::RSP_STDIN.clone(),
         SP1ProofMode::Compressed,
     )
     .await?;
@@ -76,14 +73,13 @@ async fn run() -> anyhow::Result<()> {
     )
     .await?;
 
-    let pr = wait_proof_status(
+    assert_proof_completed(
         &api,
         &proof_id,
-        ProofRequestStatus::Completed,
         Duration::from_hours(1),
+        &cluster.artifact_client(),
     )
     .await?;
-    assert_proof_artifact_downloadable(&pr, &cluster.artifact_client()).await?;
 
     cluster.shutdown().await;
     Ok(())

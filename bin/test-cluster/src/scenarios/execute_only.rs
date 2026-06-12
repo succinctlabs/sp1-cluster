@@ -6,7 +6,7 @@ use crate::assert::{assert_execution_result, task_statuses, wait_proof_status, E
 use crate::cluster::{Cluster, CoordinatorKind};
 use crate::programs;
 use crate::request::request_only;
-use crate::scenario::{Scenario, ScenarioFuture};
+use crate::scenario::{Scenario, ScenarioFuture, Tier};
 use sp1_cluster_common::proto::{ExecutionFailureCause, ExecutionStatus, ProofRequestStatus};
 
 /// Pinned gas-oracle regression value for the committed fibonacci elf+stdin
@@ -16,8 +16,8 @@ const EXPECTED_FIBONACCI_GAS: u64 = 20173;
 pub fn scenario() -> Scenario {
     Scenario {
         name: "execute-only",
-        cpu_timeout: Duration::from_mins(45),
-        gpu_timeout: Duration::from_mins(10),
+        timeout: Duration::from_mins(10),
+        tier: Tier::Smoke,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }

@@ -16,8 +16,8 @@ CI: `.github/workflows/e2e.yml` (smoke per-PR; full post-merge/manual).
 - gpu flavor: `--features gpu` (needs an Nvidia GPU)
 - cpu-only flavor: `SP1_CLUSTER_CPU_ONLY=1`, no gpu feature (runs anywhere)
 
-The cpu-only flavor runs the ENTIRE suite on machines without GPUs; long/large
-workloads swap rsp → fibonacci with a large iteration count.
+The cpu-only flavor runs the same suite on machines without GPUs; workloads do
+not change (long/large scenarios prove rsp on CPU, which is slow).
 
 ## Usage
 
@@ -29,7 +29,7 @@ export CARGO_TARGET_DIR=target_release
 cargo run --release --bin sp1-test-cluster --features gpu -- list
 
 # run one scenario
-RUST_LOG=info cargo run --release --bin sp1-test-cluster --features gpu -- run quick
+RUST_LOG=info cargo run --release --bin sp1-test-cluster --features gpu -- run proof-mode-compressed
 
 # smoke suite (default when no args are given)
 RUST_LOG=info cargo run --release --bin sp1-test-cluster --features gpu -- suite smoke
@@ -49,7 +49,6 @@ directory). Requirements: docker (testcontainers), network access on first run
 
 | Scenario | What it pins down |
 |---|---|
-| `quick` | single fib compressed proof — cheap dev loop |
 | `proof-mode-{core,compressed,plonk,groth16}` | every proof mode, verified locally |
 | `execute-only` | standalone executor stack (prod `is_executor_cluster` shape): ExecuteOnly task, gas oracle (fib gas pinned), pv hash, empty-stdin failure cause |
 | `multi-worker` | assignment under capacity (2 CPU + 1 GPU / 4 CPU), 4 concurrent requests |
@@ -72,9 +71,13 @@ recovery.
 
 ## Tiers
 
-- smoke @ gpu: `proof-mode-core`, `proof-mode-compressed`, `execute-only`
-- smoke @ cpu-only: `quick`, `execute-only`
-- full: every scenario (both flavors)
+Each scenario declares its own tier (the `tier` field in its `Scenario`
+definition, next to the constraints that motivate the choice); the smoke tier
+runs the scenarios that declare `Smoke`, the full tier runs everything.
+
+- smoke: `proof-mode-core`, `proof-mode-compressed`, `proof-mode-groth16`,
+  `execute-only`
+- full: every scenario
 
 ## GPU memory requirements
 

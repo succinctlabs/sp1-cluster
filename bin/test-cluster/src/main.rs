@@ -8,7 +8,7 @@ mod scenarios;
 mod suite;
 mod utils;
 
-use scenario::{Flavor, Tier};
+use scenario::Tier;
 
 #[derive(Debug)]
 enum Cmd {
@@ -42,26 +42,19 @@ async fn main() -> anyhow::Result<()> {
         )
     }
 
-    // Size the in-process workers from the machine itself (crates/worker's limiter:
-    // min of RAM and /dev/shm), never from an ambient override — a stray
-    // WORKER_MAX_WEIGHT_OVERRIDE in the host env would silently skew every
-    // scenario's scheduling. Must run before the first get_max_weight() call
-    // (lazy_static reads the env once). NB: an undersized /dev/shm caps the budget
-    // the same way (CI remounts it to RAM-size; PlonkWrap alone weighs 60).
-    std::env::remove_var("WORKER_MAX_WEIGHT_OVERRIDE");
-
     sp1_cluster_common::logger::init(opentelemetry_sdk::Resource::empty());
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = parse_args(&args).map_err(|e| anyhow::anyhow!(e))?;
-    let flavor = Flavor::current();
 
     match cmd {
         Cmd::List => {
             for s in scenarios::all() {
                 println!(
-                    "{:<24} cpu_timeout={:?} gpu_timeout={:?}",
-                    s.name, s.cpu_timeout, s.gpu_timeout
+                    "{:<24} timeout={:?} tier={}",
+                    s.name,
+                    s.timeout,
+                    s.tier.as_str()
                 );
             }
             Ok(())
@@ -72,14 +65,13 @@ async fn main() -> anyhow::Result<()> {
                 .iter()
                 .find(|s| s.name == name)
                 .ok_or_else(|| anyhow::anyhow!("unknown scenario {name:?} (see `list`)"))?;
-            tracing::info!("running scenario {name} (flavor {})", flavor.as_str());
+            tracing::info!("running scenario {name}");
             (s.run)().await?;
             tracing::info!("scenario {name} PASSED");
             Ok(())
         }
         Cmd::Suite(tier) => {
-            let all = scenarios::all();
-            let ok = suite::run_suite(&all, tier, flavor).await?;
+            let ok = suite::run_suite(&scenarios::get(tier)).await?;
             if !ok {
                 std::process::exit(1);
             }
@@ -98,7 +90,9 @@ mod tests {
 
     #[test]
     fn parses_commands() {
-        assert!(matches!(parse_args(&s(&["run", "quick"])), Ok(Cmd::Run(n)) if n == "quick"));
+        assert!(
+            matches!(parse_args(&s(&["run", "execute-only"])), Ok(Cmd::Run(n)) if n == "execute-only")
+        );
         assert!(matches!(
             parse_args(&s(&["suite", "smoke"])),
             Ok(Cmd::Suite(Tier::Smoke))

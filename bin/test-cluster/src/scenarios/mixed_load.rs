@@ -2,19 +2,17 @@ use std::time::Duration;
 
 use sp1_sdk::SP1ProofMode;
 
-use crate::assert::{assert_proof_artifact_downloadable, wait_proof_status};
+use crate::assert::assert_proof_completed;
 use crate::cluster::Cluster;
 use crate::programs;
 use crate::request::request_only;
-use crate::scenario::{Scenario, ScenarioFuture};
-use crate::scenarios::long_program;
-use sp1_cluster_common::proto::ProofRequestStatus;
+use crate::scenario::{Scenario, ScenarioFuture, Tier};
 
 pub fn scenario() -> Scenario {
     Scenario {
         name: "mixed-load",
-        cpu_timeout: Duration::from_mins(90),
-        gpu_timeout: Duration::from_mins(20),
+        timeout: Duration::from_mins(20),
+        tier: Tier::Full,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -27,13 +25,12 @@ async fn run() -> anyhow::Result<()> {
     let cluster = Cluster::standard().start().await?;
     let api = cluster.api_client().await?;
 
-    let (long_elf, long_stdin) = long_program();
     let mut proof_ids = Vec::new();
     proof_ids.push(
         request_only(
             &cluster.gateway_rpc_url(),
-            long_elf,
-            long_stdin,
+            programs::RSP_ELF.clone(),
+            programs::RSP_STDIN.clone(),
             SP1ProofMode::Compressed,
         )
         .await?,
@@ -52,14 +49,13 @@ async fn run() -> anyhow::Result<()> {
     tracing::info!("submitted {} requests back-to-back", proof_ids.len());
 
     for proof_id in &proof_ids {
-        let pr = wait_proof_status(
+        assert_proof_completed(
             &api,
             proof_id,
-            ProofRequestStatus::Completed,
             Duration::from_hours(1),
+            &cluster.artifact_client(),
         )
         .await?;
-        assert_proof_artifact_downloadable(&pr, &cluster.artifact_client()).await?;
         tracing::info!("{proof_id} completed");
     }
 

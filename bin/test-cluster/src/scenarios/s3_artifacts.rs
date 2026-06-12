@@ -2,18 +2,17 @@ use std::time::Duration;
 
 use sp1_sdk::SP1ProofMode;
 
-use crate::assert::{assert_proof_artifact_downloadable, wait_proof_status};
+use crate::assert::assert_proof_completed;
 use crate::cluster::Cluster;
+use crate::programs;
 use crate::request::request_only;
-use crate::scenario::{Scenario, ScenarioFuture};
-use crate::scenarios::long_program;
-use sp1_cluster_common::proto::ProofRequestStatus;
+use crate::scenario::{Scenario, ScenarioFuture, Tier};
 
 pub fn scenario() -> Scenario {
     Scenario {
         name: "s3-artifacts",
-        cpu_timeout: Duration::from_mins(90),
-        gpu_timeout: Duration::from_mins(20),
+        timeout: Duration::from_mins(20),
+        tier: Tier::Full,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -25,25 +24,23 @@ async fn run() -> anyhow::Result<()> {
     let cluster = Cluster::standard().start_s3().await?;
     let api = cluster.api_client().await?;
 
-    let (elf, stdin) = long_program();
     let proof_id = request_only(
         &cluster.gateway_rpc_url(),
-        elf,
-        stdin,
+        programs::RSP_ELF.clone(),
+        programs::RSP_STDIN.clone(),
         SP1ProofMode::Compressed,
     )
     .await?;
     tracing::info!("submitted {proof_id} on the S3 (MinIO) store");
 
-    let pr = wait_proof_status(
+    // The artifact download goes through the S3 client — exercises endpoint/path-style.
+    assert_proof_completed(
         &api,
         &proof_id,
-        ProofRequestStatus::Completed,
         Duration::from_hours(1),
+        &cluster.artifact_client(),
     )
     .await?;
-    // Downloads the proof artifact through the S3 client — exercises endpoint/path-style.
-    assert_proof_artifact_downloadable(&pr, &cluster.artifact_client()).await?;
 
     cluster.shutdown().await;
     Ok(())

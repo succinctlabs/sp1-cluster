@@ -4,15 +4,15 @@ use sp1_sdk::SP1ProofMode;
 
 use crate::assert::wait_stats;
 use crate::cluster::Cluster;
+use crate::programs;
 use crate::request::request_only;
-use crate::scenario::{Scenario, ScenarioFuture};
-use crate::scenarios::long_program;
+use crate::scenario::{Scenario, ScenarioFuture, Tier};
 
 pub fn scenario() -> Scenario {
     Scenario {
         name: "shutdown-drain",
-        cpu_timeout: Duration::from_mins(45),
-        gpu_timeout: Duration::from_mins(10),
+        timeout: Duration::from_mins(10),
+        tier: Tier::Full,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -26,11 +26,10 @@ async fn run() -> anyhow::Result<()> {
     let addrs = cluster.addrs.clone();
     let mut coordinator = cluster.coordinator_client().await?;
 
-    let (elf, stdin) = long_program();
     let proof_id = request_only(
         &cluster.gateway_rpc_url(),
-        elf,
-        stdin,
+        programs::RSP_ELF.clone(),
+        programs::RSP_STDIN.clone(),
         SP1ProofMode::Compressed,
     )
     .await?;

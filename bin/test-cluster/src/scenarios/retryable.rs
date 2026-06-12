@@ -2,18 +2,17 @@ use std::time::Duration;
 
 use sp1_sdk::SP1ProofMode;
 
-use crate::assert::{assert_proof_artifact_downloadable, wait_proof_status};
+use crate::assert::assert_proof_completed;
 use crate::cluster::Cluster;
 use crate::programs;
 use crate::request::request_only;
-use crate::scenario::{Scenario, ScenarioFuture};
-use sp1_cluster_common::proto::ProofRequestStatus;
+use crate::scenario::{Scenario, ScenarioFuture, Tier};
 
 pub fn scenario() -> Scenario {
     Scenario {
         name: "retryable-then-success",
-        cpu_timeout: Duration::from_mins(45),
-        gpu_timeout: Duration::from_mins(10),
+        timeout: Duration::from_mins(10),
+        tier: Tier::Full,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -40,14 +39,13 @@ async fn run() -> anyhow::Result<()> {
     .await?;
     tracing::info!("submitted {proof_id} (first CONTROLLER attempt will fail retryably)");
 
-    let pr = wait_proof_status(
+    assert_proof_completed(
         &api,
         &proof_id,
-        ProofRequestStatus::Completed,
         Duration::from_mins(30),
+        &cluster.artifact_client(),
     )
     .await?;
-    assert_proof_artifact_downloadable(&pr, &cluster.artifact_client()).await?;
     tracing::info!("proof completed despite injected retryable failure");
 
     cluster.shutdown().await;

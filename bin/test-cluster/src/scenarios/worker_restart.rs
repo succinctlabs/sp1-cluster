@@ -2,18 +2,18 @@ use std::time::Duration;
 
 use sp1_sdk::SP1ProofMode;
 
-use crate::assert::{assert_proof_artifact_downloadable, wait_proof_status, wait_stats};
+use crate::assert::{assert_proof_completed, wait_proof_status, wait_stats};
 use crate::cluster::Cluster;
 use crate::programs;
 use crate::request::request_only;
-use crate::scenario::{Scenario, ScenarioFuture};
+use crate::scenario::{Scenario, ScenarioFuture, Tier};
 use sp1_cluster_common::proto::ProofRequestStatus;
 
 pub fn scenario() -> Scenario {
     Scenario {
         name: "worker-restart",
-        cpu_timeout: Duration::from_mins(60),
-        gpu_timeout: Duration::from_mins(10),
+        timeout: Duration::from_mins(10),
+        tier: Tier::Full,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
 }
@@ -67,14 +67,13 @@ async fn run() -> anyhow::Result<()> {
         SP1ProofMode::Compressed,
     )
     .await?;
-    let pr = wait_proof_status(
+    assert_proof_completed(
         &api,
         &proof_b,
-        ProofRequestStatus::Completed,
         Duration::from_mins(30),
+        &cluster.artifact_client(),
     )
     .await?;
-    assert_proof_artifact_downloadable(&pr, &cluster.artifact_client()).await?;
 
     cluster.shutdown().await;
     Ok(())
