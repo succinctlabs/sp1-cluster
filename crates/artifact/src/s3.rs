@@ -5,6 +5,8 @@ use anyhow::{anyhow, Result};
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, BehaviorVersion, Region};
 use aws_sdk_s3::{
     config::{IdentityCache, StalledStreamProtectionConfig},
+    error::SdkError,
+    operation::{get_object::GetObjectError, head_object::HeadObjectError},
     primitives::{ByteStream, SdkBody},
     Client as S3Client,
 };
@@ -25,6 +27,33 @@ lazy_static! {
 
 const CHUNK_SIZE: usize = 32 * 1024 * 1024;
 const MAX_RETRY_COUNT: u32 = 7;
+
+/// Classify a download error for the backoff layer.
+///
+/// Only a definitive "object does not exist" is permanent. Everything else —
+/// expired credentials, connection resets, throttling that exhausted the
+/// SDK's own retries — gets retried with a fresh request (and freshly signed
+/// credentials), because a download failure here fails the entire proof.
+/// The cost of retrying a genuinely missing object is bounded by BACKOFF's
+/// 120s max elapsed time.
+fn classify_download_error(err: anyhow::Error) -> backoff::Error<anyhow::Error> {
+    let not_found = err
+        .downcast_ref::<SdkError<GetObjectError>>()
+        .map(|e| e.as_service_error().is_some_and(|e| e.is_no_such_key()))
+        .or_else(|| {
+            err.downcast_ref::<SdkError<HeadObjectError>>()
+                .map(|e| e.as_service_error().is_some_and(|e| e.is_not_found()))
+        })
+        .unwrap_or(false);
+    if not_found {
+        backoff::Error::permanent(err)
+    } else {
+        // `{:#}` logs the full error chain; SdkError's Display alone is just
+        // "service error", which is undiagnosable.
+        tracing::warn!(error = format!("{err:#}"), "retrying s3 download error");
+        backoff::Error::transient(err)
+    }
+}
 
 #[derive(Clone)]
 pub enum S3DownloadMode {
@@ -135,14 +164,21 @@ impl S3ArtifactClient {
     ) -> Result<Vec<u8>> {
         let key = Self::get_s3_key_from_id(artifact_type, id);
 
-        let size = match self.s3_dl_mode.clone() {
-            S3DownloadMode::REST(dl_client_rest) => {
-                dl_client_rest.get_object_size(&self.bucket, &key).await?
+        let size = backoff::future::retry(BACKOFF.clone(), || {
+            let key = key.clone();
+            async move {
+                let ret = match self.s3_dl_mode.clone() {
+                    S3DownloadMode::REST(dl_client_rest) => {
+                        dl_client_rest.get_object_size(&self.bucket, &key).await
+                    }
+                    S3DownloadMode::AwsSDK(dl_client_sdk) => {
+                        dl_client_sdk.get_object_size(&self.bucket, &key).await
+                    }
+                };
+                ret.map_err(classify_download_error)
             }
-            S3DownloadMode::AwsSDK(dl_client_sdk) => {
-                dl_client_sdk.get_object_size(&self.bucket, &key).await?
-            }
-        };
+        })
+        .await?;
 
         // If the file is smaller than the chunk size, just download it.
         if size <= CHUNK_SIZE as i64 {
@@ -158,7 +194,7 @@ impl S3ArtifactClient {
                             dl_client_sdk.read_bytes(&bucket, &key, None).await
                         }
                     };
-                    ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
+                    ret.map_err(classify_download_error)
                 }
             })
             .await?;
@@ -201,7 +237,7 @@ impl S3ArtifactClient {
                             }
                         };
 
-                        ret.map_err(|e| backoff::Error::permanent(anyhow!(e)))
+                        ret.map_err(classify_download_error)
                     })
                     .await?;
                     tx.send((index, body)).await?;
