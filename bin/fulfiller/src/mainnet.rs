@@ -338,6 +338,10 @@ impl NetworkRequest for NetworkProofRequest {
         self.0.fulfillment_status == spn_network_types::FulfillmentStatus::Unfulfillable as i32
     }
 
+    fn is_fulfilled(&self) -> bool {
+        self.0.fulfillment_status == spn_network_types::FulfillmentStatus::Fulfilled as i32
+    }
+
     fn program_uri(&self) -> &str {
         &self.0.program_uri
     }

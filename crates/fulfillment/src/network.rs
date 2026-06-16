@@ -10,6 +10,13 @@ pub trait NetworkRequest: Send + Sync + 'static {
     /// Whether the network already marked this request `Unfulfillable` (a terminal state).
     fn is_unfulfillable(&self) -> bool;
 
+    /// Whether the network already marked this request `Fulfilled` (a terminal success).
+    ///
+    /// This happens when another path (e.g. the SPN proxy delivering a mainnet proof)
+    /// satisfied the request while our cluster was still proving it. The request
+    /// succeeded, so we must abort the wasted cluster work without failing fulfillment.
+    fn is_fulfilled(&self) -> bool;
+
     fn program_uri(&self) -> &str;
 
     fn stdin_uri(&self) -> &str;

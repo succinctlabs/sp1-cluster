@@ -34,6 +34,28 @@ const VK_MISMATCH_STRINGS: &[&str] = &[
     "vk hash from syscall does not match vkey from input",
 ];
 
+/// Whether a cancelable candidate should be cancelled at all.
+///
+/// A `Fulfilled` candidate that is NOT in the cluster's in-flight set is a no-op:
+/// the network already succeeded and our cluster isn't wasting work on it, so
+/// cancelling it would only pollute `requests_cancelled`. Every other candidate
+/// (unexecutable, unfulfillable, or fulfilled-while-still-in-flight) is cancelable.
+fn should_cancel(is_fulfilled: bool, in_flight: bool) -> bool {
+    !is_fulfilled || in_flight
+}
+
+/// Whether the network still expects an answer for this request, i.e. whether we
+/// should call `fail_fulfillment` (`cancel_on_network`).
+///
+/// We only release it on the network when it is neither already `Unfulfillable`
+/// nor `Fulfilled`. A `Fulfilled` request succeeded, so failing it would be wrong;
+/// an `Unfulfillable` one is already terminal, so failing it is a wasteful no-op.
+/// For non-fulfilled requests this is identical to the existing `!is_unfulfillable`
+/// gate.
+fn should_cancel_on_network(is_unfulfillable: bool, is_fulfilled: bool) -> bool {
+    !is_unfulfillable && !is_fulfilled
+}
+
 /// Derive the network's `ProofRequestError` from the worker's `extra_data`.
 /// An `ExecutionResult` with non-zero `failure_cause` means execute_only itself
 /// faulted -> `EXECUTION_FAILURE`. A `ProvingFailure` payload means a
@@ -384,16 +406,47 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         }
         info!("found {} cancelable requests", requests.len());
 
-        let failure_tasks = requests.into_iter().map(|request| {
+        // Fetch the cluster's in-flight (Pending) request IDs so we can tell whether a
+        // `Fulfilled` candidate still has wasted cluster work to abort. Mirrors the
+        // listing in `schedule_requests`.
+        let in_flight: HashSet<String> = self
+            .cluster
+            .get_proof_requests(ProofRequestListRequest {
+                limit: Some(REQUEST_LIMIT),
+                minimum_deadline: Some(time_now()),
+                ..Default::default()
+            })
+            .map_err(|e| anyhow!("failed to get requests: {}", e))
+            .await?
+            .into_iter()
+            .filter(|r| r.proof_status == ProofRequestStatus::Pending as i32)
+            .map(|r| r.id)
+            .collect();
+        let in_flight = Arc::new(in_flight);
+
+        let failure_tasks = requests.into_iter().filter_map(|request| {
+            let request_id = request.request_id();
+            let is_fulfilled = request.is_fulfilled();
+            let in_flight = in_flight.contains(&request_id);
+
+            // Skip no-op cancels: a request the network already fulfilled that our cluster
+            // is not proving has nothing to abort and no fulfillment to release.
+            if !should_cancel(is_fulfilled, in_flight) {
+                debug!(
+                    "skipping fulfilled request 0x{} not in cluster in-flight set",
+                    request_id
+                );
+                return None;
+            }
+
             let self_clone = self.clone();
-            tokio::spawn(async move {
-                let request_id = request.request_id();
+            Some(tokio::spawn(async move {
                 let result = async {
                     // Only fail on the network while it still expects one. A request the network
-                    // has already finalized treats the fail as a no-op, so re-sending it each
-                    // sweep until the deadline would only spend the signer's nonce. The cluster
-                    // unclaim runs either way.
-                    if !request.is_unfulfillable() {
+                    // has already finalized (unfulfillable) treats the fail as a no-op, and a
+                    // fulfilled request succeeded — failing either would be wrong or wasteful.
+                    // The cluster unclaim runs either way.
+                    if should_cancel_on_network(request.is_unfulfillable(), is_fulfilled) {
                         self_clone.cancel_on_network(&request_id).await?;
                     }
                     self_clone.cancel_on_cluster(&request_id).await
@@ -410,7 +463,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                         self_clone.metrics.request_cancel_failures.increment(1);
                     }
                 }
-            })
+            }))
         });
 
         join_all(failure_tasks).await;
@@ -710,4 +763,45 @@ pub fn extract_artifact_name(s3_url: &str) -> Result<String> {
         .next_back()
         .map(String::from)
         .ok_or_else(|| anyhow!("Invalid S3 URL format"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_cancel, should_cancel_on_network};
+
+    /// `should_cancel` skips exactly one case: a fulfilled request that is not
+    /// in the cluster's in-flight set (a no-op cancel). All other combinations
+    /// are cancelable.
+    #[test]
+    fn should_cancel_all_combos() {
+        // (is_fulfilled, in_flight) -> expected
+        assert!(should_cancel(false, false)); // unexecutable/unfulfillable, not in-flight
+        assert!(should_cancel(false, true)); // unexecutable/unfulfillable, in-flight
+        assert!(should_cancel(true, true)); // fulfilled while still proving -> abort
+        assert!(!should_cancel(true, false)); // fulfilled, nothing to abort -> skip
+    }
+
+    /// `should_cancel_on_network` only releases the request on the network when it
+    /// is neither already unfulfillable nor fulfilled. This generalizes the old
+    /// `!is_unfulfillable` gate: for non-fulfilled requests the result is identical.
+    #[test]
+    fn should_cancel_on_network_all_combos() {
+        // (is_unfulfillable, is_fulfilled) -> expected
+        assert!(should_cancel_on_network(false, false)); // network still expects an answer
+        assert!(!should_cancel_on_network(true, false)); // already terminal (unfulfillable)
+        assert!(!should_cancel_on_network(false, true)); // succeeded -> must not fail it
+        assert!(!should_cancel_on_network(true, true)); // both terminal -> no-op
+    }
+
+    /// For non-fulfilled requests, `should_cancel_on_network` must match the old
+    /// `!is_unfulfillable` behavior exactly.
+    #[test]
+    fn should_cancel_on_network_preserves_legacy_gate() {
+        for is_unfulfillable in [false, true] {
+            assert_eq!(
+                should_cancel_on_network(is_unfulfillable, false),
+                !is_unfulfillable
+            );
+        }
+    }
 }
