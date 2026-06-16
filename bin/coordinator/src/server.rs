@@ -551,16 +551,21 @@ pub async fn start_coordinator_server_custom<
     config: Settings,
     token: CancellationToken,
 ) -> Result<(Arc<Coordinator<P>>, impl Future<Output = eyre::Result<()>>)> {
-    let addr = config.addr.parse::<SocketAddr>().unwrap();
-
-    let mut service = GenericWorkerService::<P>::default();
+    let addr = config.addr.parse::<SocketAddr>().map_err(|e| {
+        eyre::eyre!(
+            "Failed to parse coordinator config.addr ({}): {e}",
+            &config.addr
+        )
+    })?;
 
     let metrics_addr = config.metrics_addr.parse().map_err(|e| {
         eyre::eyre!(
-            "Failed to parse metrics addr ({}): {e}",
+            "Failed to parse coordinator config.metrics_addr ({}): {e}",
             &config.metrics_addr
         )
     })?;
+
+    let mut service = GenericWorkerService::<P>::default();
 
     // Initialize metrics server and metrics
     let (metrics, mut metrics_server_handle, metrics_shutdown_tx) =
@@ -570,7 +575,7 @@ pub async fn start_coordinator_server_custom<
 
     // Set metrics in the coordinator
     Arc::get_mut(&mut service.coordinator)
-        .unwrap()
+        .expect("We just created service, so we should have a unique reference to it")
         .set_metrics(metrics.clone());
 
     let (completed_tx, completed_rx) = mpsc::unbounded_channel::<ProofResult<P>>();
@@ -654,7 +659,7 @@ pub async fn start_coordinator_server_custom<
                 print_latency().await;
                 // Initiate coordinator shutdown
                 coordinator_for_shutdown.shutdown().await;
-                metrics_shutdown_tx.send(()).unwrap();
+                let _ = metrics_shutdown_tx.send(()).ok();
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
             _ = async {
