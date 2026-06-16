@@ -408,20 +408,25 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 
         // Fetch the cluster's in-flight (Pending) request IDs so we can tell whether a
         // `Fulfilled` candidate still has wasted cluster work to abort. Mirrors the
-        // listing in `schedule_requests`.
-        let in_flight: HashSet<String> = self
-            .cluster
-            .get_proof_requests(ProofRequestListRequest {
-                limit: Some(REQUEST_LIMIT),
-                minimum_deadline: Some(time_now()),
-                ..Default::default()
-            })
-            .map_err(|e| anyhow!("failed to get requests: {}", e))
-            .await?
-            .into_iter()
-            .filter(|r| r.proof_status == ProofRequestStatus::Pending as i32)
-            .map(|r| r.id)
-            .collect();
+        // listing in `schedule_requests`. Only `Fulfilled` candidates consult this set, so
+        // skip the extra cluster RPC entirely when none are present (e.g. mainnet, which
+        // never produces a `Fulfilled` cancelable).
+        let in_flight: HashSet<String> = if requests.iter().any(|r| r.is_fulfilled()) {
+            self.cluster
+                .get_proof_requests(ProofRequestListRequest {
+                    limit: Some(REQUEST_LIMIT),
+                    minimum_deadline: Some(time_now()),
+                    ..Default::default()
+                })
+                .map_err(|e| anyhow!("failed to get requests: {}", e))
+                .await?
+                .into_iter()
+                .filter(|r| r.proof_status == ProofRequestStatus::Pending as i32)
+                .map(|r| r.id)
+                .collect()
+        } else {
+            HashSet::new()
+        };
         let in_flight = Arc::new(in_flight);
 
         let failure_tasks = requests.into_iter().filter_map(|request| {
