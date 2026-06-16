@@ -367,7 +367,7 @@ impl ClusterBuilder {
                     postgres_auto_migrate: true,
                 };
                 async move {
-                    sp1_cluster_api::run_with_shutdown(config, token)
+                    sp1_cluster_api::run(config, token)
                         .await
                         .map_err(|e| anyhow!("api exited: {e:?}"))
                 }
