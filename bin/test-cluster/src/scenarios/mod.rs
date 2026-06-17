@@ -6,7 +6,7 @@ mod fatal_failure;
 mod mixed_load;
 mod multi_worker;
 mod proof_modes;
-mod retryable;
+mod retryable_prove_shard;
 mod s3_artifacts;
 mod shutdown_drain;
 mod worker_death;
@@ -31,7 +31,7 @@ pub fn all() -> Vec<Scenario> {
     res.push(multi_worker::scenario());
     res.push(mixed_load::scenario());
     res.push(worker_death::scenario());
-    res.push(retryable::scenario());
+    res.push(retryable_prove_shard::scenario());
     res.push(fatal_failure::scenario());
     res.extend(cancel::scenarios());
     res.push(coordinator_restart::scenario());

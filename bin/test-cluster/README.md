@@ -53,8 +53,8 @@ directory). Requirements: docker (testcontainers), network access on first run
 | `multi-worker` | assignment under capacity (2 CPU + 1 GPU / 4 CPU), 4 concurrent requests |
 | `mixed-load` | long + 4 small requests back-to-back; no starvation |
 | `worker-death-requeue` | kill the worker owning active work; 5s heartbeat cleanup; requeued work completes after restart |
-| `retryable-then-success` | TEST_FAIL_TASK fails the first Controller attempt; retry completes the proof |
-| `fatal-failure` | empty-stdin execution failure on the PROVING path → Failed + failure metadata |
+| `retryable-prove-shard` | TEST_FAIL_TASK fails the first PROVE_SHARD attempt; retry completes the proof |
+| `fatal-failure` | cycle-limit-exceeded execution failure on the PROVING path → Failed + failure metadata |
 | `cancel-pending` | cancel with no workers: API row Cancelled, queue dropped, status holds |
 | `cancel-active` | cancel mid-proving (api + coordinator, mirroring the fulfiller): work drained, status holds |
 | `coordinator-restart` | kill+restart coordinator on the same port; workers rolled; new proof completes |

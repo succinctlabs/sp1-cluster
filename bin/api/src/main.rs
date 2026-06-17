@@ -1,6 +1,7 @@
 use opentelemetry_sdk::Resource;
 use sp1_cluster_api::ApiConfig;
 use sp1_cluster_common::logger;
+use sp1_cluster_common::shutdown::wait_for_shutdown_signal;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -19,6 +20,7 @@ async fn main() -> anyhow::Result<()> {
         postgres_uri: std::env::var("API_DATABASE_URL").expect("API_DATABASE_URL must be set"),
     };
     let token = CancellationToken::new();
+    tokio::spawn(wait_for_shutdown_signal(token.clone()));
     sp1_cluster_api::run(config, token).await?;
 
     Ok(())

@@ -48,8 +48,11 @@ async fn run() -> anyhow::Result<()> {
     // All cluster ports must be re-bindable: any zombie server still listening fails this.
     for (addr, what) in [
         (addrs.api_grpc.as_str(), "api gRPC"),
+        (addrs.api_http.as_str(), "api HTTP"),
         (addrs.coordinator.as_str(), "coordinator gRPC"),
+        (addrs.coordinator_metrics.as_str(), "coordinator metrics"),
         (addrs.gateway_grpc.as_str(), "gateway gRPC"),
+        (addrs.gateway_http.as_str(), "gateway HTTP"),
     ] {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
