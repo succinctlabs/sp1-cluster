@@ -11,6 +11,7 @@ use sp1_cluster_fulfillment::{
 };
 use sp1_sdk::network::signer::NetworkSigner;
 use spn_artifacts::Artifact;
+use spn_network_types::error_trace::ErrorTrace;
 
 /// SPN (SP1 Prover Network) implementation of FulfillmentNetwork.
 #[derive(Clone)]
@@ -92,12 +93,21 @@ impl FulfillmentNetwork for MainnetFulfiller {
         signer: &NetworkSigner,
     ) -> Result<()> {
         let error = request_error_from_extra_data(request.extra_data.as_deref());
-        self.fail_request_with_error(&request.id, error, &[], signer)
+        // Build a bounded, sanitized structured trace from the cluster's failure
+        // `extra_data` so the network records *why* proving failed instead of only
+        // the coarse `ProofRequestError` enum. Useless/empty extra_data yields
+        // `None` (the network stores NULL rather than a junk trace).
+        let error_trace = ErrorTrace::from_cluster_extra_data(request.extra_data.as_deref())
+            .map(|t| t.with_request_id(request.id.clone()))
+            .and_then(|t| t.finalize())
+            .and_then(|t| t.to_wire_bytes());
+        self.fail_request_with_error(&request.id, error, error_trace, &[], signer)
             .await
     }
 
     async fn cancel_request(&self, request_id: &str, signer: &NetworkSigner) -> Result<()> {
-        self.fail_request_with_error(request_id, None, &[], signer)
+        // A cancellation carries no failure detail; send no trace.
+        self.fail_request_with_error(request_id, None, None, &[], signer)
             .await
     }
 
@@ -105,6 +115,7 @@ impl FulfillmentNetwork for MainnetFulfiller {
         &self,
         request_id: &str,
         error: Option<i32>,
+        error_trace: Option<Vec<u8>>,
         _domain: &[u8],
         signer: &NetworkSigner,
     ) -> Result<()> {
@@ -125,6 +136,7 @@ impl FulfillmentNetwork for MainnetFulfiller {
             nonce,
             request_id: request_id_bytes,
             error,
+            error_trace,
         };
 
         let fail_request = spn_network_types::FailFulfillmentRequest {
