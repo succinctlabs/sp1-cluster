@@ -43,19 +43,30 @@ async fn run() -> anyhow::Result<()> {
     tracing::info!("proof in flight; taking the api down");
 
     cluster.stop("api").await?;
-    // Outage window: long enough that in-window completions lose their terminal write.
-    tokio::time::sleep(Duration::from_secs(20)).await;
+
+    // Outage window: Until the proof has fully drained from the coordinator,
+    // so that we know that the final status update failed.
+    wait_stats(
+        &mut coordinator,
+        "proof drained while the api is down",
+        Duration::from_mins(15),
+        |s| s.active_proofs == 0 && s.active_tasks == 0,
+    )
+    .await?;
+    tracing::info!("proof drained with the api down; its terminal write is now lost");
+
     cluster.restart("api").await?;
     crate::utils::wait_for_tcp(&cluster.addrs.api_grpc, "restarted api").await?;
     tracing::info!("api restored");
 
-    // The proof must reach Completed in the API despite the outage (either it finished
-    // after restore, or the claimer re-issued the lost terminal write).
+    // The terminal write was lost while the API was down and the status task never retries, so
+    // the only path left to a terminal status is the claimer re-issuing the unconfirmed write
+    // (#126, swept every 500ms). Reaching Completed therefore proves that recovery path ran.
     let api = cluster.api_client().await?;
     assert_proof_completed(
         &api,
         &proof_id,
-        Duration::from_mins(60),
+        Duration::from_mins(3),
         &cluster.artifact_client(),
     )
     .await?;
