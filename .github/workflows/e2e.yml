@@ -119,9 +119,9 @@ jobs:
 
       - name: Pre-pull container images
         run: |
-          docker pull -q bitnamisecure/redis:latest
-          docker pull -q bitnamisecure/postgresql:latest
-          docker pull -q minio/minio:latest
+          docker pull -q bitnamisecure/redis:latest@sha256:d842c434ff617b84f954700b60fd99ac8b567ce16292daccb18cfc214cdcc2ec
+          docker pull -q bitnamisecure/postgresql:latest@sha256:f60aa249d5be4ec1a9651ab05515f2eb9bb2b6eb664cd300abc19f13a208900d
+          docker pull -q minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
 
       - name: Compute circuit cache key
         id: sp1
