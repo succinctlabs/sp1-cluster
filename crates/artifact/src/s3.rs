@@ -87,7 +87,16 @@ impl S3ArtifactClient {
                 .build(),
         ));
         let config = base.build();
-        S3Client::new(&config)
+        // S3-compatible stores like MinIO need path-style addressing (the endpoint itself
+        // comes from the standard AWS_ENDPOINT_URL env read by aws-config).
+        let mut s3_config = aws_sdk_s3::config::Builder::from(&config);
+        if std::env::var("AWS_S3_FORCE_PATH_STYLE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        {
+            s3_config = s3_config.force_path_style(true);
+        }
+        S3Client::from_conf(s3_config.build())
     }
 
     pub async fn create_s3_sdk_download_client(region: String) -> Arc<S3SDKClient> {

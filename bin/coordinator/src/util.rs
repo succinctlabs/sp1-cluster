@@ -54,12 +54,16 @@ where
 
 pub fn spawn_heartbeat_task<P: AssignmentPolicy>(
     coordinator: Arc<Coordinator<P>>,
+    token: tokio_util::sync::CancellationToken,
 ) -> JoinHandle<()> {
     tokio::task::spawn({
         async move {
             loop {
                 coordinator.send_heartbeats().await;
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                    _ = token.cancelled() => break,
+                }
             }
         }
     })
@@ -67,6 +71,7 @@ pub fn spawn_heartbeat_task<P: AssignmentPolicy>(
 
 pub fn spawn_coordinator_periodic_task<P: AssignmentPolicy>(
     coordinator: Arc<Coordinator<P>>,
+    token: tokio_util::sync::CancellationToken,
 ) -> JoinHandle<()> {
     tokio::task::spawn({
         async move {
@@ -77,7 +82,10 @@ pub fn spawn_coordinator_periodic_task<P: AssignmentPolicy>(
                 coordinator.cleanup_cancel_expired_proofs().await;
                 coordinator.print_info().await;
                 print_latency().await;
-                tokio::time::sleep(COORDINATOR_PERIODIC_INTERVAL).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(COORDINATOR_PERIODIC_INTERVAL) => {}
+                    _ = token.cancelled() => break,
+                }
             }
         }
     })
