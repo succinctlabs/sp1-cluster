@@ -65,17 +65,20 @@ jobs:
           retention-days: 3
 
   e2e-gpu:
-    name: E2E ${{ matrix.tier }} (gpu flavor)
+    name: E2E ${{ matrix.suite }} (gpu flavor)
     needs: build-e2e
+    if: github.event_name == matrix.event || github.event_name == 'workflow_dispatch'
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - tier: smoke
+          - suite: smoke
+            event: pull_request
             family: g6.4xlarge
             timeout: 60
-          - tier: full
+          - suite: full
+            event: push
             family: g6.8xlarge
             timeout: 240
     runs-on:
@@ -137,11 +140,11 @@ jobs:
       - name: Run suite
         run: |
           chmod +x ./sp1-test-cluster
-          ./sp1-test-cluster suite ${{ matrix.tier }}
+          ./sp1-test-cluster suite ${{ matrix.suite }}
 
       - name: Upload scenario logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-${{ matrix.tier }}-gpu-logs
+          name: e2e-${{ matrix.suite }}-gpu-logs
           path: target/test-cluster-logs/
