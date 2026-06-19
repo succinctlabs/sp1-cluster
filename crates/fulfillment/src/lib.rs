@@ -200,6 +200,8 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                                 .fail_request_with_error(
                                     &request_id,
                                     Some(VK_MISMATCH_ERROR),
+                                    // VK mismatch carries no cluster extra_data trace.
+                                    None,
                                     self_clone.domain.as_slice(),
                                     &self_clone.signer,
                                 )

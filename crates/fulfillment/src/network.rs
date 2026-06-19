@@ -59,10 +59,15 @@ pub trait FulfillmentNetwork: Send + Sync + 'static {
     ) -> Result<()>;
 
     /// Fail a fulfillment request with a specific error code (e.g., VK mismatch).
+    ///
+    /// `error_trace` is an optional bounded, sanitized JSON trace (see
+    /// `spn_network_types::error_trace`) describing why the request failed. Pass
+    /// `None` when no structured detail is available (e.g. cancellations).
     async fn fail_request_with_error(
         &self,
         request_id: &str,
         error: Option<i32>,
+        error_trace: Option<Vec<u8>>,
         domain: &[u8],
         signer: &NetworkSigner,
     ) -> Result<()>;
