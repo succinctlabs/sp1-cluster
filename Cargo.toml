@@ -39,11 +39,11 @@ p3-field = "=0.3.3-succinct"
 p3-matrix = "=0.3.3-succinct"
 
 # SPN
-spn-artifacts = { git = "https://github.com/succinctlabs/network", rev = "0b1eeab" }
-spn-metrics = { git = "https://github.com/succinctlabs/network", rev = "0b1eeab" }
-spn-network-types = { git = "https://github.com/succinctlabs/network", rev = "0b1eeab", features = ["network"] }
-spn-pricing = { git = "https://github.com/succinctlabs/network", rev = "0b1eeab" }
-spn-utils = { git = "https://github.com/succinctlabs/network", rev = "0b1eeab" }
+spn-artifacts = { git = "https://github.com/succinctlabs/network", rev = "8e58693" }
+spn-metrics = { git = "https://github.com/succinctlabs/network", rev = "8e58693" }
+spn-network-types = { git = "https://github.com/succinctlabs/network", rev = "8e58693", features = ["network"] }
+spn-pricing = { git = "https://github.com/succinctlabs/network", rev = "8e58693" }
+spn-utils = { git = "https://github.com/succinctlabs/network", rev = "8e58693" }
 
 # SP1
 sp1-core-executor = "=6.3.0"
