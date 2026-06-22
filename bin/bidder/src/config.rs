@@ -17,7 +17,8 @@ pub struct Settings {
     pub throughput_mgas: f64,
     /// Maximum number of concurrent proofs the cluster can handle
     pub max_concurrent_proofs: u32,
-    /// Token bid amount per PGU in wei
+    /// Static bid per PGU in wei. Used unconditionally when `usd_bid_enabled` is `false`;
+    /// otherwise serves as the safety-net bid when the PROVE/USD cache is missing or stale.
     pub bid_amount: U256,
     /// Base safety buffer in seconds applied to all proofs
     #[serde(default = "default_buffer_sec")]
@@ -39,6 +40,38 @@ pub struct Settings {
     pub aggressive_mode: bool,
     /// Minimum deadline in seconds to bid on (optional safety check, even in aggressive mode)
     pub min_deadline_secs: Option<u64>,
+    /// USD-denominated bid master switch. `true` (default) routes bids through the
+    /// dynamic path when fresh PROVE/USD is available; otherwise falls back to the
+    /// static `bid_amount`. `false` keeps the bidder on the static `bid_amount` path
+    /// unconditionally.
+    ///
+    /// Dynamic path: target denominated in USD. The bidder converts to wei using current
+    /// PROVE/USD, so your USD revenue per PGU stays steady as PROVE moves.
+    /// Static path: target denominated in wei. Your PROVE revenue per PGU stays fixed,
+    /// so the USD value moves with the PROVE price.
+    #[serde(default = "default_usd_bid_enabled")]
+    pub usd_bid_enabled: bool,
+    /// USD bid target in µUSD per BPGU (1 BPGU = 10⁹ PGU). Tune to your cost basis.
+    #[serde(default = "default_usd_bid_target")]
+    pub usd_bid_target: u64,
+    /// How often to refresh the PROVE/USD cache, in seconds.
+    #[serde(default = "default_usd_bid_refresh_interval_secs")]
+    pub usd_bid_refresh_interval_secs: u64,
+    /// Cached PROVE/USD older than this is treated as stale; bidder falls back to
+    /// `bid_amount` until the cache refreshes.
+    #[serde(default = "default_usd_bid_staleness_max_secs")]
+    pub usd_bid_staleness_max_secs: u64,
+}
+
+/// Runtime view of the USD bid parameters. Built from [`Settings::usd_bid`] only when
+/// the dynamic path is enabled, so its presence is equivalent to the dynamic path being
+/// active. `target` is denominated in µUSD per BPGU (1 BPGU = 10⁹ PGU); the wire-level
+/// bid is wei per PGU, derived as `target * 10⁹ / prove_usd_micros`.
+#[derive(Debug, Clone)]
+pub struct UsdBidConfig {
+    pub target: u64,
+    pub refresh_interval_secs: u64,
+    pub staleness_max_secs: u64,
 }
 
 impl Settings {
@@ -47,6 +80,15 @@ impl Settings {
             .add_source(Environment::with_prefix("BIDDER"))
             .build()?
             .try_deserialize()
+    }
+
+    /// Returns `Some(UsdBidConfig)` when the dynamic path is enabled, otherwise `None`.
+    pub fn usd_bid(&self) -> Option<UsdBidConfig> {
+        self.usd_bid_enabled.then_some(UsdBidConfig {
+            target: self.usd_bid_target,
+            refresh_interval_secs: self.usd_bid_refresh_interval_secs,
+            staleness_max_secs: self.usd_bid_staleness_max_secs,
+        })
     }
 }
 
@@ -68,4 +110,20 @@ fn default_groth16_enabled() -> bool {
 
 fn default_plonk_enabled() -> bool {
     true
+}
+
+fn default_usd_bid_enabled() -> bool {
+    true
+}
+
+fn default_usd_bid_target() -> u64 {
+    120_000 // $0.12/BPGU
+}
+
+fn default_usd_bid_refresh_interval_secs() -> u64 {
+    60
+}
+
+fn default_usd_bid_staleness_max_secs() -> u64 {
+    1800
 }

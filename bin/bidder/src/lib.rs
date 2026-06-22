@@ -1,18 +1,24 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use crate::metrics::BidderMetrics;
+use crate::{config::UsdBidConfig, metrics::BidderMetrics};
 use alloy::primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use futures::future::join_all;
-use tokio::time::sleep;
+use time::OffsetDateTime;
+use tokio::{
+    sync::RwLock,
+    time::{interval, sleep, MissedTickBehavior},
+};
 use tonic::transport::Channel;
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 
 use spn_network_types::{
     prover_network_client::ProverNetworkClient, BidRequest, BidRequestBody, FulfillmentStatus,
-    GetNonceRequest, GetOwnerRequest, MessageFormat, ProofMode, Signable, TransactionVariant,
+    GetNonceRequest, GetOwnerRequest, GetProofRequestParamsRequest, GetProvePriceRequest,
+    MessageFormat, ProofMode, Signable, TransactionVariant,
 };
+use spn_pricing::{round_down_to_tick, ProvePrice};
 use spn_utils::time_now;
 
 pub mod config;
@@ -29,6 +35,9 @@ const REFRESH_INTERVAL_SEC: u64 = 3;
 
 /// The maximum number of requests to handle in a single refresh loop.
 const REQUEST_LIMIT: u32 = 100;
+
+/// Synchronous prime-fetch cap at startup so a slow RPC can't hang the bidder.
+const PRIME_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct Bidder {
@@ -57,6 +66,20 @@ pub struct Bidder {
     aggressive_mode: bool,
     /// Minimum deadline in seconds to bid on (optional safety check, even in aggressive mode)
     min_deadline_secs: Option<u64>,
+    /// USD-denominated bid parameters. `Some` routes bids through the dynamic path
+    /// (poll `GetProvePrice`, convert target to PROVE wei via
+    /// `target * 10^9 / prove_usd_micros`). `None` keeps the bidder on the static
+    /// `bid_amount` path.
+    ///
+    /// BPGU = 10⁹ PGU; see `UsdBidConfig` for the unit convention.
+    usd_bid: Option<UsdBidConfig>,
+    /// Auction tick in wei per PGU; every bid must be a multiple of this value or the
+    /// RPC rejects it. Fetched once at startup — the tick is RPC config, changing
+    /// requires a redeploy.
+    tick_size: U256,
+    /// Cache of the last fetched PROVE/USD price. Populated by the refresh task spawned
+    /// in `run()` when the USD bid is enabled.
+    prove_usd_cache: Arc<RwLock<Option<ProvePrice>>>,
 }
 
 impl Bidder {
@@ -77,6 +100,7 @@ impl Bidder {
         plonk_enabled: bool,
         aggressive_mode: bool,
         min_deadline_secs: Option<u64>,
+        usd_bid: Option<UsdBidConfig>,
     ) -> Self {
         Self {
             network,
@@ -94,6 +118,9 @@ impl Bidder {
             plonk_enabled,
             aggressive_mode,
             min_deadline_secs,
+            usd_bid,
+            tick_size: U256::ZERO,
+            prove_usd_cache: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -137,9 +164,104 @@ impl Bidder {
         has_capacity && has_time
     }
 
+    /// Returns the bid amount to use for this iteration.
+    ///
+    /// Uses the dynamic amount when the USD bid is enabled and the cached PROVE/USD
+    /// reading is fresh; otherwise falls back to the static `bid_amount`.
+    async fn effective_bid_amount(&self) -> U256 {
+        let cache_snapshot = self.prove_usd_cache.read().await.as_ref().map(|c| {
+            // Clamp negative durations (clock skew between upstream timestamp and this read) to 0.
+            let age_secs = (OffsetDateTime::now_utc() - c.as_of).whole_seconds().max(0) as u64;
+            (c.usd_micros, age_secs)
+        });
+        match bid_amount_outcome(
+            self.usd_bid.as_ref(),
+            cache_snapshot,
+            self.bid_amount,
+            self.tick_size,
+        ) {
+            BidAmountOutcome::Static(v) => {
+                self.metrics.static_bid_used_total.increment(1);
+                v
+            }
+            BidAmountOutcome::Dynamic(v) => {
+                self.metrics.dynamic_bid_used_total.increment(1);
+                v
+            }
+        }
+    }
+
+    /// Synchronously seed the PROVE/USD cache once, bounded by `PRIME_TIMEOUT`. Called by
+    /// the dynamic-pricing setup path in `run()`; failure leaves the cache empty and the
+    /// bidder falls back to static until the refresh task takes over.
+    async fn prime_prove_usd_cache(&self) {
+        let mut network = self.network.clone();
+        let fetch = fetch_and_cache_prove_usd(&mut network, &self.prove_usd_cache, &self.metrics);
+        match tokio::time::timeout(PRIME_TIMEOUT, fetch).await {
+            Ok(Ok(usd_micros)) => info!(usd_micros, "primed PROVE/USD cache"),
+            Ok(Err(e)) => warn!(
+                error = %e,
+                "failed to prime PROVE/USD cache; starting with static fallback",
+            ),
+            Err(_) => warn!(
+                timeout_secs = PRIME_TIMEOUT.as_secs(),
+                "timed out priming PROVE/USD cache; starting with static fallback",
+            ),
+        }
+    }
+
+    /// Spawn a background task that polls `GetProvePrice` on a tick and refreshes the cache.
+    /// Keeps the *cache* fresh, not the upstream price (alert on the indexer's
+    /// `prove_price_latest_age_seconds` gauge for that).
+    fn spawn_prove_usd_refresh(&self, refresh_interval_secs: u64) {
+        let cache = self.prove_usd_cache.clone();
+        let mut network = self.network.clone();
+        let metrics = self.metrics.clone();
+        let mut ticker = interval(Duration::from_secs(refresh_interval_secs));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        tokio::spawn(async move {
+            loop {
+                ticker.tick().await;
+                match fetch_and_cache_prove_usd(&mut network, &cache, &metrics).await {
+                    Ok(usd_micros) => info!(usd_micros, "refreshed PROVE/USD cache"),
+                    Err(e) => warn!(error = %e, "PROVE/USD refresh failed; keeping previous cache"),
+                }
+            }
+        });
+    }
+
     /// Runs the bidder loop.
     pub async fn run(mut self) -> Result<()> {
         info!("starting the bidder");
+
+        // Tick alignment applies to every bid (RPC validates regardless of USD-bid state),
+        // so fetch unconditionally. Hard-fail: without the tick, no bid can be safely aligned.
+        self.tick_size = fetch_tick_size(&mut self.network.clone())
+            .await
+            .context("startup tick_size fetch failed")?;
+        info!(tick_size = %self.tick_size, "fetched network tick_size");
+
+        // Validate operator-configured bid amount. Catches misconfig at startup instead of
+        // producing silently-rejected bids.
+        validate_bid_amount(self.bid_amount, self.tick_size).context("bid_amount")?;
+
+        match self.usd_bid.as_ref() {
+            Some(bid) => {
+                info!(
+                    target_micros_per_bpgu = bid.target,
+                    refresh_interval_secs = bid.refresh_interval_secs,
+                    staleness_max_secs = bid.staleness_max_secs,
+                    "USD bid enabled; starting dynamic path"
+                );
+                let refresh_interval_secs = bid.refresh_interval_secs;
+                self.prime_prove_usd_cache().await;
+                self.spawn_prove_usd_refresh(refresh_interval_secs);
+            }
+            None => {
+                info!(bid_amount = %self.bid_amount, "USD bid disabled; static-only path");
+            }
+        }
 
         // Get the prover.
         let prover_bytes = self
@@ -164,7 +286,7 @@ impl Bidder {
         }
     }
 
-    /// Checks for requested proof requests that are in the network and
+    /// Checks for requested proof requests that are in the network and bids on eligible ones.
     #[instrument(skip_all)]
     async fn bid_requests(&mut self, prover: Address) -> Result<()> {
         // Get all requests from the network that are biddable.
@@ -230,6 +352,10 @@ impl Bidder {
         }
         info!("found {} biddable requests", requests.len());
 
+        // Resolve the bid amount once for this loop iteration so all spawned tasks share the
+        // same price snapshot.
+        let bid_amount = self.effective_bid_amount().await;
+
         let mut failure_tasks = Vec::new();
         for request in requests {
             let self_clone = self.clone();
@@ -262,7 +388,10 @@ impl Bidder {
                 active_proofs += 1;
             }
             failure_tasks.push(tokio::spawn(async move {
-                match self_clone.bid_request(prover, &request_id).await {
+                match self_clone
+                    .bid_request(prover, &request_id, bid_amount)
+                    .await
+                {
                     Ok(_) => {
                         info!("bid on request 0x{}", request_id);
                         self_clone.metrics.requests_bid.increment(1);
@@ -281,7 +410,7 @@ impl Bidder {
         Ok(())
     }
 
-    async fn bid_request(&self, prover: Address, request_id: &str) -> Result<()> {
+    async fn bid_request(&self, prover: Address, request_id: &str, amount: U256) -> Result<()> {
         // Send the bid request to the network.
         let nonce = self
             .network
@@ -292,7 +421,6 @@ impl Bidder {
             .await?
             .into_inner()
             .nonce;
-        let amount = self.bid_amount;
         let body = BidRequestBody {
             nonce,
             request_id: hex::decode(request_id).context("failed to decode request_id")?,
@@ -309,5 +437,228 @@ impl Bidder {
         self.network.clone().bid(bid_request).await?;
 
         Ok(())
+    }
+}
+
+/// Fetch PROVE/USD and write it into the cache on success. Returns the µUSD value for the
+/// caller to log; cache is untouched on `Err`. Shared by the prime and refresh paths.
+async fn fetch_and_cache_prove_usd(
+    network: &mut ProverNetworkClient<Channel>,
+    cache: &RwLock<Option<ProvePrice>>,
+    metrics: &BidderMetrics,
+) -> Result<u64> {
+    let price = fetch_prove_price(network).await?;
+    let usd_micros = price.usd_micros;
+    let as_of = price.as_of;
+    *cache.write().await = Some(price);
+    let age_secs = (OffsetDateTime::now_utc() - as_of).whole_seconds().max(0) as f64;
+    metrics.prove_usd_age_seconds.set(age_secs);
+    Ok(usd_micros)
+}
+
+/// Fetch the current PROVE/USD reading. `as_of` tracks the upstream `last_updated`
+/// timestamp so cache age reflects feed freshness.
+async fn fetch_prove_price(network: &mut ProverNetworkClient<Channel>) -> Result<ProvePrice> {
+    let resp = network
+        .get_prove_price(GetProvePriceRequest {})
+        .await?
+        .into_inner();
+    Ok(ProvePrice::parse(&resp.price, resp.last_updated)?)
+}
+
+/// Outcome of the effective-`bid_amount` decision. Carries which side (static vs dynamic)
+/// so the caller can bump the matching metric.
+#[derive(Debug, PartialEq, Eq)]
+enum BidAmountOutcome {
+    Static(U256),
+    Dynamic(U256),
+}
+
+/// Pure logic behind [`Bidder::effective_bid_amount`]. Falls back to `Static(static_bid)`
+/// when the USD bid is disabled, the cache is empty, the cache is stale, or the pricing
+/// math errors. Only returns `Dynamic(_)` on a fresh cache with successful math.
+///
+/// `cache_snapshot` is `(prove_usd_micros, age_secs)` captured by the caller — keeps the
+/// helper free of clock types so it can be unit-tested directly.
+fn bid_amount_outcome(
+    usd_bid: Option<&UsdBidConfig>,
+    cache_snapshot: Option<(u64, u64)>,
+    static_bid: U256,
+    tick_size: U256,
+) -> BidAmountOutcome {
+    let Some(usd_bid) = usd_bid else {
+        return BidAmountOutcome::Static(static_bid);
+    };
+    let Some((prove_usd_micros, age_secs)) = cache_snapshot else {
+        return BidAmountOutcome::Static(static_bid);
+    };
+    if age_secs >= usd_bid.staleness_max_secs {
+        warn!(
+            age_secs,
+            max_secs = usd_bid.staleness_max_secs,
+            "PROVE/USD cache is stale; falling back to static bid"
+        );
+        return BidAmountOutcome::Static(static_bid);
+    }
+    match spn_pricing::compute_max_price_per_pgu_wei(usd_bid.target, prove_usd_micros) {
+        Ok(wei) => {
+            // Floor to the tick; sub-tick anchors round to zero and fall back to static.
+            let aligned = round_down_to_tick(wei, tick_size);
+            if aligned.is_zero() {
+                warn!(
+                    raw_wei = %wei,
+                    tick_size = %tick_size,
+                    "dynamic bid is below one tick; falling back to static bid"
+                );
+                return BidAmountOutcome::Static(static_bid);
+            }
+            BidAmountOutcome::Dynamic(aligned)
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                target_micros_per_bpgu = usd_bid.target,
+                prove_usd_micros, "USD→wei conversion failed; falling back to static bid",
+            );
+            BidAmountOutcome::Static(static_bid)
+        }
+    }
+}
+
+/// Fallback tick when the RPC doesn't advertise one (e.g. it predates the `tick_size`
+/// field and returns the protobuf default `0`).
+const DEFAULT_TICK_SIZE: u64 = 10_000_000;
+
+fn validate_bid_amount(value: U256, tick: U256) -> Result<()> {
+    if value.is_zero() {
+        anyhow::bail!("must be > 0");
+    }
+    if value % tick != U256::ZERO {
+        anyhow::bail!("{value} is not a multiple of tick_size={tick}");
+    }
+    Ok(())
+}
+
+async fn fetch_tick_size(network: &mut ProverNetworkClient<Channel>) -> Result<U256> {
+    let resp = network
+        .get_proof_request_params(GetProofRequestParamsRequest {
+            mode: ProofMode::Compressed.into(),
+        })
+        .await?
+        .into_inner();
+    let tick = if resp.tick_size == 0 {
+        warn!(
+            default = DEFAULT_TICK_SIZE,
+            "RPC returned tick_size=0; using default"
+        );
+        DEFAULT_TICK_SIZE
+    } else {
+        resp.tick_size
+    };
+    Ok(U256::from(tick))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reference anchor reused across the outcome tests: $0.20/BPGU at PROVE=$0.40 → 500M wei.
+    const TARGET_MICROS_PER_BPGU: u64 = 200_000;
+    const PROVE_USD_MICROS: u64 = 400_000;
+    const EXPECTED_DYNAMIC_WEI: u64 = 500_000_000;
+
+    fn bid_cfg(staleness_max_secs: u64) -> UsdBidConfig {
+        UsdBidConfig {
+            target: TARGET_MICROS_PER_BPGU,
+            refresh_interval_secs: 60,
+            staleness_max_secs,
+        }
+    }
+
+    fn static_bid() -> U256 {
+        U256::from(1_000u64)
+    }
+
+    /// Sentinel tick used by tests that don't exercise the tick-alignment branch.
+    const TICK_DISABLED: U256 = U256::from_limbs([1, 0, 0, 0]);
+
+    /// Helper receives `None` when the feature is off — falls back to static `bid_amount`.
+    #[test]
+    fn no_usd_bid_returns_static() {
+        let out = bid_amount_outcome(None, None, static_bid(), TICK_DISABLED);
+        assert_eq!(out, BidAmountOutcome::Static(static_bid()));
+    }
+
+    /// Cold start: empty cache → static `bid_amount` until the refresh task seeds it.
+    #[test]
+    fn missing_cache_returns_static() {
+        let cfg = bid_cfg(3600);
+        let out = bid_amount_outcome(Some(&cfg), None, static_bid(), TICK_DISABLED);
+        assert_eq!(out, BidAmountOutcome::Static(static_bid()));
+    }
+
+    /// Cache older than `staleness_max_secs` → static `bid_amount` (don't act on stale data).
+    #[test]
+    fn stale_cache_returns_static() {
+        let cfg = bid_cfg(60);
+        let out = bid_amount_outcome(
+            Some(&cfg),
+            Some((PROVE_USD_MICROS, 120)),
+            static_bid(),
+            TICK_DISABLED,
+        );
+        assert_eq!(out, BidAmountOutcome::Static(static_bid()));
+    }
+
+    /// Fresh cache + configured pricing → USD-derived dynamic bid via
+    /// `spn_pricing::compute_max_price_per_pgu_wei`. Anchor: $0.20/BPGU at PROVE=$0.40 → 500M wei/PGU.
+    #[test]
+    fn fresh_cache_returns_dynamic() {
+        let cfg = bid_cfg(3600);
+        let out = bid_amount_outcome(
+            Some(&cfg),
+            Some((PROVE_USD_MICROS, 10)),
+            static_bid(),
+            TICK_DISABLED,
+        );
+        assert_eq!(
+            out,
+            BidAmountOutcome::Dynamic(U256::from(EXPECTED_DYNAMIC_WEI))
+        );
+    }
+
+    /// Defense-in-depth: `prove_usd_micros = 0` makes `spn_pricing::compute_max_price_per_pgu_wei`
+    /// error → static `bid_amount` (not propagated). Unreachable in production since
+    /// `fetch_prove_price` rejects non-positive prices, but the branch is kept covered.
+    #[test]
+    fn math_error_returns_static() {
+        let cfg = bid_cfg(3600);
+        let out = bid_amount_outcome(Some(&cfg), Some((0, 10)), static_bid(), TICK_DISABLED);
+        assert_eq!(out, BidAmountOutcome::Static(static_bid()));
+    }
+
+    /// Anchored wei is rounded down to a multiple of the configured tick before submission.
+    #[test]
+    fn dynamic_bid_rounds_down_to_tick() {
+        // $0.12/BPGU at PROVE=$0.1867 → 642_742_367 wei (not a 10M multiple); floored to 640M.
+        let cfg = UsdBidConfig {
+            target: 120_000,
+            ..bid_cfg(3600)
+        };
+        let tick = U256::from(10_000_000u64);
+        let out = bid_amount_outcome(Some(&cfg), Some((186_700, 10)), static_bid(), tick);
+        assert_eq!(out, BidAmountOutcome::Dynamic(U256::from(640_000_000u64)));
+    }
+
+    /// Sub-tick anchor rounds to zero → fall back to static rather than submit a zero bid.
+    #[test]
+    fn sub_tick_dynamic_falls_back_to_static() {
+        let cfg = UsdBidConfig {
+            target: 1,
+            ..bid_cfg(3600)
+        };
+        let tick = U256::from(10_000_000u64);
+        let out = bid_amount_outcome(Some(&cfg), Some((1_000_000_000, 10)), static_bid(), tick);
+        assert_eq!(out, BidAmountOutcome::Static(static_bid()));
     }
 }
