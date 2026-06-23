@@ -119,6 +119,14 @@ RUN \
 
 WORKDIR /app
 
+# Immutable image tag (e.g. node-gpu-<short_sha>), promoted to a runtime env var
+# so the GPU worker can self-report which container image it is running via the
+# OpenRequest build fields (forwarded by the coordinator's GetClusterComponentInfo).
+# Runtime stages don't inherit build-stage ENVs, so this ARG/ENV must be declared
+# here. Mirrors the base infra/Dockerfile IMAGE_TAG wiring.
+ARG IMAGE_TAG=""
+ENV IMAGE_TAG=$IMAGE_TAG
+
 # Create a non-root user and group for better security
 RUN groupadd --gid 1001 appgroup && \
   useradd --uid 1001 --gid appgroup --shell /bin/false --create-home appuser
