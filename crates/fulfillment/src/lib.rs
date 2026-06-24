@@ -81,14 +81,16 @@ pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
 /// `(component, version, git_sha, image_tag)`, so many workers on the same build
 /// collapse to one entry while distinct builds (a rolling deploy) are kept.
 ///
-/// Returns `Err` if the manifest yields more than one `fulfiller` or `coordinator`
-/// build — those are logical singletons, and the receiver rejects such a report, so
-/// we refuse to send it rather than emit a malformed snapshot.
+/// Returns `Err` for a malformed manifest, so the caller skips the report rather than
+/// emit a bad snapshot: a configured coordinator (`Some`) must yield exactly one
+/// `coordinator` build after dedup (zero — a manifest missing its coordinator — or
+/// many are malformed), and there must never be more than one `fulfiller`.
 pub fn assemble_components(
     identity: &prover_info::BuildIdentity,
     cluster_components: Option<Vec<sp1_cluster_common::proto::ClusterComponentInfo>>,
 ) -> Result<Vec<spn_network_types::ComponentInfo>> {
     let mut components = vec![prover_info::fulfiller_component(identity)];
+    let had_manifest = cluster_components.is_some();
     if let Some(cluster) = cluster_components {
         let mut seen = HashSet::with_capacity(cluster.len());
         for c in cluster {
@@ -105,15 +107,27 @@ pub fn assemble_components(
         }
     }
 
-    // Singletons must appear at most once; distinct builds of one would be malformed.
-    for singleton in ["fulfiller", "coordinator"] {
-        let count = components
+    // The fulfiller is added exactly once; reject a manifest that injected another.
+    let fulfillers = components
+        .iter()
+        .filter(|c| c.component == "fulfiller")
+        .count();
+    if fulfillers > 1 {
+        return Err(anyhow!(
+            "manifest reported {fulfillers} fulfiller builds; refusing to send a malformed report"
+        ));
+    }
+
+    // A reached coordinator must report exactly one coordinator build after dedup;
+    // zero (manifest missing its coordinator) or many are malformed.
+    if had_manifest {
+        let coordinators = components
             .iter()
-            .filter(|c| c.component == singleton)
+            .filter(|c| c.component == "coordinator")
             .count();
-        if count > 1 {
+        if coordinators != 1 {
             return Err(anyhow!(
-                "manifest reported {count} distinct {singleton} builds; refusing to send a malformed singleton report"
+                "coordinator manifest reported {coordinators} coordinator builds (expected exactly 1); refusing to send a malformed report"
             ));
         }
     }
@@ -1024,9 +1038,10 @@ mod tests {
 
     #[test]
     fn assemble_components_collapses_same_build_workers() {
-        // Two gpu-node workers on the same build collapse to one public entry; the
-        // fulfiller is still included.
+        // Two gpu-node workers on the same build collapse to one public entry;
+        // fulfiller + coordinator are still included.
         let cluster = vec![
+            cluster_entry("coordinator", "", "coordsha"),
             cluster_entry("gpu-node", "gpu1", "samesha"),
             cluster_entry("gpu-node", "gpu2", "samesha"),
         ];
@@ -1035,8 +1050,8 @@ mod tests {
 
         assert_eq!(
             components.len(),
-            2,
-            "fulfiller + one collapsed gpu-node build"
+            3,
+            "fulfiller + coordinator + one collapsed gpu-node build"
         );
         assert_eq!(components[0].component, "fulfiller");
         let gpu = components
@@ -1050,6 +1065,7 @@ mod tests {
     fn assemble_components_keeps_distinct_builds_for_rolling_deploy() {
         // Old + new gpu-node builds during a rolling deploy: both remain.
         let cluster = vec![
+            cluster_entry("coordinator", "", "coordsha"),
             cluster_entry("gpu-node", "gpu1", "oldsha"),
             cluster_entry("gpu-node", "gpu2", "newsha"),
         ];
@@ -1079,6 +1095,21 @@ mod tests {
         assert!(
             assemble_components(&fulfiller_identity(), Some(cluster)).is_err(),
             "two distinct coordinator builds must be rejected"
+        );
+    }
+
+    #[test]
+    fn assemble_components_rejects_manifest_without_coordinator() {
+        // A reached coordinator must report itself: a Some manifest with no coordinator
+        // entry (workers-only, or empty) is malformed and must not be sent.
+        let workers_only = vec![cluster_entry("gpu-node", "gpu1", "gpusha")];
+        assert!(
+            assemble_components(&fulfiller_identity(), Some(workers_only)).is_err(),
+            "workers-only manifest (no coordinator) must be rejected"
+        );
+        assert!(
+            assemble_components(&fulfiller_identity(), Some(vec![])).is_err(),
+            "empty manifest (no coordinator) must be rejected"
         );
     }
 }
