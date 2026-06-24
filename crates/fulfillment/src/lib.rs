@@ -72,23 +72,53 @@ pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
     ProvingFailure::from_extra_data(s).map(|_| ProofRequestError::ProvingFailure as i32)
 }
 
-/// Assemble the full prover component list for a single `ReportProverInfo`:
-/// the fulfiller's own component first, then the coordinator manifest
-/// (coordinator + workers) mapped from the coordinator's `ClusterComponentInfo`.
-/// `cluster_components` is empty when no coordinator manifest was available, in
-/// which case the result is just the fulfiller's own component (fulfiller-only).
+/// Assemble the public component list for a single `ReportProverInfo`: the
+/// fulfiller's own component first, then the coordinator manifest (coordinator +
+/// workers) mapped onto the public `ComponentInfo` (which has no `instance_id`).
+///
+/// `cluster_components` is `None` when no coordinator is configured, giving a
+/// fulfiller-only report. Manifest entries are deduped by build identity
+/// `(component, version, git_sha, image_tag)`, so many workers on the same build
+/// collapse to one entry while distinct builds (a rolling deploy) are kept.
+///
+/// Returns `Err` if the manifest yields more than one `fulfiller` or `coordinator`
+/// build — those are logical singletons, and the receiver rejects such a report, so
+/// we refuse to send it rather than emit a malformed snapshot.
 pub fn assemble_components(
     identity: &prover_info::BuildIdentity,
-    cluster_components: Vec<sp1_cluster_common::proto::ClusterComponentInfo>,
-) -> Vec<spn_network_types::ComponentInfo> {
-    let mut components = Vec::with_capacity(1 + cluster_components.len());
-    components.push(prover_info::fulfiller_component(identity));
-    components.extend(
-        cluster_components
-            .into_iter()
-            .map(prover_info::component_from_cluster),
-    );
-    components
+    cluster_components: Option<Vec<sp1_cluster_common::proto::ClusterComponentInfo>>,
+) -> Result<Vec<spn_network_types::ComponentInfo>> {
+    let mut components = vec![prover_info::fulfiller_component(identity)];
+    if let Some(cluster) = cluster_components {
+        let mut seen = HashSet::with_capacity(cluster.len());
+        for c in cluster {
+            let mapped = prover_info::component_from_cluster(c);
+            // Dedup by build identity: collapse same-build workers to one entry.
+            if seen.insert((
+                mapped.component.clone(),
+                mapped.version.clone(),
+                mapped.git_sha.clone(),
+                mapped.image_tag.clone(),
+            )) {
+                components.push(mapped);
+            }
+        }
+    }
+
+    // Singletons must appear at most once; distinct builds of one would be malformed.
+    for singleton in ["fulfiller", "coordinator"] {
+        let count = components
+            .iter()
+            .filter(|c| c.component == singleton)
+            .count();
+        if count > 1 {
+            return Err(anyhow!(
+                "manifest reported {count} distinct {singleton} builds; refusing to send a malformed singleton report"
+            ));
+        }
+    }
+
+    Ok(components)
 }
 
 #[derive(Clone)]
@@ -246,26 +276,42 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 
     /// Reports cluster build identity to the network (best-effort).
     ///
-    /// Assembles the full component list — `[fulfiller self] ++ coordinator
-    /// manifest (coordinator + workers)` — and sends it in ONE `ReportProverInfo`
-    /// request. If no coordinator client is configured, or the coordinator call
-    /// fails (unreachable / `Unimplemented` / timeout / etc.), the fulfiller
-    /// degrades to reporting only its own component.
+    /// Sends `[fulfiller self] ++ coordinator manifest (coordinator + workers)` as a
+    /// full snapshot in ONE `ReportProverInfo`. With no coordinator configured this is
+    /// a valid fulfiller-only report. But when a coordinator IS configured and its
+    /// fetch fails (unreachable / `Unimplemented` / timeout), this report is SKIPPED:
+    /// the receiver treats the payload as a full snapshot, so sending fulfiller-only
+    /// would prune the coordinator/worker rows. The next tick retries.
     ///
-    /// On error, logs a warning and returns — this telemetry must never fail the
-    /// fulfiller. `ReportProverInfo` carries no nonce, so unlike fulfill/fail it
-    /// needs no `nonce_lock` serialization.
+    /// On any error, logs a warning and returns — this telemetry never fails the
+    /// fulfiller. `ReportProverInfo` carries no nonce, so unlike fulfill/fail it needs
+    /// no `nonce_lock` serialization.
     async fn report_prover_info(&self, prover: Address, identity: &prover_info::BuildIdentity) {
-        // Best-effort: collect the coordinator manifest, (re)connecting lazily when
-        // a coordinator is configured. Any failure (unset / unreachable /
-        // Unimplemented / timeout) degrades to a fulfiller-only report.
-        let cluster_components = coordinator_client::collect_cluster_components(
+        // Collect the manifest, (re)connecting lazily when a coordinator is configured.
+        // Ok(None) = unset (fulfiller-only is valid); Err = configured fetch failed.
+        let cluster_components = match coordinator_client::collect_cluster_components(
             &self.coordinator_rpc,
             &self.coordinator_client,
         )
-        .await;
+        .await
+        {
+            Ok(manifest) => manifest,
+            Err(e) => {
+                warn!(
+                    "coordinator manifest fetch failed; skipping this report to avoid pruning \
+                     coordinator/worker rows (retrying next tick): {e:?}"
+                );
+                return;
+            }
+        };
 
-        let components = assemble_components(identity, cluster_components);
+        let components = match assemble_components(identity, cluster_components) {
+            Ok(components) => components,
+            Err(e) => {
+                warn!("refusing to send malformed prover-info report (retrying next tick): {e:?}");
+                return;
+            }
+        };
 
         if let Err(e) = self
             .network
@@ -927,64 +973,112 @@ mod tests {
         }
     }
 
+    /// Build a cluster manifest entry. `instance_id` is set but is dropped at the
+    /// public boundary; distinct workers on the same build share a build identity.
+    fn cluster_entry(component: &str, instance_id: &str, git_sha: &str) -> ClusterComponentInfo {
+        ClusterComponentInfo {
+            component: component.to_string(),
+            instance_id: instance_id.to_string(),
+            version: "2.5.0".to_string(),
+            git_sha: git_sha.to_string(),
+            image_tag: format!("{component}-{git_sha}"),
+        }
+    }
+
     #[test]
     fn assemble_components_fulfiller_only_when_no_coordinator() {
-        // Empty cluster manifest => fulfiller-only: just the fulfiller's own component.
-        let components = assemble_components(&fulfiller_identity(), Vec::new());
+        // No coordinator manifest => fulfiller-only.
+        let components = assemble_components(&fulfiller_identity(), None).unwrap();
 
         assert_eq!(components.len(), 1, "fulfiller-only when no manifest");
         assert_eq!(components[0].component, "fulfiller");
-        assert_eq!(components[0].instance_id, "");
         assert_eq!(components[0].git_sha, "fulfillersha");
     }
 
     #[test]
     fn assemble_components_includes_fulfiller_coordinator_and_workers() {
-        // Coordinator manifest: coordinator + one gpu worker + one cpu worker.
         let cluster = vec![
-            ClusterComponentInfo {
-                component: "coordinator".to_string(),
-                instance_id: "".to_string(),
-                version: "2.5.0".to_string(),
-                git_sha: "coordsha".to_string(),
-                image_tag: "base-coordsha".to_string(),
-            },
-            ClusterComponentInfo {
-                component: "gpu-node".to_string(),
-                instance_id: "gpu1".to_string(),
-                version: "2.5.0".to_string(),
-                git_sha: "gpusha".to_string(),
-                image_tag: "node-gpu-gpusha".to_string(),
-            },
-            ClusterComponentInfo {
-                component: "cpu-node".to_string(),
-                instance_id: "cpu1".to_string(),
-                version: "2.5.0".to_string(),
-                git_sha: "cpusha".to_string(),
-                image_tag: "base-cpusha".to_string(),
-            },
+            cluster_entry("coordinator", "", "coordsha"),
+            cluster_entry("gpu-node", "gpu1", "gpusha"),
+            cluster_entry("cpu-node", "cpu1", "cpusha"),
         ];
 
-        let components = assemble_components(&fulfiller_identity(), cluster);
+        let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
 
         // fulfiller + coordinator + 2 workers.
         assert_eq!(components.len(), 4);
-        // Fulfiller must be first.
-        assert_eq!(components[0].component, "fulfiller");
+        assert_eq!(
+            components[0].component, "fulfiller",
+            "fulfiller must be first"
+        );
         assert_eq!(components[0].git_sha, "fulfillersha");
-        // Coordinator + worker entries forwarded verbatim.
         assert_eq!(components[1].component, "coordinator");
         assert_eq!(components[1].git_sha, "coordsha");
+        assert!(components
+            .iter()
+            .any(|c| c.component == "gpu-node" && c.git_sha == "gpusha"));
+        assert!(components
+            .iter()
+            .any(|c| c.component == "cpu-node" && c.git_sha == "cpusha"));
+    }
+
+    #[test]
+    fn assemble_components_collapses_same_build_workers() {
+        // Two gpu-node workers on the same build collapse to one public entry; the
+        // fulfiller is still included.
+        let cluster = vec![
+            cluster_entry("gpu-node", "gpu1", "samesha"),
+            cluster_entry("gpu-node", "gpu2", "samesha"),
+        ];
+
+        let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
+
+        assert_eq!(
+            components.len(),
+            2,
+            "fulfiller + one collapsed gpu-node build"
+        );
+        assert_eq!(components[0].component, "fulfiller");
         let gpu = components
             .iter()
-            .find(|c| c.instance_id == "gpu1")
-            .expect("gpu worker forwarded");
-        assert_eq!(gpu.component, "gpu-node");
-        assert_eq!(gpu.git_sha, "gpusha");
-        let cpu = components
+            .filter(|c| c.component == "gpu-node")
+            .count();
+        assert_eq!(gpu, 1, "same-build gpu workers collapse to one entry");
+    }
+
+    #[test]
+    fn assemble_components_keeps_distinct_builds_for_rolling_deploy() {
+        // Old + new gpu-node builds during a rolling deploy: both remain.
+        let cluster = vec![
+            cluster_entry("gpu-node", "gpu1", "oldsha"),
+            cluster_entry("gpu-node", "gpu2", "newsha"),
+        ];
+
+        let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
+
+        let builds: HashSet<_> = components
             .iter()
-            .find(|c| c.instance_id == "cpu1")
-            .expect("cpu worker forwarded");
-        assert_eq!(cpu.component, "cpu-node");
+            .filter(|c| c.component == "gpu-node")
+            .map(|c| c.git_sha.as_str())
+            .collect();
+        assert_eq!(
+            builds,
+            HashSet::from(["oldsha", "newsha"]),
+            "both builds kept"
+        );
+    }
+
+    #[test]
+    fn assemble_components_rejects_two_coordinator_builds() {
+        // Two distinct coordinator builds is malformed (singleton) => Err, not sent.
+        let cluster = vec![
+            cluster_entry("coordinator", "", "coordsha-a"),
+            cluster_entry("coordinator", "", "coordsha-b"),
+        ];
+
+        assert!(
+            assemble_components(&fulfiller_identity(), Some(cluster)).is_err(),
+            "two distinct coordinator builds must be rejected"
+        );
     }
 }

@@ -45,28 +45,24 @@ impl BuildIdentity {
     }
 }
 
-/// The fulfiller's own component entry.
-///
-/// The fulfiller is a singleton component, so its `instance_id` is always empty
-/// (the network rejects a non-empty instance_id for singleton components).
+/// The fulfiller's own component entry. The fulfiller is a logical singleton, so a
+/// report includes exactly one.
 pub fn fulfiller_component(identity: &BuildIdentity) -> ComponentInfo {
     ComponentInfo {
         component: FULFILLER_COMPONENT.to_string(),
-        instance_id: String::new(),
         version: identity.version.clone(),
         git_sha: identity.git_sha.clone(),
         image_tag: identity.image_tag.clone(),
     }
 }
 
-/// Map a coordinator-reported `ClusterComponentInfo` (sp1#2850) onto the network
-/// `ComponentInfo`. The two messages have identical field layout and semantics —
-/// component name, instance id, version, git sha, image tag — so this is a direct
-/// 1:1 forward with no remapping.
+/// Map a coordinator-reported `ClusterComponentInfo` (sp1#2850) onto the public
+/// network `ComponentInfo`. The cluster-internal message keeps `instance_id` for the
+/// coordinator's per-worker registry, but the public report is keyed by build
+/// identity (network#234), so `instance_id` is dropped at this boundary.
 pub fn component_from_cluster(c: ClusterComponentInfo) -> ComponentInfo {
     ComponentInfo {
         component: c.component,
-        instance_id: c.instance_id,
         version: c.version,
         git_sha: c.git_sha,
         image_tag: c.image_tag,
@@ -95,7 +91,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fulfiller_component_is_empty_instance_singleton() {
+    fn fulfiller_component_has_build_fields() {
         let identity = BuildIdentity {
             version: "2.5.0".to_string(),
             git_sha: "abc1234".to_string(),
@@ -104,8 +100,6 @@ mod tests {
 
         let c = fulfiller_component(&identity);
         assert_eq!(c.component, "fulfiller");
-        // Singleton component => instance_id must be empty (network rejects otherwise).
-        assert_eq!(c.instance_id, "");
         assert_eq!(c.version, "2.5.0");
         assert_eq!(c.git_sha, "abc1234");
         assert_eq!(c.image_tag, "base-abc1234");
@@ -132,7 +126,9 @@ mod tests {
     }
 
     #[test]
-    fn component_from_cluster_is_a_direct_forward() {
+    fn component_from_cluster_drops_instance_id() {
+        // The cluster-internal entry carries an instance_id (worker-7); the public
+        // ComponentInfo has no such field, so it is dropped in the mapping.
         let cluster = ClusterComponentInfo {
             component: "gpu-node".to_string(),
             instance_id: "worker-7".to_string(),
@@ -142,7 +138,6 @@ mod tests {
         };
         let c = component_from_cluster(cluster);
         assert_eq!(c.component, "gpu-node");
-        assert_eq!(c.instance_id, "worker-7");
         assert_eq!(c.version, "2.5.0");
         assert_eq!(c.git_sha, "gpusha");
         assert_eq!(c.image_tag, "node-gpu-gpusha");

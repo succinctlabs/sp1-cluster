@@ -41,11 +41,11 @@ p3-matrix = "=0.3.3-succinct"
 # SPN
 # Bumped to d276723 to pick up network#232 (ReportProverInfo wire contract).
 # d276723 is exactly one commit ahead of the prior 0b1eeab and that commit IS #232.
-spn-artifacts = { git = "https://github.com/succinctlabs/network", rev = "d276723" }
-spn-metrics = { git = "https://github.com/succinctlabs/network", rev = "d276723" }
-spn-network-types = { git = "https://github.com/succinctlabs/network", rev = "d276723", features = ["network"] }
-spn-pricing = { git = "https://github.com/succinctlabs/network", rev = "d276723" }
-spn-utils = { git = "https://github.com/succinctlabs/network", rev = "d276723" }
+spn-artifacts = { git = "https://github.com/succinctlabs/network", rev = "77e100b" }
+spn-metrics = { git = "https://github.com/succinctlabs/network", rev = "77e100b" }
+spn-network-types = { git = "https://github.com/succinctlabs/network", rev = "77e100b", features = ["network"] }
+spn-pricing = { git = "https://github.com/succinctlabs/network", rev = "77e100b" }
+spn-utils = { git = "https://github.com/succinctlabs/network", rev = "77e100b" }
 
 # SP1
 #
