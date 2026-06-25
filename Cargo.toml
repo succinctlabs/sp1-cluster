@@ -41,11 +41,11 @@ p3-matrix = "=0.3.3-succinct"
 # SPN
 # Bumped to d276723 to pick up network#232 (ReportProverInfo wire contract).
 # d276723 is exactly one commit ahead of the prior 0b1eeab and that commit IS #232.
-spn-artifacts = { git = "https://github.com/succinctlabs/network", rev = "77e100b" }
-spn-metrics = { git = "https://github.com/succinctlabs/network", rev = "77e100b" }
-spn-network-types = { git = "https://github.com/succinctlabs/network", rev = "77e100b", features = ["network"] }
-spn-pricing = { git = "https://github.com/succinctlabs/network", rev = "77e100b" }
-spn-utils = { git = "https://github.com/succinctlabs/network", rev = "77e100b" }
+spn-artifacts = { git = "https://github.com/succinctlabs/network", rev = "742578c" }
+spn-metrics = { git = "https://github.com/succinctlabs/network", rev = "742578c" }
+spn-network-types = { git = "https://github.com/succinctlabs/network", rev = "742578c", features = ["network"] }
+spn-pricing = { git = "https://github.com/succinctlabs/network", rev = "742578c" }
+spn-utils = { git = "https://github.com/succinctlabs/network", rev = "742578c" }
 
 # SP1
 #
@@ -59,20 +59,20 @@ spn-utils = { git = "https://github.com/succinctlabs/network", rev = "77e100b" }
 # the crate boundary (verified: 36 errors in sp1-cluster-worker). So the whole
 # sp1 family is pinned to the SAME git rev 9069dd6 — the minimal set that
 # compiles. Code-wise 9069dd6 == v6.3.0 for every crate except prover-types.
-sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6" }
-sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6", features = ["bigint-rug"] }
-sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6" }
-sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6" }
-sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6" }
-sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6" }
-sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6" }
-sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6" }
-sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6" }
-sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6", features = ["network"] }
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc", features = ["bigint-rug"] }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc" }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc" }
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc", features = ["network"] }
 
 # SP1 GPU
-sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6" }
-sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "9069dd6" }
+sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc" }
+sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "97e9ecc" }
 
 # Misc
 alloy = { version = "=1.1.3", default-features = false, features = ["serde"] }

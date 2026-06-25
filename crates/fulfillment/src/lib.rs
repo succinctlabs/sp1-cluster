@@ -987,12 +987,11 @@ mod tests {
         }
     }
 
-    /// Build a cluster manifest entry. `instance_id` is set but is dropped at the
-    /// public boundary; distinct workers on the same build share a build identity.
-    fn cluster_entry(component: &str, instance_id: &str, git_sha: &str) -> ClusterComponentInfo {
+    /// Build a cluster manifest entry, keyed by build identity (same-build workers
+    /// produce identical entries).
+    fn cluster_entry(component: &str, git_sha: &str) -> ClusterComponentInfo {
         ClusterComponentInfo {
             component: component.to_string(),
-            instance_id: instance_id.to_string(),
             version: "2.5.0".to_string(),
             git_sha: git_sha.to_string(),
             image_tag: format!("{component}-{git_sha}"),
@@ -1012,9 +1011,9 @@ mod tests {
     #[test]
     fn assemble_components_includes_fulfiller_coordinator_and_workers() {
         let cluster = vec![
-            cluster_entry("coordinator", "", "coordsha"),
-            cluster_entry("gpu-node", "gpu1", "gpusha"),
-            cluster_entry("cpu-node", "cpu1", "cpusha"),
+            cluster_entry("coordinator", "coordsha"),
+            cluster_entry("gpu-node", "gpusha"),
+            cluster_entry("cpu-node", "cpusha"),
         ];
 
         let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
@@ -1041,9 +1040,9 @@ mod tests {
         // Two gpu-node workers on the same build collapse to one public entry;
         // fulfiller + coordinator are still included.
         let cluster = vec![
-            cluster_entry("coordinator", "", "coordsha"),
-            cluster_entry("gpu-node", "gpu1", "samesha"),
-            cluster_entry("gpu-node", "gpu2", "samesha"),
+            cluster_entry("coordinator", "coordsha"),
+            cluster_entry("gpu-node", "samesha"),
+            cluster_entry("gpu-node", "samesha"),
         ];
 
         let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
@@ -1065,9 +1064,9 @@ mod tests {
     fn assemble_components_keeps_distinct_builds_for_rolling_deploy() {
         // Old + new gpu-node builds during a rolling deploy: both remain.
         let cluster = vec![
-            cluster_entry("coordinator", "", "coordsha"),
-            cluster_entry("gpu-node", "gpu1", "oldsha"),
-            cluster_entry("gpu-node", "gpu2", "newsha"),
+            cluster_entry("coordinator", "coordsha"),
+            cluster_entry("gpu-node", "oldsha"),
+            cluster_entry("gpu-node", "newsha"),
         ];
 
         let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
@@ -1088,8 +1087,8 @@ mod tests {
     fn assemble_components_rejects_two_coordinator_builds() {
         // Two distinct coordinator builds is malformed (singleton) => Err, not sent.
         let cluster = vec![
-            cluster_entry("coordinator", "", "coordsha-a"),
-            cluster_entry("coordinator", "", "coordsha-b"),
+            cluster_entry("coordinator", "coordsha-a"),
+            cluster_entry("coordinator", "coordsha-b"),
         ];
 
         assert!(
@@ -1102,7 +1101,7 @@ mod tests {
     fn assemble_components_rejects_manifest_without_coordinator() {
         // A reached coordinator must report itself: a Some manifest with no coordinator
         // entry (workers-only, or empty) is malformed and must not be sent.
-        let workers_only = vec![cluster_entry("gpu-node", "gpu1", "gpusha")];
+        let workers_only = vec![cluster_entry("gpu-node", "gpusha")];
         assert!(
             assemble_components(&fulfiller_identity(), Some(workers_only)).is_err(),
             "workers-only manifest (no coordinator) must be rejected"

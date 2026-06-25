@@ -1706,18 +1706,18 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire"))
             .await;
 
-        // Coordinator's own build identity first. instance_id is "" (singleton).
+        // Coordinator's own build identity first.
         let mut components = vec![proto::ClusterComponentInfo {
             component: COORDINATOR_COMPONENT.to_string(),
-            instance_id: String::new(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             git_sha: BUILD_GIT_SHA.to_string(),
             image_tag: std::env::var("IMAGE_TAG").unwrap_or_default(),
         }];
 
-        // One entry per connected worker, keyed by worker id as instance_id.
+        // One entry per connected worker (keyed by build identity, not instance).
         // Workers with a non-reportable worker_type (Unspecified/None) are skipped
-        // with a warning rather than reported under a false component name.
+        // with a warning rather than reported under a false component name. Same-build
+        // workers produce identical entries; the fulfiller dedupes them downstream.
         components.extend(state.workers.values().filter_map(|w| {
             let Some(component) = worker_component_name(w.worker_type) else {
                 tracing::warn!(
@@ -1729,7 +1729,6 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             };
             Some(proto::ClusterComponentInfo {
                 component: component.to_string(),
-                instance_id: w.id.clone(),
                 version: w.version.clone(),
                 git_sha: w.git_sha.clone(),
                 image_tag: w.image_tag.clone(),
@@ -2819,28 +2818,22 @@ mod tests {
             .iter()
             .find(|ci| ci.component == "coordinator")
             .expect("coordinator entry present");
-        assert_eq!(
-            coord.instance_id, "",
-            "coordinator is a singleton: empty instance_id"
-        );
         assert_eq!(coord.version, env!("CARGO_PKG_VERSION"));
 
         let gpu = resp
             .components
             .iter()
-            .find(|ci| ci.instance_id == "gpu1")
+            .find(|ci| ci.git_sha == "gpusha")
             .expect("gpu worker entry present");
         assert_eq!(gpu.component, "gpu-node", "Gpu maps to gpu-node");
-        assert_eq!(gpu.git_sha, "gpusha");
         assert_eq!(gpu.image_tag, "node-gpu-gpusha");
 
         let cpu = resp
             .components
             .iter()
-            .find(|ci| ci.instance_id == "cpu1")
+            .find(|ci| ci.git_sha == "cpusha")
             .expect("cpu worker entry present");
         assert_eq!(cpu.component, "cpu-node", "Cpu maps to cpu-node");
-        assert_eq!(cpu.git_sha, "cpusha");
     }
 
     #[tokio::test]
@@ -2865,11 +2858,10 @@ mod tests {
         let all = resp
             .components
             .iter()
-            .find(|ci| ci.instance_id == "all1")
+            .find(|ci| ci.git_sha == "allsha")
             .expect("All worker entry present");
         // Lossy compatibility mapping: All is GPU-capable -> gpu-node.
         assert_eq!(all.component, "gpu-node", "All maps to gpu-node");
-        assert_eq!(all.git_sha, "allsha");
     }
 
     #[tokio::test]
@@ -2907,11 +2899,11 @@ mod tests {
         // Non-reportable worker_types are skipped (never reported as a false
         // cpu-node); only the coordinator's own entry remains.
         assert!(
-            resp.components.iter().all(|ci| ci.instance_id != "u1"),
+            resp.components.iter().all(|ci| ci.git_sha != "usha"),
             "Unspecified worker must be skipped"
         );
         assert!(
-            resp.components.iter().all(|ci| ci.instance_id != "n1"),
+            resp.components.iter().all(|ci| ci.git_sha != "nsha"),
             "None worker must be skipped"
         );
         assert_eq!(

@@ -57,9 +57,8 @@ pub fn fulfiller_component(identity: &BuildIdentity) -> ComponentInfo {
 }
 
 /// Map a coordinator-reported `ClusterComponentInfo` (sp1#2850) onto the public
-/// network `ComponentInfo`. The cluster-internal message keeps `instance_id` for the
-/// coordinator's per-worker registry, but the public report is keyed by build
-/// identity (network#234), so `instance_id` is dropped at this boundary.
+/// network `ComponentInfo`. Both are keyed by build identity (component +
+/// version/git_sha/image_tag), so this is a straight field copy.
 pub fn component_from_cluster(c: ClusterComponentInfo) -> ComponentInfo {
     ComponentInfo {
         component: c.component,
@@ -126,12 +125,9 @@ mod tests {
     }
 
     #[test]
-    fn component_from_cluster_drops_instance_id() {
-        // The cluster-internal entry carries an instance_id (worker-7); the public
-        // ComponentInfo has no such field, so it is dropped in the mapping.
+    fn component_from_cluster_copies_build_fields() {
         let cluster = ClusterComponentInfo {
             component: "gpu-node".to_string(),
-            instance_id: "worker-7".to_string(),
             version: "2.5.0".to_string(),
             git_sha: "gpusha".to_string(),
             image_tag: "node-gpu-gpusha".to_string(),
