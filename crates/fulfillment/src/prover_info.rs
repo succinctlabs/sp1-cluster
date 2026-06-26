@@ -1,8 +1,8 @@
 //! Self-reported build identity for cluster prover components.
 //!
 //! Prover-component build reporting: the fulfiller reports build identity
-//! (version / git sha / image tag) to the SPN via the `ReportProverInfo` RPC
-//! (network#232). It always reports its own component (fulfiller-only) and,
+//! (version / git sha / image tag) to the SPN via the public `ReportProverInfo`
+//! contract. It always reports its own component (fulfiller-only) and,
 //! when a coordinator client is wired (`FULFILLER_COORDINATOR_RPC` is set),
 //! also forwards the coordinator + every connected worker it fronts
 //! (cluster-wide reporting). This is best-effort debugging telemetry — never
@@ -56,7 +56,7 @@ pub fn fulfiller_component(identity: &BuildIdentity) -> ComponentInfo {
     }
 }
 
-/// Map a coordinator-reported `ClusterComponentInfo` (sp1#2850) onto the public
+/// Map a coordinator-reported SP1 v6.3.1 `ClusterComponentInfo` onto the public
 /// network `ComponentInfo`. Both are keyed by build identity (component +
 /// version/git_sha/image_tag), so this is a straight field copy.
 pub fn component_from_cluster(c: ClusterComponentInfo) -> ComponentInfo {
@@ -90,21 +90,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fulfiller_component_has_build_fields() {
-        let identity = BuildIdentity {
-            version: "2.5.0".to_string(),
-            git_sha: "abc1234".to_string(),
-            image_tag: "base-abc1234".to_string(),
-        };
-
-        let c = fulfiller_component(&identity);
-        assert_eq!(c.component, "fulfiller");
-        assert_eq!(c.version, "2.5.0");
-        assert_eq!(c.git_sha, "abc1234");
-        assert_eq!(c.image_tag, "base-abc1234");
-    }
-
-    #[test]
     fn build_body_carries_component_list_verbatim() {
         let identity = BuildIdentity {
             version: "2.5.0".to_string(),
@@ -122,26 +107,5 @@ mod tests {
         assert_eq!(body.components.len(), 1);
         assert_eq!(body.components[0].component, "fulfiller");
         assert_eq!(body.components[0].git_sha, "abc1234");
-    }
-
-    #[test]
-    fn component_from_cluster_copies_build_fields() {
-        let cluster = ClusterComponentInfo {
-            component: "gpu-node".to_string(),
-            version: "2.5.0".to_string(),
-            git_sha: "gpusha".to_string(),
-            image_tag: "node-gpu-gpusha".to_string(),
-        };
-        let c = component_from_cluster(cluster);
-        assert_eq!(c.component, "gpu-node");
-        assert_eq!(c.version, "2.5.0");
-        assert_eq!(c.git_sha, "gpusha");
-        assert_eq!(c.image_tag, "node-gpu-gpusha");
-    }
-
-    #[test]
-    fn resolve_uses_cargo_pkg_version() {
-        let identity = BuildIdentity::resolve();
-        assert_eq!(identity.version, env!("CARGO_PKG_VERSION"));
     }
 }

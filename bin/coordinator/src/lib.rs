@@ -290,7 +290,7 @@ pub struct Worker<P: AssignmentPolicy> {
     /// Whether the worker is closed and should not be sent any more tasks.
     pub closed: bool,
 
-    /// Self-reported crate version of the worker (from OpenRequest, sp1#2850).
+    /// Self-reported crate version of the worker (from OpenRequest).
     pub version: String,
 
     /// Self-reported git commit the worker was built from (from OpenRequest).
@@ -870,7 +870,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
     /// Add a worker to the Coordinator. Returns true if worker already existed.
     ///
     /// `version` / `git_sha` / `image_tag` are the worker's self-reported build
-    /// identity (OpenRequest, sp1#2850), surfaced via GetClusterComponentInfo.
+    /// identity (OpenRequest), surfaced via GetClusterComponentInfo.
     #[allow(clippy::too_many_arguments)]
     pub async fn add_worker(
         self: &Arc<Self>,

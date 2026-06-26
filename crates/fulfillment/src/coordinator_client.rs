@@ -1,6 +1,6 @@
 //! Optional client the fulfiller uses to collect the coordinator's cluster
 //! component manifest (coordinator + workers) via the `GetClusterComponentInfo`
-//! RPC (sp1#2850), for forwarding to the SPN `ReportProverInfo` RPC.
+//! RPC, for forwarding to the SPN `ReportProverInfo` RPC.
 //!
 //! Two outcomes are distinct because the receiver treats each report as a full
 //! snapshot: an *unset* coordinator means "fulfiller-only is the whole manifest"
@@ -64,7 +64,7 @@ impl CoordinatorComponentClient {
     /// `ComponentInfo` type.
     ///
     /// Returns `Err` on any failure — timeout, transport error, or `Unimplemented`
-    /// from a coordinator built before sp1#2850 — which the caller propagates as a
+    /// from a coordinator built before SP1 v6.3.1 — which the caller propagates as a
     /// report failure (skip + retry), not as a fulfiller-only snapshot.
     pub async fn get_cluster_component_info(&self) -> anyhow::Result<Vec<ClusterComponentInfo>> {
         let resp = tokio::time::timeout(

@@ -120,22 +120,19 @@ pub trait FulfillmentNetwork: Send + Sync + 'static {
         signer: &NetworkSigner,
     ) -> Result<String>;
 
-    /// Report build identity for one or more cluster components to the network
-    /// (network#232 `ReportProverInfo`). The fulfiller passes its own component
-    /// plus any coordinator/worker components it could collect, in ONE request.
+    /// Report build identity for one or more cluster components via the public
+    /// `ReportProverInfo` contract. The fulfiller passes its own component plus
+    /// any coordinator/worker components it could collect, in ONE request.
     ///
     /// Best-effort debugging telemetry: implementations must never block or fail
-    /// fulfillment on this. The default is a no-op for networks that don't
-    /// support the RPC.
+    /// fulfillment on this.
     async fn report_prover_info(
         &self,
-        _domain: &[u8],
-        _prover: Address,
-        _components: Vec<ComponentInfo>,
-        _signer: &NetworkSigner,
-    ) -> Result<()> {
-        Ok(())
-    }
+        domain: &[u8],
+        prover: Address,
+        components: Vec<ComponentInfo>,
+        signer: &NetworkSigner,
+    ) -> Result<()>;
 
     /// Whether to download proofs for fulfillment when submitting a request.
     ///

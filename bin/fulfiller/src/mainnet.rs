@@ -55,7 +55,7 @@ impl FulfillmentNetwork for MainnetFulfiller {
         components: Vec<spn_network_types::ComponentInfo>,
         signer: &NetworkSigner,
     ) -> Result<()> {
-        // ReportProverInfo (network#232) carries no nonce and writes no ledger
+        // ReportProverInfo carries no nonce and writes no ledger
         // tx — it is signed, non-ledger telemetry: the body is signed and the
         // receiver verifies the signer, binding the report to the signer-resolved
         // prover. Build + sign the body exactly like fulfill_proof, minus GetNonce.
