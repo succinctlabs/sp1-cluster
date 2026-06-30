@@ -113,6 +113,13 @@ RUN apt-get update -y && \
 
 WORKDIR /app
 
+# Immutable image tag (e.g. base-<short_sha>), promoted to a runtime env var so
+# the fulfiller can self-report which container image it is running via the
+# network ReportProverInfo RPC. Runtime stages don't inherit build-stage ENVs,
+# so this ARG/ENV must be declared here.
+ARG IMAGE_TAG=""
+ENV IMAGE_TAG=$IMAGE_TAG
+
 # Create a non-root user and group for better security
 RUN groupadd --gid 1001 appgroup && \
     useradd --uid 1001 --gid appgroup --shell /bin/false --create-home appuser

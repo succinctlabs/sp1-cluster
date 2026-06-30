@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use sp1_cluster_artifact::ArtifactType;
 use sp1_cluster_common::proto::ProofRequest;
 use sp1_sdk::network::signer::NetworkSigner;
+use spn_network_types::ComponentInfo;
 pub trait NetworkRequest: Send + Sync + 'static {
     fn request_id(&self) -> String;
 
@@ -118,6 +119,20 @@ pub trait FulfillmentNetwork: Send + Sync + 'static {
         request: &Self::NetworkRequest,
         signer: &NetworkSigner,
     ) -> Result<String>;
+
+    /// Report build identity for one or more cluster components via the public
+    /// `ReportProverInfo` contract. The fulfiller passes its own component plus
+    /// any coordinator/worker components it could collect, in ONE request.
+    ///
+    /// Best-effort debugging telemetry: implementations must never block or fail
+    /// fulfillment on this.
+    async fn report_prover_info(
+        &self,
+        domain: &[u8],
+        prover: Address,
+        components: Vec<ComponentInfo>,
+        signer: &NetworkSigner,
+    ) -> Result<()>;
 
     /// Whether to download proofs for fulfillment when submitting a request.
     ///

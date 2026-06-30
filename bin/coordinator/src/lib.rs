@@ -30,8 +30,41 @@ use tracing::{instrument, Instrument};
 
 pub const BUILD_VERSION: &str = env!("BUILD_VERSION");
 
+/// The git commit this coordinator was built from. Supplied by the base
+/// `infra/Dockerfile`'s `VERGEN_GIT_SHA` build ARG/ENV (see build.rs, which maps
+/// it to `BUILD_GIT_SHA`); `"unknown"` for plain local builds. Used for the
+/// coordinator's own entry in `GetClusterComponentInfo`.
+pub const BUILD_GIT_SHA: &str = env!("BUILD_GIT_SHA");
+
+/// The component name the coordinator reports itself as in
+/// `GetClusterComponentInfo`. Must be in the network's component allowlist.
+pub const COORDINATOR_COMPONENT: &str = "coordinator";
+
 /// The interval in seconds at which the coordinator periodic task should run.
 pub const COORDINATOR_PERIODIC_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Map a worker type to its network component name for build-identity reporting.
+///
+/// The receiver contract's component allowlist only has `cpu-node` / `gpu-node`,
+/// so:
+/// - `Cpu` -> `cpu-node`
+/// - `Gpu` -> `gpu-node`
+/// - `All` -> `gpu-node`. Lossy compatibility mapping: an `All` worker is
+///   GPU-capable and the contract has no dedicated label for it, so it is
+///   reported as a gpu-node rather than dropped.
+///
+/// Returns `None` for `UnspecifiedWorkerType` / `None`, which are not real
+/// build-reportable node roles. The caller skips and warns rather than
+/// reporting them as a (false) cpu-node. Matched exhaustively (no wildcard) so a
+/// new `WorkerType` variant forces a deliberate mapping decision here.
+pub fn worker_component_name(worker_type: WorkerType) -> Option<&'static str> {
+    match worker_type {
+        WorkerType::Cpu => Some("cpu-node"),
+        WorkerType::Gpu => Some("gpu-node"),
+        WorkerType::All => Some("gpu-node"),
+        WorkerType::UnspecifiedWorkerType | WorkerType::None => None,
+    }
+}
 
 /// Estimate the duration of a task based on its type. Used as a heuristic when assigning tasks to
 /// workers.
@@ -257,16 +290,29 @@ pub struct Worker<P: AssignmentPolicy> {
     /// Whether the worker is closed and should not be sent any more tasks.
     pub closed: bool,
 
+    /// Self-reported crate version of the worker (from OpenRequest).
+    pub version: String,
+
+    /// Self-reported git commit the worker was built from (from OpenRequest).
+    pub git_sha: String,
+
+    /// Self-reported container image tag the worker is running (from OpenRequest).
+    pub image_tag: String,
+
     /// Any extra state tracked by the assignment policy.
     pub extra: P::WorkerState,
 }
 
 impl<P: AssignmentPolicy> Worker<P> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         worker_type: WorkerType,
         max_weight: u32,
         channel: mpsc::UnboundedSender<Result<ServerMessage, Status>>,
+        version: String,
+        git_sha: String,
+        image_tag: String,
     ) -> Self {
         Self {
             id,
@@ -281,6 +327,9 @@ impl<P: AssignmentPolicy> Worker<P> {
                 .as_secs(),
             channel,
             closed: false,
+            version,
+            git_sha,
+            image_tag,
             extra: P::WorkerState::default(),
         }
     }
@@ -819,12 +868,19 @@ impl<P: AssignmentPolicy> Coordinator<P> {
     }
 
     /// Add a worker to the Coordinator. Returns true if worker already existed.
+    ///
+    /// `version` / `git_sha` / `image_tag` are the worker's self-reported build
+    /// identity (OpenRequest), surfaced via GetClusterComponentInfo.
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_worker(
         self: &Arc<Self>,
         worker_id: String,
         worker_type: WorkerType,
         max_weight: u32,
         channel: mpsc::UnboundedSender<Result<ServerMessage, Status>>,
+        version: String,
+        git_sha: String,
+        image_tag: String,
     ) -> Result<bool> {
         let mut state = self
             .state
@@ -838,12 +894,26 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             if let Some(worker) = state.workers.get_mut(&worker_id) {
                 tracing::info!("Worker already exists");
                 worker.channel = channel;
+                // Refresh build identity: a worker reconnecting after an upgrade
+                // re-sends OpenRequest with new build fields. Without this the
+                // coordinator would report the worker's pre-upgrade identity.
+                worker.version = version;
+                worker.git_sha = git_sha;
+                worker.image_tag = image_tag;
                 return Ok(true);
             }
 
             state.workers.insert(
                 worker_id.clone(),
-                Worker::new(worker_id, worker_type, max_weight, channel),
+                Worker::new(
+                    worker_id,
+                    worker_type,
+                    max_weight,
+                    channel,
+                    version,
+                    git_sha,
+                    image_tag,
+                ),
             );
             // Assign tasks now that a worker is available.
             self.assign_tasks(state).await?;
@@ -1622,6 +1692,52 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         }
     }
 
+    /// Build the cluster component manifest: the coordinator's own build identity
+    /// followed by one entry per connected worker, from the in-memory registry.
+    ///
+    /// The fulfiller calls this (via the WorkerService RPC) and forwards the
+    /// entries to the SPN `ReportProverInfo` RPC. Component names use the
+    /// network's allowlist: "coordinator", "gpu-node", "cpu-node".
+    pub async fn get_cluster_component_info(&self) -> proto::GetClusterComponentInfoResponse {
+        // Acquire the same state lock used elsewhere; keep the registry in-memory.
+        let state = self
+            .state
+            .read()
+            .instrument(tracing::debug_span!("acquire"))
+            .await;
+
+        // Coordinator's own build identity first.
+        let mut components = vec![proto::ClusterComponentInfo {
+            component: COORDINATOR_COMPONENT.to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            git_sha: BUILD_GIT_SHA.to_string(),
+            image_tag: std::env::var("IMAGE_TAG").unwrap_or_default(),
+        }];
+
+        // One entry per connected worker (keyed by build identity, not instance).
+        // Workers with a non-reportable worker_type (Unspecified/None) are skipped
+        // with a warning rather than reported under a false component name. Same-build
+        // workers produce identical entries; the fulfiller dedupes them downstream.
+        components.extend(state.workers.values().filter_map(|w| {
+            let Some(component) = worker_component_name(w.worker_type) else {
+                tracing::warn!(
+                    worker_id = %w.id,
+                    worker_type = ?w.worker_type,
+                    "skipping worker with non-reportable worker_type in cluster component manifest",
+                );
+                return None;
+            };
+            Some(proto::ClusterComponentInfo {
+                component: component.to_string(),
+                version: w.version.clone(),
+                git_sha: w.git_sha.clone(),
+                image_tag: w.image_tag.clone(),
+            })
+        }));
+
+        proto::GetClusterComponentInfoResponse { components }
+    }
+
     /// Print coordinator info.
     pub async fn print_info(&self) {
         let info = self.get_info().await;
@@ -2154,7 +2270,15 @@ mod tests {
         active_tasks: &[(&str, &str)],
     ) -> mpsc::UnboundedReceiver<Result<ServerMessage, Status>> {
         let (tx, rx) = mpsc::unbounded_channel();
-        let mut worker = Worker::new(worker_id.into(), worker_type, 24, tx);
+        let mut worker = Worker::new(
+            worker_id.into(),
+            worker_type,
+            24,
+            tx,
+            String::new(),
+            String::new(),
+            String::new(),
+        );
         // Force the heartbeat into the distant past so cleanup_dead_workers picks it up.
         worker.last_heartbeat = 0;
         for (proof_id, task_id) in active_tasks {
@@ -2174,7 +2298,15 @@ mod tests {
             let mut state = c.state.write().await;
             state.workers.insert(
                 "w1".into(),
-                Worker::new("w1".into(), WorkerType::Gpu, 24, tx),
+                Worker::new(
+                    "w1".into(),
+                    WorkerType::Gpu,
+                    24,
+                    tx,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ),
             );
         }
 
@@ -2380,7 +2512,15 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         state.workers.insert(
             worker_id.into(),
-            Worker::new(worker_id.into(), worker_type, 24, tx),
+            Worker::new(
+                worker_id.into(),
+                worker_type,
+                24,
+                tx,
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
         );
     }
 
@@ -2559,5 +2699,217 @@ mod tests {
                 panic!("ghost complete must not deliver a second subscriber message, got: {msg:?}")
             }
         }
+    }
+
+    // --- build-identity reporting (add_worker registry + manifest) ---
+
+    /// Reads the stored build fields for a worker out of the in-memory registry.
+    async fn worker_build(
+        c: &Arc<Coordinator<DefaultPolicy>>,
+        worker_id: &str,
+    ) -> (String, String, String) {
+        let state = c.state.read().await;
+        let w = state.workers.get(worker_id).expect("worker registered");
+        (w.version.clone(), w.git_sha.clone(), w.image_tag.clone())
+    }
+
+    #[tokio::test]
+    async fn add_worker_stores_build_identity() {
+        let c = Arc::new(coordinator());
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        let existed = c
+            .add_worker(
+                "w1".into(),
+                WorkerType::Gpu,
+                24,
+                tx,
+                "2.5.0".into(),
+                "abc1234".into(),
+                "node-gpu-abc1234".into(),
+            )
+            .await
+            .unwrap();
+        assert!(!existed, "first add_worker must report the worker as new");
+
+        let (version, git_sha, image_tag) = worker_build(&c, "w1").await;
+        assert_eq!(version, "2.5.0");
+        assert_eq!(git_sha, "abc1234");
+        assert_eq!(image_tag, "node-gpu-abc1234");
+    }
+
+    #[tokio::test]
+    async fn add_worker_reconnect_refreshes_build_identity() {
+        let c = Arc::new(coordinator());
+
+        let (tx1, _rx1) = mpsc::unbounded_channel();
+        c.add_worker(
+            "w1".into(),
+            WorkerType::Gpu,
+            24,
+            tx1,
+            "2.5.0".into(),
+            "oldsha".into(),
+            "node-gpu-oldsha".into(),
+        )
+        .await
+        .unwrap();
+
+        // Same worker_id reconnects after an upgrade with a new build.
+        let (tx2, _rx2) = mpsc::unbounded_channel();
+        let existed = c
+            .add_worker(
+                "w1".into(),
+                WorkerType::Gpu,
+                24,
+                tx2,
+                "2.6.0".into(),
+                "newsha".into(),
+                "node-gpu-newsha".into(),
+            )
+            .await
+            .unwrap();
+        assert!(existed, "reconnect with same worker_id must report existed");
+
+        // Build identity must reflect the NEW build, not the stale one.
+        let (version, git_sha, image_tag) = worker_build(&c, "w1").await;
+        assert_eq!(version, "2.6.0", "version must refresh on reconnect");
+        assert_eq!(git_sha, "newsha", "git_sha must refresh on reconnect");
+        assert_eq!(image_tag, "node-gpu-newsha", "image_tag must refresh");
+    }
+
+    #[tokio::test]
+    async fn get_cluster_component_info_includes_coordinator_and_workers() {
+        let c = Arc::new(coordinator());
+
+        let (tx_gpu, _rx_gpu) = mpsc::unbounded_channel();
+        c.add_worker(
+            "gpu1".into(),
+            WorkerType::Gpu,
+            24,
+            tx_gpu,
+            "2.5.0".into(),
+            "gpusha".into(),
+            "node-gpu-gpusha".into(),
+        )
+        .await
+        .unwrap();
+
+        let (tx_cpu, _rx_cpu) = mpsc::unbounded_channel();
+        c.add_worker(
+            "cpu1".into(),
+            WorkerType::Cpu,
+            24,
+            tx_cpu,
+            "2.5.0".into(),
+            "cpusha".into(),
+            "base-cpusha".into(),
+        )
+        .await
+        .unwrap();
+
+        let resp = c.get_cluster_component_info().await;
+
+        // Exactly one coordinator entry + one per worker.
+        assert_eq!(resp.components.len(), 3, "coordinator + 2 workers");
+
+        let coord = resp
+            .components
+            .iter()
+            .find(|ci| ci.component == "coordinator")
+            .expect("coordinator entry present");
+        assert_eq!(coord.version, env!("CARGO_PKG_VERSION"));
+
+        let gpu = resp
+            .components
+            .iter()
+            .find(|ci| ci.git_sha == "gpusha")
+            .expect("gpu worker entry present");
+        assert_eq!(gpu.component, "gpu-node", "Gpu maps to gpu-node");
+        assert_eq!(gpu.image_tag, "node-gpu-gpusha");
+
+        let cpu = resp
+            .components
+            .iter()
+            .find(|ci| ci.git_sha == "cpusha")
+            .expect("cpu worker entry present");
+        assert_eq!(cpu.component, "cpu-node", "Cpu maps to cpu-node");
+    }
+
+    #[tokio::test]
+    async fn get_cluster_component_info_maps_all_to_gpu_node() {
+        let c = Arc::new(coordinator());
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        c.add_worker(
+            "all1".into(),
+            WorkerType::All,
+            24,
+            tx,
+            "2.5.0".into(),
+            "allsha".into(),
+            "node-gpu-allsha".into(),
+        )
+        .await
+        .unwrap();
+
+        let resp = c.get_cluster_component_info().await;
+
+        let all = resp
+            .components
+            .iter()
+            .find(|ci| ci.git_sha == "allsha")
+            .expect("All worker entry present");
+        // Lossy compatibility mapping: All is GPU-capable -> gpu-node.
+        assert_eq!(all.component, "gpu-node", "All maps to gpu-node");
+    }
+
+    #[tokio::test]
+    async fn get_cluster_component_info_skips_unspecified_and_none_workers() {
+        let c = Arc::new(coordinator());
+
+        let (tx_u, _rx_u) = mpsc::unbounded_channel();
+        c.add_worker(
+            "u1".into(),
+            WorkerType::UnspecifiedWorkerType,
+            24,
+            tx_u,
+            "2.5.0".into(),
+            "usha".into(),
+            "base-usha".into(),
+        )
+        .await
+        .unwrap();
+
+        let (tx_n, _rx_n) = mpsc::unbounded_channel();
+        c.add_worker(
+            "n1".into(),
+            WorkerType::None,
+            24,
+            tx_n,
+            "2.5.0".into(),
+            "nsha".into(),
+            "base-nsha".into(),
+        )
+        .await
+        .unwrap();
+
+        let resp = c.get_cluster_component_info().await;
+
+        // Non-reportable worker_types are skipped (never reported as a false
+        // cpu-node); only the coordinator's own entry remains.
+        assert!(
+            resp.components.iter().all(|ci| ci.git_sha != "usha"),
+            "Unspecified worker must be skipped"
+        );
+        assert!(
+            resp.components.iter().all(|ci| ci.git_sha != "nsha"),
+            "None worker must be skipped"
+        );
+        assert_eq!(
+            resp.components.len(),
+            1,
+            "only the coordinator entry remains"
+        );
     }
 }

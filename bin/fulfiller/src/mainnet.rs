@@ -7,6 +7,7 @@ use sp1_cluster_artifact::ArtifactType;
 use sp1_cluster_common::proto::ProofRequest;
 use sp1_cluster_fulfillment::{
     network::{FulfillmentNetwork, NetworkRequest},
+    prover_info::build_report_prover_info_body,
     request_error_from_extra_data,
 };
 use sp1_sdk::network::signer::NetworkSigner;
@@ -45,6 +46,29 @@ impl FulfillmentNetwork for MainnetFulfiller {
             .into_inner()
             .owner;
         Ok(Address::from_slice(&prover_bytes))
+    }
+
+    async fn report_prover_info(
+        &self,
+        domain: &[u8],
+        prover: Address,
+        components: Vec<spn_network_types::ComponentInfo>,
+        signer: &NetworkSigner,
+    ) -> Result<()> {
+        // ReportProverInfo carries no nonce and writes no ledger
+        // tx — it is signed, non-ledger telemetry: the body is signed and the
+        // receiver verifies the signer, binding the report to the signer-resolved
+        // prover. Build + sign the body exactly like fulfill_proof, minus GetNonce.
+        let body = build_report_prover_info_body(domain, prover.as_slice(), components);
+
+        let request = spn_network_types::ReportProverInfoRequest {
+            format: spn_network_types::MessageFormat::Binary.into(),
+            signature: signer.sign_message(&body.encode_to_vec()).await?.into(),
+            body: Some(body),
+        };
+
+        self.network.clone().report_prover_info(request).await?;
+        Ok(())
     }
 
     async fn submit_request(

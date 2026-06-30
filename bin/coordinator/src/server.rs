@@ -67,7 +67,15 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
                 tracing::info!("Worker registered: {}", hb.worker_id);
 
                 if let Err(e) = coordinator
-                    .add_worker(hb.worker_id.clone(), hb.worker_type(), hb.max_weight, tx)
+                    .add_worker(
+                        hb.worker_id.clone(),
+                        hb.worker_type(),
+                        hb.max_weight,
+                        tx,
+                        hb.version.clone(),
+                        hb.git_sha.clone(),
+                        hb.image_tag.clone(),
+                    )
                     .await
                 {
                     tracing::error!("Failed to add worker: {:?}", e);
@@ -415,6 +423,14 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
 
     async fn get_stats(&self, _: Request<()>) -> Result<Response<GetStatsResponse>, Status> {
         let response = self.coordinator.get_info().await;
+        Ok(Response::new(response))
+    }
+
+    async fn get_cluster_component_info(
+        &self,
+        _: Request<proto::GetClusterComponentInfoRequest>,
+    ) -> Result<Response<proto::GetClusterComponentInfoResponse>, Status> {
+        let response = self.coordinator.get_cluster_component_info().await;
         Ok(Response::new(response))
     }
 

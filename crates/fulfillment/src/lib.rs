@@ -17,12 +17,14 @@ use spn_network_types::ProofRequestError;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::JoinSet, time::sleep};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 pub mod config;
+pub mod coordinator_client;
 pub mod grpc;
 pub mod metrics;
 pub mod network;
+pub mod prover_info;
 pub mod run;
 
 /// The maximum number of requests to handle in a single refresh loop.
@@ -70,6 +72,69 @@ pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
     ProvingFailure::from_extra_data(s).map(|_| ProofRequestError::ProvingFailure as i32)
 }
 
+/// Assemble the public component list for a single `ReportProverInfo`: the
+/// fulfiller's own component first, then the coordinator manifest (coordinator +
+/// workers) mapped onto the public `ComponentInfo` (which has no `instance_id`).
+///
+/// `cluster_components` is `None` when no coordinator is configured, giving a
+/// fulfiller-only report. Manifest entries are deduped by build identity
+/// `(component, version, git_sha, image_tag)`, so many workers on the same build
+/// collapse to one entry while distinct builds (a rolling deploy) are kept.
+///
+/// Returns `Err` for a malformed manifest, so the caller skips the report rather than
+/// emit a bad snapshot: a configured coordinator (`Some`) must yield exactly one
+/// `coordinator` build after dedup (zero — a manifest missing its coordinator — or
+/// many are malformed), and there must never be more than one `fulfiller`.
+pub fn assemble_components(
+    identity: &prover_info::BuildIdentity,
+    cluster_components: Option<Vec<sp1_cluster_common::proto::ClusterComponentInfo>>,
+) -> Result<Vec<spn_network_types::ComponentInfo>> {
+    let mut components = vec![prover_info::fulfiller_component(identity)];
+    let had_manifest = cluster_components.is_some();
+    if let Some(cluster) = cluster_components {
+        let mut seen = HashSet::with_capacity(cluster.len());
+        for c in cluster {
+            let mapped = prover_info::component_from_cluster(c);
+            // Dedup by build identity: collapse same-build workers to one entry.
+            if seen.insert((
+                mapped.component.clone(),
+                mapped.version.clone(),
+                mapped.git_sha.clone(),
+                mapped.image_tag.clone(),
+            )) {
+                components.push(mapped);
+            }
+        }
+    }
+
+    // The fulfiller is added exactly once; reject a manifest that injected another.
+    let fulfillers = components
+        .iter()
+        .filter(|c| c.component == "fulfiller")
+        .count();
+    if fulfillers > 1 {
+        return Err(anyhow!(
+            "manifest reported {fulfillers} fulfiller builds; refusing to send a malformed report"
+        ));
+    }
+
+    // A reached coordinator must report exactly one coordinator build after dedup;
+    // zero (manifest missing its coordinator) or many are malformed.
+    if had_manifest {
+        let coordinators = components
+            .iter()
+            .filter(|c| c.component == "coordinator")
+            .count();
+        if coordinators != 1 {
+            return Err(anyhow!(
+                "coordinator manifest reported {coordinators} coordinator builds (expected exactly 1); refusing to send a malformed report"
+            ));
+        }
+    }
+
+    Ok(components)
+}
+
 #[derive(Clone)]
 pub struct Fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> {
     network: N,
@@ -95,6 +160,18 @@ pub struct Fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork
     /// submitting; without serialization, concurrent submissions sign the same nonce and all but
     /// one fail verification. Guards a single process only — replicas sharing a signer still race.
     nonce_lock: Arc<Mutex<()>>,
+    /// Configured coordinator WorkerService address (`FULFILLER_COORDINATOR_RPC`).
+    /// `None` means no coordinator is configured -> the fulfiller reports only its
+    /// own component (fulfiller-only). `Some` means cluster-wide reporting is
+    /// desired; the client below is (re)connected lazily by the report task, so a
+    /// coordinator that is down at fulfiller startup is picked up on a later tick.
+    coordinator_rpc: Option<String>,
+    /// Lazily-(re)connected client for the coordinator's `GetClusterComponentInfo`
+    /// RPC, shared across `Fulfiller` clones. `None` while disconnected/stale; the
+    /// background report task reconnects (bounded) on the next tick. Distinct from
+    /// `coordinator_rpc`: an empty client with a `Some` address means "configured
+    /// but not currently connected", not "unconfigured".
+    coordinator_client: Arc<Mutex<Option<coordinator_client::CoordinatorComponentClient>>>,
 }
 
 impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N> {
@@ -113,6 +190,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         request_probability: f64,
         name: Option<String>,
         refresh_interval_sec: u64,
+        coordinator_rpc: Option<String>,
     ) -> Self {
         Self {
             network,
@@ -129,6 +207,8 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             name,
             refresh_interval: Duration::from_secs(refresh_interval_sec),
             nonce_lock: Arc::new(Mutex::new(())),
+            coordinator_rpc,
+            coordinator_client: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -144,7 +224,26 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         let prover = self.network.init(&self.signer).await?;
         info!("prover address: {}", prover);
 
+        // Resolve this fulfiller's build identity once and report it to the
+        // network at startup, then on a low-frequency interval inside the main
+        // loop below. Best-effort: a failure here never blocks fulfillment.
+        let build_identity = prover_info::BuildIdentity::resolve();
+        info!(
+            version = %build_identity.version,
+            git_sha = %build_identity.git_sha,
+            image_tag = %build_identity.image_tag,
+            "fulfiller build identity",
+        );
+        self.spawn_report_prover_info(prover, build_identity.clone());
+        let mut last_prover_info_report = std::time::Instant::now();
+        let report_interval = Duration::from_secs(prover_info::REPORT_INTERVAL_SECS);
+
         loop {
+            // Re-report build identity on a low-frequency interval (best-effort).
+            if last_prover_info_report.elapsed() >= report_interval {
+                self.spawn_report_prover_info(prover, build_identity.clone());
+                last_prover_info_report = std::time::Instant::now();
+            }
             // Check for requests to submit.
             if let Err(e) = self.submit_requests().await {
                 error!("submitting requests: {:?}", e);
@@ -167,6 +266,73 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             }
             // Wait for the next interval.
             sleep(self.refresh_interval).await;
+        }
+    }
+
+    /// Spawns [`Self::report_prover_info`] as a detached background task so this
+    /// best-effort telemetry can never block the fulfiller's startup or its
+    /// submit/fail/cancel/schedule loop — even though the report itself uses
+    /// bounded timeouts. Fire-and-forget: failures are logged inside the task.
+    /// Skipped when fulfillment is disabled (dry-run).
+    fn spawn_report_prover_info(
+        self: &Arc<Self>,
+        prover: Address,
+        identity: prover_info::BuildIdentity,
+    ) {
+        if self.disable_fulfillment {
+            return;
+        }
+        let this = self.clone();
+        tokio::spawn(async move {
+            this.report_prover_info(prover, &identity).await;
+        });
+    }
+
+    /// Reports cluster build identity to the network (best-effort).
+    ///
+    /// Sends `[fulfiller self] ++ coordinator manifest (coordinator + workers)` as a
+    /// full snapshot in ONE `ReportProverInfo`. With no coordinator configured this is
+    /// a valid fulfiller-only report. But when a coordinator IS configured and its
+    /// fetch fails (unreachable / `Unimplemented` / timeout), this report is SKIPPED:
+    /// the receiver treats the payload as a full snapshot, so sending fulfiller-only
+    /// would prune the coordinator/worker rows. The next tick retries.
+    ///
+    /// On any error, logs a warning and returns — this telemetry never fails the
+    /// fulfiller. `ReportProverInfo` carries no nonce, so unlike fulfill/fail it needs
+    /// no `nonce_lock` serialization.
+    async fn report_prover_info(&self, prover: Address, identity: &prover_info::BuildIdentity) {
+        // Collect the manifest, (re)connecting lazily when a coordinator is configured.
+        // Ok(None) = unset (fulfiller-only is valid); Err = configured fetch failed.
+        let cluster_components = match coordinator_client::collect_cluster_components(
+            &self.coordinator_rpc,
+            &self.coordinator_client,
+        )
+        .await
+        {
+            Ok(manifest) => manifest,
+            Err(e) => {
+                warn!(
+                    "coordinator manifest fetch failed; skipping this report to avoid pruning \
+                     coordinator/worker rows (retrying next tick): {e:?}"
+                );
+                return;
+            }
+        };
+
+        let components = match assemble_components(identity, cluster_components) {
+            Ok(components) => components,
+            Err(e) => {
+                warn!("refusing to send malformed prover-info report (retrying next tick): {e:?}");
+                return;
+            }
+        };
+
+        if let Err(e) = self
+            .network
+            .report_prover_info(self.domain.as_slice(), prover, components, &self.signer)
+            .await
+        {
+            warn!("failed to report prover info (continuing): {:?}", e);
         }
     }
 
@@ -774,7 +940,8 @@ pub fn extract_artifact_name(s3_url: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_cancel, should_cancel_on_network};
+    use super::*;
+    use sp1_cluster_common::proto::ClusterComponentInfo;
 
     /// `should_cancel` skips exactly one case: a fulfilled request that is not
     /// in the cluster's in-flight set (a no-op cancel). All other combinations
@@ -810,5 +977,138 @@ mod tests {
                 !is_unfulfillable
             );
         }
+    }
+
+    fn fulfiller_identity() -> prover_info::BuildIdentity {
+        prover_info::BuildIdentity {
+            version: "2.5.0".to_string(),
+            git_sha: "fulfillersha".to_string(),
+            image_tag: "base-fulfillersha".to_string(),
+        }
+    }
+
+    /// Build a cluster manifest entry, keyed by build identity (same-build workers
+    /// produce identical entries).
+    fn cluster_entry(component: &str, git_sha: &str) -> ClusterComponentInfo {
+        ClusterComponentInfo {
+            component: component.to_string(),
+            version: "2.5.0".to_string(),
+            git_sha: git_sha.to_string(),
+            image_tag: format!("{component}-{git_sha}"),
+        }
+    }
+
+    #[test]
+    fn assemble_components_fulfiller_only_when_no_coordinator() {
+        // No coordinator manifest => fulfiller-only.
+        let components = assemble_components(&fulfiller_identity(), None).unwrap();
+
+        assert_eq!(components.len(), 1, "fulfiller-only when no manifest");
+        assert_eq!(components[0].component, "fulfiller");
+        assert_eq!(components[0].git_sha, "fulfillersha");
+    }
+
+    #[test]
+    fn assemble_components_includes_fulfiller_coordinator_and_workers() {
+        let cluster = vec![
+            cluster_entry("coordinator", "coordsha"),
+            cluster_entry("gpu-node", "gpusha"),
+            cluster_entry("cpu-node", "cpusha"),
+        ];
+
+        let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
+
+        // fulfiller + coordinator + 2 workers.
+        assert_eq!(components.len(), 4);
+        assert_eq!(
+            components[0].component, "fulfiller",
+            "fulfiller must be first"
+        );
+        assert_eq!(components[0].git_sha, "fulfillersha");
+        assert_eq!(components[1].component, "coordinator");
+        assert_eq!(components[1].git_sha, "coordsha");
+        assert!(components
+            .iter()
+            .any(|c| c.component == "gpu-node" && c.git_sha == "gpusha"));
+        assert!(components
+            .iter()
+            .any(|c| c.component == "cpu-node" && c.git_sha == "cpusha"));
+    }
+
+    #[test]
+    fn assemble_components_collapses_same_build_workers() {
+        // Two gpu-node workers on the same build collapse to one public entry;
+        // fulfiller + coordinator are still included.
+        let cluster = vec![
+            cluster_entry("coordinator", "coordsha"),
+            cluster_entry("gpu-node", "samesha"),
+            cluster_entry("gpu-node", "samesha"),
+        ];
+
+        let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
+
+        assert_eq!(
+            components.len(),
+            3,
+            "fulfiller + coordinator + one collapsed gpu-node build"
+        );
+        assert_eq!(components[0].component, "fulfiller");
+        let gpu = components
+            .iter()
+            .filter(|c| c.component == "gpu-node")
+            .count();
+        assert_eq!(gpu, 1, "same-build gpu workers collapse to one entry");
+    }
+
+    #[test]
+    fn assemble_components_keeps_distinct_builds_for_rolling_deploy() {
+        // Old + new gpu-node builds during a rolling deploy: both remain.
+        let cluster = vec![
+            cluster_entry("coordinator", "coordsha"),
+            cluster_entry("gpu-node", "oldsha"),
+            cluster_entry("gpu-node", "newsha"),
+        ];
+
+        let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
+
+        let builds: HashSet<_> = components
+            .iter()
+            .filter(|c| c.component == "gpu-node")
+            .map(|c| c.git_sha.as_str())
+            .collect();
+        assert_eq!(
+            builds,
+            HashSet::from(["oldsha", "newsha"]),
+            "both builds kept"
+        );
+    }
+
+    #[test]
+    fn assemble_components_rejects_two_coordinator_builds() {
+        // Two distinct coordinator builds is malformed (singleton) => Err, not sent.
+        let cluster = vec![
+            cluster_entry("coordinator", "coordsha-a"),
+            cluster_entry("coordinator", "coordsha-b"),
+        ];
+
+        assert!(
+            assemble_components(&fulfiller_identity(), Some(cluster)).is_err(),
+            "two distinct coordinator builds must be rejected"
+        );
+    }
+
+    #[test]
+    fn assemble_components_rejects_manifest_without_coordinator() {
+        // A reached coordinator must report itself: a Some manifest with no coordinator
+        // entry (workers-only, or empty) is malformed and must not be sent.
+        let workers_only = vec![cluster_entry("gpu-node", "gpusha")];
+        assert!(
+            assemble_components(&fulfiller_identity(), Some(workers_only)).is_err(),
+            "workers-only manifest (no coordinator) must be rejected"
+        );
+        assert!(
+            assemble_components(&fulfiller_identity(), Some(vec![])).is_err(),
+            "empty manifest (no coordinator) must be rejected"
+        );
     }
 }
