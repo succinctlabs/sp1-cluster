@@ -125,5 +125,5 @@ fn default_usd_bid_refresh_interval_secs() -> u64 {
 }
 
 fn default_usd_bid_staleness_max_secs() -> u64 {
-    1800
+    7200
 }
