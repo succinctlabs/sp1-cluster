@@ -1,0 +1,155 @@
+name: RSP exec-vs-prove bench
+
+# One-off benchmark: prove RSP (compressed) through the in-process cluster and
+# aggregate per-task timing (SP1_TASK_TIMING) to separate execution (CoreExecute)
+# from proving (ProveShard, with real gpu_ms) and recursion. Manual dispatch only.
+
+on:
+  # Push-triggered on this bench branch so it runs without being on the default
+  # branch (workflow_dispatch is only dispatchable from default). Re-run via the
+  # Actions "re-run" button / `gh run rerun` if L40S capacity stalls the first try.
+  push:
+    branches: [tobias/rsp-exec-prove-bench]
+  workflow_dispatch:
+    inputs:
+      family:
+        description: runs-on.com GPU instance family
+        type: string
+        default: g6e.4xlarge
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RUST_LOG: info
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build test-cluster (gpu flavor)
+    timeout-minutes: 90
+    runs-on:
+      [
+        "runs-on",
+        "runner=64cpu-linux-x64",
+        "hdd=200",
+        "ami=ami-0f60240de60e318f9",
+        "run-id=${{ github.run_id }}",
+        "spot=false",
+        "tag=rsp-bench-build",
+      ]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PRIVATE_PULL_TOKEN }}
+      - name: rust-cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.rustup/
+          key: rsp-bench-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: rsp-bench-${{ runner.os }}-
+      - name: Build suite binary
+        env:
+          RUSTFLAGS: -C link-arg=-B/usr/local/libexec/wild
+        run: cargo build --release --bin sp1-test-cluster --features gpu
+      - name: Upload suite binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: sp1-test-cluster-gpu
+          path: target/release/sp1-test-cluster
+          retention-days: 3
+
+  bench:
+    name: RSP compressed task-timing
+    needs: build
+    timeout-minutes: 60
+    runs-on:
+      [
+        "runs-on",
+        "family=${{ inputs.family || 'g6e.4xlarge' }}",
+        "hdd=200",
+        "ami=ami-0f60240de60e318f9",
+        "spot=false",
+        "run-id=${{ github.run_id }}",
+        "tag=rsp-bench",
+      ]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.PRIVATE_PULL_TOKEN }}
+      - name: Size /dev/shm to RAM
+        run: sudo mount -o remount,size=100% /dev/shm && df -h /dev/shm
+      - name: Download suite binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sp1-test-cluster-gpu
+      - name: GPU diagnostics
+        run: nvidia-smi || echo "nvidia-smi FAILED"
+      - name: Initialize docker
+        run: |
+          sudo systemctl stop docker
+          sudo rm -rf /var/lib/docker/* 2>/dev/null || true
+          sudo systemctl start docker
+          docker info
+      - name: Circuit cache key
+        id: sp1
+        run: echo "version=$(awk '/^name = "sp1-sdk"$/ {f=1} f && /^version = / {gsub(/"/,"",$3); print $3; exit}' Cargo.lock)" >> "$GITHUB_OUTPUT"
+      - name: circuit-artifacts-cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.sp1/circuits
+          key: sp1-circuits-${{ steps.sp1.outputs.version }}
+          restore-keys: sp1-circuits-
+      - name: Run RSP compressed + collect task timing
+        env:
+          SP1_TASK_TIMING: "1"
+        run: |
+          set -o pipefail
+          chmod +x ./sp1-test-cluster
+          start=$(date +%s)
+          ./sp1-test-cluster run proof-mode-compressed-rsp 2>&1 | tee rsp.log
+          wall=$(( $(date +%s) - start ))
+          echo "wall_seconds=$wall" | tee wall.txt
+      - name: Aggregate task timing
+        if: always()
+        run: |
+          gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+          wall=$(sed -n 's/wall_seconds=//p' wall.txt 2>/dev/null)
+          {
+            echo "# RSP compressed — execution vs proving (in-process sp1-cluster)"
+            echo ""
+            echo "GPU: ${gpu:-?} · wall: ${wall:-?} s · same rsp.elf/stdin as the SDK benchmark."
+            echo ""
+            echo "Per-task totals (ms summed across tasks of that type; tasks may overlap, so"
+            echo "these are total work, not wall time). \`gpu_ms\` is real GPU-lock time."
+            echo ""
+            echo "| task_type | count | total_ms | total_gpu_ms |"
+            echo "|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -a '^.*TASK_TIMING' rsp.log | sed 's/.*TASK_TIMING/TASK_TIMING/' | awk '
+            {
+              t=""; ms=0; g=0
+              for (i=1;i<=NF;i++) {
+                if ($i ~ /^task_type=/) t=substr($i,11)
+                else if ($i ~ /^ms=/)  ms=substr($i,4)+0
+                else if ($i ~ /^gpu_ms=/) { g=substr($i,8); gsub(/Some\(|\)/,"",g); if (g=="None") g=0; g=g+0 }
+              }
+              if (t!="") { cnt[t]++; sum[t]+=ms; gpu[t]+=g }
+            }
+            END { for (t in sum) printf "| %s | %d | %d | %d |\n", t, cnt[t], sum[t], gpu[t] }
+          ' | sort >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rsp-task-timing-log
+          path: rsp.log
+          retention-days: 7

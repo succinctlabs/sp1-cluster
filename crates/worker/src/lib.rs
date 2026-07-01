@@ -178,6 +178,17 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
         .instrument(span)
         .await;
 
+        // Per-task timing for the RSP execute-vs-prove benchmark. Env-gated, so it is a
+        // no-op in production; enable with SP1_TASK_TIMING=1 (see bin/test-cluster).
+        if std::env::var_os("SP1_TASK_TIMING").is_some() {
+            log::info!(
+                "TASK_TIMING task_type={} ms={} gpu_ms={:?}",
+                task_type.as_str_name(),
+                start_time.elapsed().as_millis(),
+                result.as_ref().ok().and_then(|r| r.gpu_ms),
+            );
+        }
+
         self.metrics.as_ref().map(|m| {
             m.record_task_processing_duration(
                 task_type.as_str_name().to_string(),

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use sp1_sdk::SP1ProofMode;
+use sp1_sdk::{Elf, SP1ProofMode, SP1Stdin};
 
 use crate::assert::assert_proof_completed;
 use crate::cluster::Cluster;
@@ -41,19 +41,46 @@ pub fn scenarios() -> Vec<Scenario> {
             tier: Tier::Smoke,
             run: || -> ScenarioFuture { Box::pin(run(SP1ProofMode::Groth16)) },
         },
+        // RSP compressed, for benchmarking the execute-vs-prove split via per-task
+        // timing (run with SP1_TASK_TIMING=1; not part of any suite tier).
+        Scenario {
+            name: "proof-mode-compressed-rsp",
+            timeout: Duration::from_mins(30),
+            tier: Tier::Full,
+            run: || -> ScenarioFuture {
+                Box::pin(run_program(
+                    SP1ProofMode::Compressed,
+                    programs::RSP_ELF.clone(),
+                    programs::RSP_STDIN.clone(),
+                    Duration::from_mins(15),
+                ))
+            },
+        },
     ]
 }
 
 async fn run(mode: SP1ProofMode) -> anyhow::Result<()> {
+    run_program(
+        mode,
+        programs::FIBONACCI_ELF.clone(),
+        programs::FIBONACCI_STDIN.clone(),
+        Duration::from_mins(5),
+    )
+    .await
+}
+
+/// Prove one program in `mode` against a fresh cluster and wait for terminal status.
+async fn run_program(
+    mode: SP1ProofMode,
+    elf: Elf,
+    stdin: SP1Stdin,
+    completion_timeout: Duration,
+) -> anyhow::Result<()> {
     let cluster = Cluster::standard().start().await?;
 
     let proof_ids = submit_proof_requests_sequential(ClusterProofRequests {
         rpc_url: cluster.gateway_rpc_url(),
-        requests: vec![ClusterProofRequest {
-            elf: programs::FIBONACCI_ELF.clone(),
-            stdin: programs::FIBONACCI_STDIN.clone(),
-            modes: vec![mode],
-        }],
+        requests: vec![ClusterProofRequest { elf, stdin, modes: vec![mode] }],
     })
     .await?;
 
@@ -61,13 +88,8 @@ async fn run(mode: SP1ProofMode) -> anyhow::Result<()> {
     for proof_id in &proof_ids {
         // SDK already returned the verified proof; this only waits for the coordinator's
         // async terminal-status write to land in the API. Generous bound for slow CI disks.
-        assert_proof_completed(
-            &api,
-            proof_id,
-            Duration::from_mins(5),
-            &cluster.artifact_client(),
-        )
-        .await?;
+        assert_proof_completed(&api, proof_id, completion_timeout, &cluster.artifact_client())
+            .await?;
     }
 
     cluster.shutdown().await;
