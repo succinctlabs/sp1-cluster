@@ -110,7 +110,7 @@ gpu-node:
       # cpu: 32.0
       # memory: 24Gi
   image:
-    tag: "node-gpu-v2.4.3"
+    tag: "node-gpu-v2.5.2"
   imagePullSecrets:
     - name: ghcr-secret
 
