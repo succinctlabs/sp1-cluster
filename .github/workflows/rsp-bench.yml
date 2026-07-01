@@ -14,11 +14,11 @@ on:
       scenario:
         description: test-cluster scenario
         type: string
-        default: execute-only-rsp
+        default: proof-mode-compressed-rsp
       families:
         description: GPU families (g5,g6,g6e)
         type: string
-        default: g5,g6,g6e
+        default: g6e
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -104,6 +104,15 @@ jobs:
           sudo rm -rf /var/lib/docker/* 2>/dev/null || true
           sudo systemctl start docker
           docker info
+      - name: Tune cluster sharding to VRAM (match the SDK benchmark)
+        run: |
+          # Mirror aws-gpu-bench: element/height thresholds = SP1 defaults x clamp(vram/24, 0.5, 2).
+          # cluster_opts() reads SP1_CLUSTER_SHARD_THRESHOLD (element); SP1CoreOpts::default reads HEIGHT_THRESHOLD.
+          mib=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
+          read elem height <<<"$(awk -v m="$mib" 'BEGIN{f=(m/1024)/24; if(f<0.5)f=0.5; if(f>2)f=2; printf "%d %d", 402653184*f, 4194304*f}')"
+          echo "SP1_CLUSTER_SHARD_THRESHOLD=$elem" >> "$GITHUB_ENV"
+          echo "HEIGHT_THRESHOLD=$height" >> "$GITHUB_ENV"
+          echo "tuned sharding for ${mib} MiB VRAM: element_threshold=$elem height_threshold=$height"
       - name: Run scenario + collect task timing
         env:
           SP1_TASK_TIMING: "1"
@@ -111,6 +120,7 @@ jobs:
         run: |
           set -o pipefail
           chmod +x ./sp1-test-cluster
+          echo "sharding: SP1_CLUSTER_SHARD_THRESHOLD=$SP1_CLUSTER_SHARD_THRESHOLD HEIGHT_THRESHOLD=$HEIGHT_THRESHOLD"
           start=$(date +%s)
           ./sp1-test-cluster run "$SCENARIO" 2>&1 | tee rsp.log
           echo "wall_seconds=$(( $(date +%s) - start ))" > wall.txt
