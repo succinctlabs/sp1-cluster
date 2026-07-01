@@ -45,7 +45,7 @@ jobs:
       - name: Select instances + scenario
         id: matrix
         env:
-          FAMILIES: ${{ inputs.families || 'g5,g6,g6e' }}
+          FAMILIES: ${{ inputs.families || 'g6e' }}
         run: |
           entries=()
           sel() { case ",$FAMILIES," in *,"$1",*) return 0 ;; *) return 1 ;; esac; }
@@ -54,7 +54,7 @@ jobs:
           if sel g6e; then entries+=('{"family":"g6e.xlarge","gpu":"L40S"}' '{"family":"g6e.2xlarge","gpu":"L40S"}' '{"family":"g6e.4xlarge","gpu":"L40S"}'); fi
           joined=$(IFS=,; echo "${entries[*]}")
           echo "matrix={\"include\":[$joined]}" >> "$GITHUB_OUTPUT"
-          echo "scenario=${{ inputs.scenario || 'execute-only-rsp' }}" >> "$GITHUB_OUTPUT"
+          echo "scenario=${{ inputs.scenario || 'proof-mode-compressed-rsp' }}" >> "$GITHUB_OUTPUT"
       - name: rust-cache
         uses: actions/cache@v3
         with:
