@@ -1,21 +1,24 @@
 name: RSP exec-vs-prove bench
 
-# One-off benchmark: prove RSP (compressed) through the in-process cluster and
-# aggregate per-task timing (SP1_TASK_TIMING) to separate execution (CoreExecute)
-# from proving (ProveShard, with real gpu_ms) and recursion. Manual dispatch only.
+# Benchmark: run an RSP test-cluster scenario across AWS GPU instance types and
+# aggregate per-task timing (SP1_TASK_TIMING) to separate execution from proving.
+# - scenario=execute-only-rsp  -> pure execution (ExecuteOnly task, no proving)
+# - scenario=proof-mode-compressed-rsp -> full split (CoreExecute vs ProveShard gpu_ms)
+# Push-triggered on this bench branch; re-run stalls via the Actions re-run button.
 
 on:
-  # Push-triggered on this bench branch so it runs without being on the default
-  # branch (workflow_dispatch is only dispatchable from default). Re-run via the
-  # Actions "re-run" button / `gh run rerun` if L40S capacity stalls the first try.
   push:
     branches: [tobias/rsp-exec-prove-bench]
   workflow_dispatch:
     inputs:
-      family:
-        description: runs-on.com GPU instance family
+      scenario:
+        description: test-cluster scenario
         type: string
-        default: g6e.4xlarge
+        default: execute-only-rsp
+      families:
+        description: GPU families (g5,g6,g6e)
+        type: string
+        default: g5,g6,g6e
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -29,21 +32,29 @@ jobs:
   build:
     name: Build test-cluster (gpu flavor)
     timeout-minutes: 90
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      scenario: ${{ steps.matrix.outputs.scenario }}
     runs-on:
-      [
-        "runs-on",
-        "runner=64cpu-linux-x64",
-        "hdd=200",
-        "ami=ami-0f60240de60e318f9",
-        "run-id=${{ github.run_id }}",
-        "spot=false",
-        "tag=rsp-bench-build",
-      ]
+      ["runs-on", "runner=64cpu-linux-x64", "hdd=200", "ami=ami-0f60240de60e318f9", "run-id=${{ github.run_id }}", "spot=false", "tag=rsp-bench-build"]
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
           token: ${{ secrets.PRIVATE_PULL_TOKEN }}
+      - name: Select instances + scenario
+        id: matrix
+        env:
+          FAMILIES: ${{ inputs.families || 'g5,g6,g6e' }}
+        run: |
+          entries=()
+          sel() { case ",$FAMILIES," in *,"$1",*) return 0 ;; *) return 1 ;; esac; }
+          if sel g5;  then entries+=('{"family":"g5.xlarge","gpu":"A10G"}' '{"family":"g5.2xlarge","gpu":"A10G"}' '{"family":"g5.4xlarge","gpu":"A10G"}'); fi
+          if sel g6;  then entries+=('{"family":"g6.xlarge","gpu":"L4"}' '{"family":"g6.2xlarge","gpu":"L4"}' '{"family":"g6.4xlarge","gpu":"L4"}'); fi
+          if sel g6e; then entries+=('{"family":"g6e.xlarge","gpu":"L40S"}' '{"family":"g6e.2xlarge","gpu":"L40S"}' '{"family":"g6e.4xlarge","gpu":"L40S"}'); fi
+          joined=$(IFS=,; echo "${entries[*]}")
+          echo "matrix={\"include\":[$joined]}" >> "$GITHUB_OUTPUT"
+          echo "scenario=${{ inputs.scenario || 'execute-only-rsp' }}" >> "$GITHUB_OUTPUT"
       - name: rust-cache
         uses: actions/cache@v3
         with:
@@ -66,19 +77,14 @@ jobs:
           retention-days: 3
 
   bench:
-    name: RSP compressed task-timing
+    name: ${{ matrix.gpu }} (${{ matrix.family }})
     needs: build
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.build.outputs.matrix) }}
     runs-on:
-      [
-        "runs-on",
-        "family=${{ inputs.family || 'g6e.4xlarge' }}",
-        "hdd=200",
-        "ami=ami-0f60240de60e318f9",
-        "spot=false",
-        "run-id=${{ github.run_id }}",
-        "tag=rsp-bench",
-      ]
+      ["runs-on", "family=${{ matrix.family }}", "hdd=200", "ami=ami-0f60240de60e318f9", "spot=false", "run-id=${{ github.run_id }}", "tag=rsp-bench"]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -91,65 +97,81 @@ jobs:
         with:
           name: sp1-test-cluster-gpu
       - name: GPU diagnostics
-        run: nvidia-smi || echo "nvidia-smi FAILED"
+        run: nvidia-smi || echo "no gpu"
       - name: Initialize docker
         run: |
           sudo systemctl stop docker
           sudo rm -rf /var/lib/docker/* 2>/dev/null || true
           sudo systemctl start docker
           docker info
-      - name: Circuit cache key
-        id: sp1
-        run: echo "version=$(awk '/^name = "sp1-sdk"$/ {f=1} f && /^version = / {gsub(/"/,"",$3); print $3; exit}' Cargo.lock)" >> "$GITHUB_OUTPUT"
-      - name: circuit-artifacts-cache
-        uses: actions/cache@v3
-        with:
-          path: ~/.sp1/circuits
-          key: sp1-circuits-${{ steps.sp1.outputs.version }}
-          restore-keys: sp1-circuits-
-      - name: Run RSP compressed + collect task timing
+      - name: Run scenario + collect task timing
         env:
           SP1_TASK_TIMING: "1"
+          SCENARIO: ${{ needs.build.outputs.scenario }}
         run: |
           set -o pipefail
           chmod +x ./sp1-test-cluster
           start=$(date +%s)
-          ./sp1-test-cluster run proof-mode-compressed-rsp 2>&1 | tee rsp.log
-          wall=$(( $(date +%s) - start ))
-          echo "wall_seconds=$wall" | tee wall.txt
-      - name: Aggregate task timing
+          ./sp1-test-cluster run "$SCENARIO" 2>&1 | tee rsp.log
+          echo "wall_seconds=$(( $(date +%s) - start ))" > wall.txt
+      - name: Aggregate per-task timing
         if: always()
+        env:
+          SCENARIO: ${{ needs.build.outputs.scenario }}
         run: |
-          gpu=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
-          wall=$(sed -n 's/wall_seconds=//p' wall.txt 2>/dev/null)
-          {
-            echo "# RSP compressed — execution vs proving (in-process sp1-cluster)"
-            echo ""
-            echo "GPU: ${gpu:-?} · wall: ${wall:-?} s · same rsp.elf/stdin as the SDK benchmark."
-            echo ""
-            echo "Per-task totals (ms summed across tasks of that type; tasks may overlap, so"
-            echo "these are total work, not wall time). \`gpu_ms\` is real GPU-lock time."
-            echo ""
-            echo "| task_type | count | total_ms | total_gpu_ms |"
-            echo "|---|---|---|---|"
-          } >> "$GITHUB_STEP_SUMMARY"
-          grep -a '^.*TASK_TIMING' rsp.log | sed 's/.*TASK_TIMING/TASK_TIMING/' | awk '
-            {
-              t=""; ms=0; g=0
-              for (i=1;i<=NF;i++) {
-                if ($i ~ /^task_type=/) t=substr($i,11)
-                else if ($i ~ /^ms=/)  ms=substr($i,4)+0
-                else if ($i ~ /^gpu_ms=/) { g=substr($i,8); gsub(/Some\(|\)/,"",g); if (g=="None") g=0; g=g+0 }
-              }
-              if (t!="") { cnt[t]++; sum[t]+=ms; gpu[t]+=g }
-            }
-            END { for (t in sum) printf "| %s | %d | %d | %d |\n", t, cnt[t], sum[t], gpu[t] }
-          ' | sort >> "$GITHUB_STEP_SUMMARY"
-          cat "$GITHUB_STEP_SUMMARY"
+          wall=$(sed -n 's/wall_seconds=//p' wall.txt 2>/dev/null); wall=${wall:-?}
+          cyc=$(grep -aoE 'cycles=[0-9]+' rsp.log | head -1 | cut -d= -f2); cyc=${cyc:-?}
+          out="result-${{ matrix.family }}.txt"
+          echo "instance=${{ matrix.family }} gpu=${{ matrix.gpu }} scenario=$SCENARIO wall=$wall cycles=$cyc" > "$out"
+          grep -a 'TASK_TIMING' rsp.log | sed 's/.*TASK_TIMING/TASK_TIMING/' | awk '
+            { t="";ms=0;g=0
+              for(i=1;i<=NF;i++){ if($i~/^task_type=/)t=substr($i,11); else if($i~/^ms=/)ms=substr($i,4)+0; else if($i~/^gpu_ms=/){g=substr($i,8);gsub(/Some\(|\)/,"",g);if(g=="None")g=0;g=g+0} }
+              if(t!=""){c[t]++;s[t]+=ms;gp[t]+=g} }
+            END{ for(t in s) printf "TASK %s count=%d ms=%d gpu_ms=%d\n",t,c[t],s[t],gp[t] }' >> "$out"
+          { echo "### ${{ matrix.gpu }} (${{ matrix.family }})"; echo '```'; cat "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.family }}
+          path: result-${{ matrix.family }}.txt
+          retention-days: 7
       - name: Upload log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rsp-task-timing-log
+          name: log-${{ matrix.family }}
           path: rsp.log
           retention-days: 7
+
+  summary:
+    name: Comparison
+    needs: bench
+    if: always()
+    runs-on:
+      ["runs-on", "runner=2cpu-linux-x64", "run-id=${{ github.run_id }}", "spot=false", "tag=rsp-bench-summary"]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          merge-multiple: true
+          path: results
+      - name: Build comparison table
+        run: |
+          get() { grep -oE "$2=[^ ]*" "$1" | head -1 | cut -d= -f2-; }
+          vcpu() { case "$1" in *.4xlarge) echo 16 ;; *.2xlarge) echo 8 ;; *.xlarge) echo 4 ;; *) echo "?" ;; esac; }
+          field() { awk -v t="$2" -v k="$3" '$1=="TASK" && $2==t { for(i=3;i<=NF;i++) if($i ~ "^"k"=") { sub("^"k"=","",$i); print $i } }' "$1"; }
+          {
+            echo "# RSP execution vs proving, across instance types"
+            echo ""
+            echo "ExecuteOnly ms = pure execution (no proving/materialization). CoreExecute ms / ProveShard gpu_ms / Recursion gpu_ms come from the compressed scenario. gpu_ms = real GPU-lock time."
+            echo ""
+            echo "| GPU | instance | vCPU | scenario | cycles | wall s | ExecuteOnly ms | CoreExecute ms | ProveShard gpu_ms | Recursion gpu_ms |"
+            echo "|---|---|---|---|---|---|---|---|---|---|"
+            shopt -s nullglob
+            for f in results/result-*.txt; do
+              fam=$(get "$f" instance)
+              echo "| $(get "$f" gpu) | $fam | $(vcpu "$fam") | $(get "$f" scenario) | $(get "$f" cycles) | $(get "$f" wall) | $(field "$f" EXECUTE_ONLY ms) | $(field "$f" CORE_EXECUTE ms) | $(field "$f" PROVE_SHARD gpu_ms) | $(field "$f" RECURSION_REDUCE gpu_ms) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"

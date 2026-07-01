@@ -22,6 +22,56 @@ pub fn scenario() -> Scenario {
     }
 }
 
+/// RSP execute-only, for the exec-vs-prove benchmark: runs the executor with no
+/// proving/shard materialization, so the ExecuteOnly task time is ~pure execution.
+pub fn scenario_rsp() -> Scenario {
+    Scenario {
+        name: "execute-only-rsp",
+        timeout: Duration::from_mins(15),
+        tier: Tier::Full,
+        run: || -> ScenarioFuture { Box::pin(run_rsp()) },
+    }
+}
+
+async fn run_rsp() -> anyhow::Result<()> {
+    let cluster = Cluster::builder()
+        .coordinator(CoordinatorKind::ExecuteOnly)
+        .cpu_nodes(1)
+        .start()
+        .await?;
+    let api = cluster.api_client().await?;
+
+    let proof_id = request_only(
+        &cluster.gateway_rpc_url(),
+        programs::RSP_ELF.clone(),
+        programs::RSP_STDIN.clone(),
+        SP1ProofMode::Compressed,
+    )
+    .await?;
+    tracing::info!("submitted execute-only rsp request {proof_id}");
+
+    let pr = wait_proof_status(
+        &api,
+        &proof_id,
+        ProofRequestStatus::Completed,
+        Duration::from_mins(10),
+    )
+    .await?;
+    let er = assert_execution_result(
+        &pr,
+        &ExpectedExecution {
+            status: ExecutionStatus::Executed,
+            min_cycles: 1,
+            gas: None, // RSP gas is not pinned
+            require_pv_hash: true,
+        },
+    )?;
+    tracing::info!("execute-only rsp: cycles={} gas={}", er.cycles, er.gas);
+
+    cluster.shutdown().await;
+    Ok(())
+}
+
 /// Standalone executor cluster (prod is_executor_cluster shape): api + execute-only
 /// coordinator + gateway + 1 CPU node. No prover, no proof artifacts — terminal state
 /// and execution metadata come from the cluster API.

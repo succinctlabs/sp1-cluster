@@ -28,6 +28,7 @@ pub fn all() -> Vec<Scenario> {
     let mut res = Vec::new();
     res.extend(proof_modes::scenarios());
     res.push(execute_only::scenario());
+    res.push(execute_only::scenario_rsp());
     res.push(multi_worker::scenario());
     res.push(mixed_load::scenario());
     res.push(worker_death::scenario());
