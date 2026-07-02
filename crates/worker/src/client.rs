@@ -80,8 +80,8 @@ impl WorkerServiceClient {
             worker_id: self.worker_id.clone(),
             worker_type: self.worker_type as i32,
             max_weight: get_max_weight() as u32,
-            // Self-reported build identity. The coordinator stores
-            // these and exposes them via GetClusterComponentInfo so the fulfiller
+            // Self-reported build identity. The coordinator stores these and
+            // publishes them in the cluster component manifest so the fulfiller
             // can forward them to the SPN. Re-sent on every Open, so a reconnect
             // after an upgrade refreshes the coordinator's view.
             version: env!("CARGO_PKG_VERSION").to_string(),

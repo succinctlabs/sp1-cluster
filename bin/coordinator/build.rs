@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or_else(|_| env::var("BUILD_GIT_SHA"))
         .unwrap_or_else(|_| "unknown".to_string());
 
-    // Clean git sha for build-identity reporting (GetClusterComponentInfo).
+    // Clean git sha for build-identity reporting (cluster component manifest).
     println!("cargo:rustc-env=BUILD_GIT_SHA={git_sha}");
 
     // Existing human-readable version string (metrics / GetStats); unchanged shape.

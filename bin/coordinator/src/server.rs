@@ -428,14 +428,6 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
         Ok(Response::new(response))
     }
 
-    async fn get_cluster_component_info(
-        &self,
-        _: Request<proto::GetClusterComponentInfoRequest>,
-    ) -> Result<Response<proto::GetClusterComponentInfoResponse>, Status> {
-        let response = self.coordinator.get_cluster_component_info().await;
-        Ok(Response::new(response))
-    }
-
     type SubscribeTaskMessagesStream =
         UnboundedReceiverStream<Result<proto::MessageStreamResponse, Status>>;
 

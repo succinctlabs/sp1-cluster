@@ -128,9 +128,12 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
 }
 
 /// How often the coordinator pushes its cluster component build manifest to the API.
-/// Low frequency: build identity only changes on reconnects/deploys. Readers judge
-/// freshness against this via the manifest's server-owned `updated_at`.
-const MANIFEST_PUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+/// Low frequency: build identity only changes on reconnects/deploys, and the
+/// fulfiller only reads the manifest every ~15 min. 240s keeps redundant pushes to a
+/// handful per report cycle while staying under the fulfiller's 300s freshness gate,
+/// so one push always lands within the gate window (API restarts repopulate within
+/// one interval).
+const MANIFEST_PUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(240);
 
 /// Spawn a task that periodically pushes the coordinator's full component build
 /// manifest (its own build + one entry per connected worker) to the cluster API,
@@ -144,7 +147,7 @@ pub fn spawn_manifest_push_task<P: AssignmentPolicy>(
 ) -> JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
-            let components = coordinator.get_cluster_component_info().await.components;
+            let components = coordinator.get_cluster_component_info().await;
             if let Err(e) = api_client.set_cluster_component_info(components).await {
                 tracing::warn!(
                     "failed to push cluster component manifest to API (retrying next tick): {e}"
