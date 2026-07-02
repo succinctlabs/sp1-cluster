@@ -2,11 +2,11 @@
 //!
 //! Prover-component build reporting: the fulfiller reports build identity
 //! (version / git sha / image tag) to the SPN via the public `ReportProverInfo`
-//! contract. It always reports its own component (fulfiller-only) and,
-//! when a coordinator client is wired (`FULFILLER_COORDINATOR_RPC` is set),
-//! also forwards the coordinator + every connected worker it fronts
-//! (cluster-wide reporting). This is best-effort debugging telemetry — never
-//! block or fail fulfillment on it.
+//! contract. It sends its own component plus the cluster manifest (coordinator +
+//! every connected worker) that the coordinator periodically pushes to the cluster
+//! API — the fulfiller reads it back over its existing cluster client, so no
+//! topology-specific coordinator address is needed. This is best-effort debugging
+//! telemetry — never block or fail fulfillment on it.
 
 use sp1_cluster_common::proto::ClusterComponentInfo;
 use spn_network_types::{ComponentInfo, ReportProverInfoRequestBody};

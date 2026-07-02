@@ -1,5 +1,7 @@
 use super::*;
-use crate::cluster::{spawn_proof_claimer_task, spawn_proof_status_task, TaskState};
+use crate::cluster::{
+    spawn_manifest_push_task, spawn_proof_claimer_task, spawn_proof_status_task, TaskState,
+};
 use crate::config::Settings;
 use crate::latency::print_latency;
 use crate::metrics::initialize_metrics;
@@ -627,6 +629,14 @@ pub async fn start_coordinator_server_custom<
         service.coordinator.clone(),
         task_map.clone(),
         metrics.clone(),
+        token.clone(),
+    );
+
+    // Publish the cluster component build manifest to the API so the fulfiller can
+    // read it there (no direct fulfiller->coordinator connection needed).
+    spawn_manifest_push_task(
+        api_client.clone(),
+        service.coordinator.clone(),
         token.clone(),
     );
 

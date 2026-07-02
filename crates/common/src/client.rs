@@ -154,4 +154,32 @@ impl ClusterServiceClient {
             .await?;
         Ok(result.proof_request)
     }
+
+    /// Replace the API's cluster component build manifest (full snapshot). Called
+    /// periodically by the coordinator with its own build + one entry per connected
+    /// worker.
+    pub async fn set_cluster_component_info(
+        &self,
+        components: Vec<proto::ClusterComponentInfo>,
+    ) -> Result<()> {
+        self.retry_call(|| {
+            let mut client = self.rpc.clone();
+            let request = proto::SetClusterComponentInfoRequest {
+                components: components.clone(),
+            };
+            async move { client.set_cluster_component_info(request).await }
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Fetch the latest cluster component build manifest the coordinator pushed to
+    /// the API. `updated_at == 0` means no coordinator has pushed one yet.
+    pub async fn get_cluster_component_info(&self) -> Result<proto::ClusterComponentManifest> {
+        self.retry_call(|| {
+            let mut client = self.rpc.clone();
+            async move { client.get_cluster_component_info(()).await }
+        })
+        .await
+    }
 }
