@@ -32,7 +32,7 @@ impl CancelableKind {
 
     /// Whether cancelling is conditional on the request still being in the
     /// cluster's in-flight (Pending) set.
-    pub fn requires_in_flight(self) -> bool {
+    pub fn gated_on_in_flight(self) -> bool {
         matches!(self, Self::Fulfilled)
     }
 }

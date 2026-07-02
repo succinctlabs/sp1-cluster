@@ -557,7 +557,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         // candidates consult this set, so skip the extra cluster RPC entirely when none
         // are present (e.g. mainnet, which never produces a `Fulfilled` cancelable).
         let in_flight: HashSet<String> =
-            if requests.iter().any(|(_, kind)| kind.requires_in_flight()) {
+            if requests.iter().any(|(_, kind)| kind.gated_on_in_flight()) {
                 self.cluster
                     .get_proof_requests(ProofRequestListRequest {
                         proof_status: vec![ProofRequestStatus::Pending.into()],
@@ -579,7 +579,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 
             // Skip no-op cancels: a request the network already fulfilled that our cluster
             // is not proving has nothing to abort and no fulfillment to release.
-            if kind.requires_in_flight() && !in_flight.contains(&request_id) {
+            if kind.gated_on_in_flight() && !in_flight.contains(&request_id) {
                 debug!(
                     "skipping fulfilled request 0x{} not in cluster in-flight set",
                     request_id
@@ -924,14 +924,14 @@ mod tests {
     #[test]
     fn cancelable_kind_routing_matrix() {
         use crate::network::CancelableKind::*;
-        // (kind, should_fail_fulfillment, requires_in_flight)
+        // (kind, should_fail_fulfillment, gated_on_in_flight)
         for (kind, fail, gate) in [
             (Unexecutable, true, false),
             (Unfulfillable, false, false),
             (Fulfilled, false, true),
         ] {
             assert_eq!(kind.should_fail_fulfillment(), fail, "{kind:?}");
-            assert_eq!(kind.requires_in_flight(), gate, "{kind:?}");
+            assert_eq!(kind.gated_on_in_flight(), gate, "{kind:?}");
         }
     }
 
