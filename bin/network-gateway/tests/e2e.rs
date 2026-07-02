@@ -155,6 +155,20 @@ impl ClusterService for FakeCluster {
         }))
     }
 
+    async fn set_cluster_component_info(
+        &self,
+        _request: tonic::Request<cluster_pb::SetClusterComponentInfoRequest>,
+    ) -> Result<tonic::Response<()>, tonic::Status> {
+        Err(tonic::Status::unimplemented("set_cluster_component_info"))
+    }
+
+    async fn get_cluster_component_info(
+        &self,
+        _request: tonic::Request<()>,
+    ) -> Result<tonic::Response<cluster_pb::ClusterComponentManifest>, tonic::Status> {
+        Err(tonic::Status::unimplemented("get_cluster_component_info"))
+    }
+
     async fn healthcheck(
         &self,
         _request: tonic::Request<()>,
