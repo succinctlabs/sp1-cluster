@@ -6,7 +6,7 @@ use prost::Message;
 use sp1_cluster_artifact::ArtifactType;
 use sp1_cluster_common::proto::ProofRequest;
 use sp1_cluster_fulfillment::{
-    network::{FulfillmentNetwork, NetworkRequest},
+    network::{CancelableKind, FulfillmentNetwork, NetworkRequest},
     prover_info::build_report_prover_info_body,
     request_error_from_extra_data,
 };
@@ -237,12 +237,14 @@ impl FulfillmentNetwork for MainnetFulfiller {
         fulfiller_addresses: Vec<Vec<u8>>,
         minimum_deadline: u64,
         limit: u32,
-    ) -> Result<Vec<Self::NetworkRequest>> {
+    ) -> Result<Vec<(Self::NetworkRequest, CancelableKind)>> {
         // Two terminal shapes the network writes for an assigned request:
         //   1. `Assigned + Unexecutable`     — oracle reported an exec failure; the
         //                                      cluster still owes a `fail_fulfillment`.
         //   2. `Unfulfillable` (any exec)    — network already flipped it terminal
         //                                      (e.g. gas-limit, validation failure).
+        // Mainnet never produces `CancelableKind::Fulfilled` candidates: fulfillers
+        // are paid per fulfillment, so a fulfilled request is never ours to abort.
         let queries: Vec<_> = fulfiller_addresses
             .into_iter()
             .flat_map(|address| {
@@ -265,13 +267,21 @@ impl FulfillmentNetwork for MainnetFulfiller {
                     limit: Some(limit),
                     ..Default::default()
                 };
-                [assigned, unfulfillable]
+                [
+                    (assigned, CancelableKind::Unexecutable),
+                    (unfulfillable, CancelableKind::Unfulfillable),
+                ]
             })
             .collect();
 
-        let responses = join_all(queries.into_iter().map(|request| {
+        let responses = join_all(queries.into_iter().map(|(request, kind)| {
             let mut network = self.network.clone();
-            async move { network.get_filtered_proof_requests(request).await }
+            async move {
+                network
+                    .get_filtered_proof_requests(request)
+                    .await
+                    .map(|response| (response, kind))
+            }
         }))
         .await;
 
@@ -279,15 +289,15 @@ impl FulfillmentNetwork for MainnetFulfiller {
         let mut seen = std::collections::HashSet::new();
         let mut requests = Vec::new();
         for response in responses {
-            let response = response?;
+            let (response, kind) = response?;
             for request in response.into_inner().requests {
                 if seen.insert(request.request_id.clone()) {
-                    requests.push(request);
+                    requests.push((NetworkProofRequest(request), kind));
                 }
             }
         }
 
-        Ok(requests.into_iter().map(NetworkProofRequest).collect())
+        Ok(requests)
     }
 
     async fn download_artifact(
@@ -368,14 +378,6 @@ pub struct NetworkProofRequest(pub spn_network_types::ProofRequest);
 impl NetworkRequest for NetworkProofRequest {
     fn request_id(&self) -> String {
         hex::encode(&self.0.request_id)
-    }
-
-    fn is_unfulfillable(&self) -> bool {
-        self.0.fulfillment_status == spn_network_types::FulfillmentStatus::Unfulfillable as i32
-    }
-
-    fn is_fulfilled(&self) -> bool {
-        self.0.fulfillment_status == spn_network_types::FulfillmentStatus::Fulfilled as i32
     }
 
     fn program_uri(&self) -> &str {
