@@ -5,18 +5,40 @@ use sp1_cluster_artifact::ArtifactType;
 use sp1_cluster_common::proto::ProofRequest;
 use sp1_sdk::network::signer::NetworkSigner;
 use spn_network_types::ComponentInfo;
+/// Why a request is cancelable. The kind is assigned by the network producer
+/// (which knows which query surfaced the request) and decides the routing in
+/// `cancel_requests`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CancelableKind {
+    /// `Assigned + Unexecutable`: the network still expects an answer, so the
+    /// cluster owes a `fail_fulfillment` before aborting the proof.
+    Unexecutable,
+    /// The network already flipped the request terminal (`Unfulfillable`);
+    /// failing it again is a wasteful no-op. Cluster abort only.
+    Unfulfillable,
+    /// The network already marked the request `Fulfilled` — another path (e.g.
+    /// the SPN proxy delivering a mainnet proof) succeeded while our cluster
+    /// was still proving. Never fail a succeeded request; abort the cluster
+    /// proof only if it is still in-flight, otherwise there is nothing to do.
+    Fulfilled,
+}
+
+impl CancelableKind {
+    /// Whether the network still expects an answer, i.e. `fail_fulfillment`
+    /// must run before the cluster abort.
+    pub fn should_fail_fulfillment(self) -> bool {
+        matches!(self, Self::Unexecutable)
+    }
+
+    /// Whether cancelling is conditional on the request still being in the
+    /// cluster's in-flight (Pending) set.
+    pub fn gated_on_in_flight(self) -> bool {
+        matches!(self, Self::Fulfilled)
+    }
+}
+
 pub trait NetworkRequest: Send + Sync + 'static {
     fn request_id(&self) -> String;
-
-    /// Whether the network already marked this request `Unfulfillable` (a terminal state).
-    fn is_unfulfillable(&self) -> bool;
-
-    /// Whether the network already marked this request `Fulfilled` (a terminal success).
-    ///
-    /// This happens when another path (e.g. the SPN proxy delivering a mainnet proof)
-    /// satisfied the request while our cluster was still proving it. The request
-    /// succeeded, so we must abort the wasted cluster work without failing fulfillment.
-    fn is_fulfilled(&self) -> bool;
 
     fn program_uri(&self) -> &str;
 
@@ -92,14 +114,14 @@ pub trait FulfillmentNetwork: Send + Sync + 'static {
         limit: u32,
     ) -> Result<Vec<Self::NetworkRequest>>;
 
-    /// Get cancelable requests (unexecutable assigned requests).
+    /// Get cancelable requests, each tagged with why it is cancelable.
     async fn get_cancelable_requests(
         &self,
         version: &str,
         fulfiller_addresses: Vec<Vec<u8>>,
         minimum_deadline: u64,
         limit: u32,
-    ) -> Result<Vec<Self::NetworkRequest>>;
+    ) -> Result<Vec<(Self::NetworkRequest, CancelableKind)>>;
 
     /// Download an artifact from the network.
     async fn download_artifact(
