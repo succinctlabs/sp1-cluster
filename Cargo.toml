@@ -49,20 +49,26 @@ spn-pricing = { git = "https://github.com/succinctlabs/network", rev = "f652c93"
 spn-utils = { git = "https://github.com/succinctlabs/network", rev = "f652c93" }
 
 # SP1
-sp1-core-executor = "=6.3.1"
-sp1-core-machine = { version = "=6.3.1", features = ["bigint-rug"] }
-sp1-hypercube = "=6.3.1"
-sp1-primitives = "=6.3.1"
-sp1-prover = "=6.3.1"
-sp1-prover-types = "=6.3.1"
-sp1-recursion-circuit = "=6.3.1"
-sp1-recursion-compiler = "=6.3.1"
-sp1-recursion-executor = "=6.3.1"
-sp1-sdk = { version = "=6.3.1", features = ["network"] }
+#
+# Pinned to the sp1#2862 merge commit on main (7ea83d064 = v6.3.1 + the
+# ClusterService manifest RPCs; the old WorkerService.GetClusterComponentInfo is
+# removed). The whole sp1 family must share one source or the workspace gets two
+# sp1-prover-types packages and E0308 mismatches. Switch back to released crates
+# once a release including sp1#2862 is cut.
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064", features = ["bigint-rug"] }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064" }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064" }
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064", features = ["network"] }
 
 # SP1 GPU
-sp1-gpu-cudart = "=6.3.1"
-sp1-gpu-prover = "=6.3.1"
+sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064" }
+sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "7ea83d064" }
 
 # Misc
 alloy = { version = "=1.1.3", default-features = false, features = ["serde"] }

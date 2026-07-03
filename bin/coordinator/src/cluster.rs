@@ -127,6 +127,40 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
     })
 }
 
+/// How often the coordinator pushes its cluster component build manifest to the API.
+/// Low frequency: build identity only changes on reconnects/deploys, and the
+/// fulfiller only reads the manifest every ~15 min. 240s keeps redundant pushes to a
+/// handful per report cycle while staying under the fulfiller's 300s freshness gate,
+/// so one push always lands within the gate window (API restarts repopulate within
+/// one interval).
+const MANIFEST_PUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(240);
+
+/// Spawn a task that periodically pushes the coordinator's full component build
+/// manifest (its own build + one entry per connected worker) to the cluster API,
+/// where the fulfiller reads it for `ReportProverInfo`. Best-effort: a failed push
+/// just retries next tick, and the API-side `updated_at` going stale is how readers
+/// detect a dead coordinator. Stops when `token` fires.
+pub fn spawn_manifest_push_task<P: AssignmentPolicy>(
+    api_client: Arc<ClusterServiceClient>,
+    coordinator: Arc<Coordinator<P>>,
+    token: tokio_util::sync::CancellationToken,
+) -> JoinHandle<()> {
+    tokio::task::spawn(async move {
+        loop {
+            let components = coordinator.get_cluster_component_info().await;
+            if let Err(e) = api_client.set_cluster_component_info(components).await {
+                tracing::warn!(
+                    "failed to push cluster component manifest to API (retrying next tick): {e}"
+                );
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(MANIFEST_PUSH_INTERVAL) => {}
+                _ = token.cancelled() => break,
+            }
+        }
+    })
+}
+
 /// Spawn a task to claim proofs from the cluster API. Stops when `token` fires.
 pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
     api_client: Arc<ClusterServiceClient>,

@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use sp1_cluster_common::proto::{
-    cluster_service_server::ClusterService, ExecutionResult, ProofRequest,
-    ProofRequestCancelRequest, ProofRequestCreateRequest, ProofRequestGetRequest,
+    cluster_service_server::ClusterService, ClusterComponentManifest, ExecutionResult,
+    ProofRequest, ProofRequestCancelRequest, ProofRequestCreateRequest, ProofRequestGetRequest,
     ProofRequestGetResponse, ProofRequestListRequest, ProofRequestListResponse, ProofRequestStatus,
-    ProofRequestUpdateRequest,
+    ProofRequestUpdateRequest, SetClusterComponentInfoRequest,
 };
 use sqlx::{PgPool, QueryBuilder};
 use time::OffsetDateTime;
@@ -73,12 +74,20 @@ impl DbProofRequest {
 /// Implementation of the ClusterService gRPC service
 pub struct ClusterServiceImpl {
     db_pool: Arc<PgPool>,
+    /// Latest cluster component build manifest pushed by the coordinator, held in
+    /// memory only: it is periodically re-pushed telemetry, so it repopulates within
+    /// one push interval after an API restart. `updated_at == 0` means no coordinator
+    /// has pushed a manifest since startup.
+    component_manifest: RwLock<ClusterComponentManifest>,
 }
 
 impl ClusterServiceImpl {
     /// Create a new ClusterServiceImpl with the given database pool
     pub fn new(db_pool: Arc<PgPool>) -> Self {
-        Self { db_pool }
+        Self {
+            db_pool,
+            component_manifest: RwLock::new(ClusterComponentManifest::default()),
+        }
     }
 }
 
@@ -344,7 +353,119 @@ impl ClusterService for ClusterServiceImpl {
         Ok(Response::new(response))
     }
 
+    async fn set_cluster_component_info(
+        &self,
+        request: Request<SetClusterComponentInfoRequest>,
+    ) -> Result<Response<()>, Status> {
+        let components = request.into_inner().components;
+        let updated_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| Status::internal(format!("system time before unix epoch: {e}")))?
+            .as_secs();
+        // Full-snapshot replace; updated_at is server-owned so readers can judge
+        // freshness against a clock the coordinator doesn't control.
+        *self
+            .component_manifest
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = ClusterComponentManifest {
+            components,
+            updated_at,
+        };
+        Ok(Response::new(()))
+    }
+
+    async fn get_cluster_component_info(
+        &self,
+        _request: Request<()>,
+    ) -> Result<Response<ClusterComponentManifest>, Status> {
+        Ok(Response::new(
+            self.component_manifest
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+        ))
+    }
+
     async fn healthcheck(&self, _request: Request<()>) -> Result<Response<()>, Status> {
         Ok(Response::new(()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sp1_cluster_common::proto::ClusterComponentInfo;
+
+    /// The manifest RPCs never touch the database, so a lazy (unconnected) pool is enough.
+    fn service() -> ClusterServiceImpl {
+        let pool = PgPool::connect_lazy("postgres://unused:unused@localhost:1/unused").unwrap();
+        ClusterServiceImpl::new(Arc::new(pool))
+    }
+
+    fn entry(component: &str, git_sha: &str) -> ClusterComponentInfo {
+        ClusterComponentInfo {
+            component: component.to_string(),
+            version: "2.5.3".to_string(),
+            git_sha: git_sha.to_string(),
+            image_tag: format!("base-{git_sha}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn manifest_is_empty_with_zero_updated_at_before_any_push() {
+        let svc = service();
+        let manifest = svc
+            .get_cluster_component_info(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(manifest.components.is_empty());
+        assert_eq!(manifest.updated_at, 0, "no push yet => updated_at 0");
+    }
+
+    #[tokio::test]
+    async fn set_stores_manifest_and_stamps_server_owned_updated_at() {
+        let svc = service();
+        svc.set_cluster_component_info(Request::new(SetClusterComponentInfoRequest {
+            components: vec![
+                entry("coordinator", "abc1234"),
+                entry("cpu-node", "abc1234"),
+            ],
+        }))
+        .await
+        .unwrap();
+
+        let manifest = svc
+            .get_cluster_component_info(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(manifest.components.len(), 2);
+        assert_eq!(manifest.components[0].component, "coordinator");
+        assert!(manifest.updated_at > 0, "server stamps updated_at");
+    }
+
+    #[tokio::test]
+    async fn set_replaces_previous_manifest_full_snapshot() {
+        let svc = service();
+        svc.set_cluster_component_info(Request::new(SetClusterComponentInfoRequest {
+            components: vec![entry("coordinator", "oldsha"), entry("gpu-node", "oldsha")],
+        }))
+        .await
+        .unwrap();
+        svc.set_cluster_component_info(Request::new(SetClusterComponentInfoRequest {
+            components: vec![entry("coordinator", "newsha")],
+        }))
+        .await
+        .unwrap();
+
+        let manifest = svc
+            .get_cluster_component_info(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+        // Replace, not merge: the gpu-node entry from the first push is gone.
+        assert_eq!(manifest.components.len(), 1);
+        assert_eq!(manifest.components[0].git_sha, "newsha");
     }
 }

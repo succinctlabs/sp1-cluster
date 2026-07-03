@@ -33,11 +33,11 @@ pub const BUILD_VERSION: &str = env!("BUILD_VERSION");
 /// The git commit this coordinator was built from. Supplied by the base
 /// `infra/Dockerfile`'s `VERGEN_GIT_SHA` build ARG/ENV (see build.rs, which maps
 /// it to `BUILD_GIT_SHA`); `"unknown"` for plain local builds. Used for the
-/// coordinator's own entry in `GetClusterComponentInfo`.
+/// coordinator's own entry in the cluster component manifest.
 pub const BUILD_GIT_SHA: &str = env!("BUILD_GIT_SHA");
 
-/// The component name the coordinator reports itself as in
-/// `GetClusterComponentInfo`. Must be in the network's component allowlist.
+/// The component name the coordinator reports itself as in the cluster
+/// component manifest. Must be in the network's component allowlist.
 pub const COORDINATOR_COMPONENT: &str = "coordinator";
 
 /// The interval in seconds at which the coordinator periodic task should run.
@@ -870,7 +870,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
     /// Add a worker to the Coordinator. Returns true if worker already existed.
     ///
     /// `version` / `git_sha` / `image_tag` are the worker's self-reported build
-    /// identity (OpenRequest), surfaced via GetClusterComponentInfo.
+    /// identity (OpenRequest), surfaced via the cluster component manifest.
     #[allow(clippy::too_many_arguments)]
     pub async fn add_worker(
         self: &Arc<Self>,
@@ -1695,10 +1695,11 @@ impl<P: AssignmentPolicy> Coordinator<P> {
     /// Build the cluster component manifest: the coordinator's own build identity
     /// followed by one entry per connected worker, from the in-memory registry.
     ///
-    /// The fulfiller calls this (via the WorkerService RPC) and forwards the
+    /// The manifest push task periodically publishes this to the cluster API
+    /// (`SetClusterComponentInfo`), where the fulfiller reads it and forwards the
     /// entries to the SPN `ReportProverInfo` RPC. Component names use the
     /// network's allowlist: "coordinator", "gpu-node", "cpu-node".
-    pub async fn get_cluster_component_info(&self) -> proto::GetClusterComponentInfoResponse {
+    pub async fn get_cluster_component_info(&self) -> Vec<proto::ClusterComponentInfo> {
         // Acquire the same state lock used elsewhere; keep the registry in-memory.
         let state = self
             .state
@@ -1735,7 +1736,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             })
         }));
 
-        proto::GetClusterComponentInfoResponse { components }
+        components
     }
 
     /// Print coordinator info.
@@ -2808,28 +2809,25 @@ mod tests {
         .await
         .unwrap();
 
-        let resp = c.get_cluster_component_info().await;
+        let components = c.get_cluster_component_info().await;
 
         // Exactly one coordinator entry + one per worker.
-        assert_eq!(resp.components.len(), 3, "coordinator + 2 workers");
+        assert_eq!(components.len(), 3, "coordinator + 2 workers");
 
-        let coord = resp
-            .components
+        let coord = components
             .iter()
             .find(|ci| ci.component == "coordinator")
             .expect("coordinator entry present");
         assert_eq!(coord.version, env!("CARGO_PKG_VERSION"));
 
-        let gpu = resp
-            .components
+        let gpu = components
             .iter()
             .find(|ci| ci.git_sha == "gpusha")
             .expect("gpu worker entry present");
         assert_eq!(gpu.component, "gpu-node", "Gpu maps to gpu-node");
         assert_eq!(gpu.image_tag, "node-gpu-gpusha");
 
-        let cpu = resp
-            .components
+        let cpu = components
             .iter()
             .find(|ci| ci.git_sha == "cpusha")
             .expect("cpu worker entry present");
@@ -2853,10 +2851,9 @@ mod tests {
         .await
         .unwrap();
 
-        let resp = c.get_cluster_component_info().await;
+        let components = c.get_cluster_component_info().await;
 
-        let all = resp
-            .components
+        let all = components
             .iter()
             .find(|ci| ci.git_sha == "allsha")
             .expect("All worker entry present");
@@ -2894,22 +2891,18 @@ mod tests {
         .await
         .unwrap();
 
-        let resp = c.get_cluster_component_info().await;
+        let components = c.get_cluster_component_info().await;
 
         // Non-reportable worker_types are skipped (never reported as a false
         // cpu-node); only the coordinator's own entry remains.
         assert!(
-            resp.components.iter().all(|ci| ci.git_sha != "usha"),
+            components.iter().all(|ci| ci.git_sha != "usha"),
             "Unspecified worker must be skipped"
         );
         assert!(
-            resp.components.iter().all(|ci| ci.git_sha != "nsha"),
+            components.iter().all(|ci| ci.git_sha != "nsha"),
             "None worker must be skipped"
         );
-        assert_eq!(
-            resp.components.len(),
-            1,
-            "only the coordinator entry remains"
-        );
+        assert_eq!(components.len(), 1, "only the coordinator entry remains");
     }
 }

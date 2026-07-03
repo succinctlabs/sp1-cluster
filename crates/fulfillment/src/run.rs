@@ -32,19 +32,6 @@ pub async fn run_fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentN
         .await
         .expect("failed to connect to cluster");
 
-    // Coordinator address for cluster-wide build-identity aggregation. The client
-    // is connected lazily (and bounded) by the background report task, not here:
-    // a coordinator that is down at startup must not permanently disable
-    // cluster-wide reporting, and startup must never block on it. Unset =>
-    // fulfiller-only reporting.
-    match &settings.coordinator_rpc {
-        Some(addr) => info!(
-            "FULFILLER_COORDINATOR_RPC={addr}; cluster-wide component reporting enabled \
-             (coordinator connected lazily by the report task)"
-        ),
-        None => info!("FULFILLER_COORDINATOR_RPC unset; reporting fulfiller component only"),
-    }
-
     // Initialize the metrics server.
     // let version_info = get_version!();
     let version_info = VersionInfo {
@@ -110,7 +97,6 @@ pub async fn run_fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentN
         settings.request_probability,
         settings.name.clone(),
         settings.refresh_interval_sec,
-        settings.coordinator_rpc.clone(),
     );
     let fulfiller = Arc::new(fulfiller);
 

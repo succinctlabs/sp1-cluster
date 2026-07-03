@@ -10,12 +10,6 @@ pub struct FulfillerSettings {
     pub sp1_private_key: String,
     pub use_aws_kms: bool,
     pub cluster_rpc: String,
-    /// Optional gRPC address of the coordinator's WorkerService, used to collect
-    /// the cluster component manifest (coordinator + workers) for cluster-wide
-    /// build-identity reporting. Set via `FULFILLER_COORDINATOR_RPC`. When unset,
-    /// the fulfiller reports only its own component (fulfiller-only).
-    #[serde(default)]
-    pub coordinator_rpc: Option<String>,
     pub version: String,
     pub log_format: LogFormat,
     #[serde(deserialize_with = "deserialize_domain")]

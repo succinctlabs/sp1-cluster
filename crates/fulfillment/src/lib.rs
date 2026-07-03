@@ -20,7 +20,6 @@ use tokio::{sync::Mutex, task::JoinSet, time::sleep};
 use tracing::{debug, error, info, instrument, warn};
 
 pub mod config;
-pub mod coordinator_client;
 pub mod grpc;
 pub mod metrics;
 pub mod network;
@@ -50,38 +49,66 @@ pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
     ProvingFailure::from_extra_data(s).map(|_| ProofRequestError::ProvingFailure as i32)
 }
 
+/// The maximum age of the API-held cluster component manifest before the fulfiller
+/// treats it as stale and skips the report. The coordinator re-pushes every ~60s, so
+/// 5 minutes tolerates a few missed pushes and modest clock skew (`updated_at` is
+/// API-server-owned) while still catching a dead coordinator well within one report
+/// interval.
+pub const MAX_MANIFEST_AGE_SECS: u64 = 5 * 60;
+
+/// Gate the API-held manifest on freshness before it is forwarded to the SPN.
+///
+/// Returns `Err` (caller skips the report and retries next tick) when the API has no
+/// manifest yet (`updated_at == 0`: no coordinator has pushed since the API started)
+/// or the manifest is older than [`MAX_MANIFEST_AGE_SECS`] (coordinator stopped
+/// pushing). Forwarding either would publish a wrong full snapshot.
+pub fn fresh_manifest_components(
+    manifest: sp1_cluster_common::proto::ClusterComponentManifest,
+    now: u64,
+) -> Result<Vec<sp1_cluster_common::proto::ClusterComponentInfo>> {
+    if manifest.updated_at == 0 {
+        return Err(anyhow!(
+            "cluster API has no component manifest yet (coordinator has not pushed one)"
+        ));
+    }
+    let age = now.saturating_sub(manifest.updated_at);
+    if age > MAX_MANIFEST_AGE_SECS {
+        return Err(anyhow!(
+            "cluster component manifest is stale ({age}s old > {MAX_MANIFEST_AGE_SECS}s); \
+             coordinator may be down"
+        ));
+    }
+    Ok(manifest.components)
+}
+
 /// Assemble the public component list for a single `ReportProverInfo`: the
-/// fulfiller's own component first, then the coordinator manifest (coordinator +
+/// fulfiller's own component first, then the cluster manifest (coordinator +
 /// workers) mapped onto the public `ComponentInfo` (which has no `instance_id`).
 ///
-/// `cluster_components` is `None` when no coordinator is configured, giving a
-/// fulfiller-only report. Manifest entries are deduped by build identity
+/// Manifest entries are deduped by build identity
 /// `(component, version, git_sha, image_tag)`, so many workers on the same build
 /// collapse to one entry while distinct builds (a rolling deploy) are kept.
 ///
 /// Returns `Err` for a malformed manifest, so the caller skips the report rather than
-/// emit a bad snapshot: a configured coordinator (`Some`) must yield exactly one
-/// `coordinator` build after dedup (zero — a manifest missing its coordinator — or
-/// many are malformed), and there must never be more than one `fulfiller`.
+/// emit a bad snapshot: the manifest must yield exactly one `coordinator` build after
+/// dedup (zero — a manifest missing its coordinator — or many are malformed), and
+/// there must never be more than one `fulfiller`.
 pub fn assemble_components(
     identity: &prover_info::BuildIdentity,
-    cluster_components: Option<Vec<sp1_cluster_common::proto::ClusterComponentInfo>>,
+    cluster_components: Vec<sp1_cluster_common::proto::ClusterComponentInfo>,
 ) -> Result<Vec<spn_network_types::ComponentInfo>> {
     let mut components = vec![prover_info::fulfiller_component(identity)];
-    let had_manifest = cluster_components.is_some();
-    if let Some(cluster) = cluster_components {
-        let mut seen = HashSet::with_capacity(cluster.len());
-        for c in cluster {
-            let mapped = prover_info::component_from_cluster(c);
-            // Dedup by build identity: collapse same-build workers to one entry.
-            if seen.insert((
-                mapped.component.clone(),
-                mapped.version.clone(),
-                mapped.git_sha.clone(),
-                mapped.image_tag.clone(),
-            )) {
-                components.push(mapped);
-            }
+    let mut seen = HashSet::with_capacity(cluster_components.len());
+    for c in cluster_components {
+        let mapped = prover_info::component_from_cluster(c);
+        // Dedup by build identity: collapse same-build workers to one entry.
+        if seen.insert((
+            mapped.component.clone(),
+            mapped.version.clone(),
+            mapped.git_sha.clone(),
+            mapped.image_tag.clone(),
+        )) {
+            components.push(mapped);
         }
     }
 
@@ -96,18 +123,16 @@ pub fn assemble_components(
         ));
     }
 
-    // A reached coordinator must report exactly one coordinator build after dedup;
+    // A cluster manifest must report exactly one coordinator build after dedup;
     // zero (manifest missing its coordinator) or many are malformed.
-    if had_manifest {
-        let coordinators = components
-            .iter()
-            .filter(|c| c.component == "coordinator")
-            .count();
-        if coordinators != 1 {
-            return Err(anyhow!(
-                "coordinator manifest reported {coordinators} coordinator builds (expected exactly 1); refusing to send a malformed report"
-            ));
-        }
+    let coordinators = components
+        .iter()
+        .filter(|c| c.component == "coordinator")
+        .count();
+    if coordinators != 1 {
+        return Err(anyhow!(
+            "cluster manifest reported {coordinators} coordinator builds (expected exactly 1); refusing to send a malformed report"
+        ));
     }
 
     Ok(components)
@@ -138,18 +163,6 @@ pub struct Fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork
     /// submitting; without serialization, concurrent submissions sign the same nonce and all but
     /// one fail verification. Guards a single process only — replicas sharing a signer still race.
     nonce_lock: Arc<Mutex<()>>,
-    /// Configured coordinator WorkerService address (`FULFILLER_COORDINATOR_RPC`).
-    /// `None` means no coordinator is configured -> the fulfiller reports only its
-    /// own component (fulfiller-only). `Some` means cluster-wide reporting is
-    /// desired; the client below is (re)connected lazily by the report task, so a
-    /// coordinator that is down at fulfiller startup is picked up on a later tick.
-    coordinator_rpc: Option<String>,
-    /// Lazily-(re)connected client for the coordinator's `GetClusterComponentInfo`
-    /// RPC, shared across `Fulfiller` clones. `None` while disconnected/stale; the
-    /// background report task reconnects (bounded) on the next tick. Distinct from
-    /// `coordinator_rpc`: an empty client with a `Some` address means "configured
-    /// but not currently connected", not "unconfigured".
-    coordinator_client: Arc<Mutex<Option<coordinator_client::CoordinatorComponentClient>>>,
 }
 
 impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N> {
@@ -168,7 +181,6 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         request_probability: f64,
         name: Option<String>,
         refresh_interval_sec: u64,
-        coordinator_rpc: Option<String>,
     ) -> Self {
         Self {
             network,
@@ -185,8 +197,6 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             name,
             refresh_interval: Duration::from_secs(refresh_interval_sec),
             nonce_lock: Arc::new(Mutex::new(())),
-            coordinator_rpc,
-            coordinator_client: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -268,31 +278,33 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 
     /// Reports cluster build identity to the network (best-effort).
     ///
-    /// Sends `[fulfiller self] ++ coordinator manifest (coordinator + workers)` as a
-    /// full snapshot in ONE `ReportProverInfo`. With no coordinator configured this is
-    /// a valid fulfiller-only report. But when a coordinator IS configured and its
-    /// fetch fails (unreachable / `Unimplemented` / timeout), this report is SKIPPED:
-    /// the receiver treats the payload as a full snapshot, so sending fulfiller-only
-    /// would prune the coordinator/worker rows. The next tick retries.
+    /// Sends `[fulfiller self] ++ cluster manifest (coordinator + workers)` as a full
+    /// snapshot in ONE `ReportProverInfo`. The manifest is read from the cluster API
+    /// (where the coordinator periodically pushes it), so no direct
+    /// fulfiller->coordinator connection or topology config is needed. When the fetch
+    /// fails, the API has no manifest yet, or the manifest is stale, this report is
+    /// SKIPPED: the receiver treats the payload as a full snapshot, so sending a
+    /// partial one would prune coordinator/worker rows. The next tick retries.
     ///
     /// On any error, logs a warning and returns — this telemetry never fails the
     /// fulfiller. `ReportProverInfo` carries no nonce, so unlike fulfill/fail it needs
     /// no `nonce_lock` serialization.
     async fn report_prover_info(&self, prover: Address, identity: &prover_info::BuildIdentity) {
-        // Collect the manifest, (re)connecting lazily when a coordinator is configured.
-        // Ok(None) = unset (fulfiller-only is valid); Err = configured fetch failed.
-        let cluster_components = match coordinator_client::collect_cluster_components(
-            &self.coordinator_rpc,
-            &self.coordinator_client,
-        )
-        .await
-        {
+        let manifest = match self.cluster.get_cluster_component_info().await {
             Ok(manifest) => manifest,
             Err(e) => {
                 warn!(
-                    "coordinator manifest fetch failed; skipping this report to avoid pruning \
-                     coordinator/worker rows (retrying next tick): {e:?}"
+                    "cluster component manifest fetch failed; skipping this report to avoid \
+                     pruning coordinator/worker rows (retrying next tick): {e:?}"
                 );
+                return;
+            }
+        };
+
+        let cluster_components = match fresh_manifest_components(manifest, time_now()) {
+            Ok(components) => components,
+            Err(e) => {
+                warn!("skipping prover-info report (retrying next tick): {e}");
                 return;
             }
         };
@@ -955,16 +967,6 @@ mod tests {
     }
 
     #[test]
-    fn assemble_components_fulfiller_only_when_no_coordinator() {
-        // No coordinator manifest => fulfiller-only.
-        let components = assemble_components(&fulfiller_identity(), None).unwrap();
-
-        assert_eq!(components.len(), 1, "fulfiller-only when no manifest");
-        assert_eq!(components[0].component, "fulfiller");
-        assert_eq!(components[0].git_sha, "fulfillersha");
-    }
-
-    #[test]
     fn assemble_components_includes_fulfiller_coordinator_and_workers() {
         let cluster = vec![
             cluster_entry("coordinator", "coordsha"),
@@ -972,7 +974,7 @@ mod tests {
             cluster_entry("cpu-node", "cpusha"),
         ];
 
-        let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
+        let components = assemble_components(&fulfiller_identity(), cluster).unwrap();
 
         // fulfiller + coordinator + 2 workers.
         assert_eq!(components.len(), 4);
@@ -1001,7 +1003,7 @@ mod tests {
             cluster_entry("gpu-node", "samesha"),
         ];
 
-        let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
+        let components = assemble_components(&fulfiller_identity(), cluster).unwrap();
 
         assert_eq!(
             components.len(),
@@ -1025,7 +1027,7 @@ mod tests {
             cluster_entry("gpu-node", "newsha"),
         ];
 
-        let components = assemble_components(&fulfiller_identity(), Some(cluster)).unwrap();
+        let components = assemble_components(&fulfiller_identity(), cluster).unwrap();
 
         let builds: HashSet<_> = components
             .iter()
@@ -1048,23 +1050,69 @@ mod tests {
         ];
 
         assert!(
-            assemble_components(&fulfiller_identity(), Some(cluster)).is_err(),
+            assemble_components(&fulfiller_identity(), cluster).is_err(),
             "two distinct coordinator builds must be rejected"
         );
     }
 
     #[test]
     fn assemble_components_rejects_manifest_without_coordinator() {
-        // A reached coordinator must report itself: a Some manifest with no coordinator
-        // entry (workers-only, or empty) is malformed and must not be sent.
+        // A pushed manifest must contain the coordinator: a manifest with no
+        // coordinator entry (workers-only, or empty) is malformed and must not be sent.
         let workers_only = vec![cluster_entry("gpu-node", "gpusha")];
         assert!(
-            assemble_components(&fulfiller_identity(), Some(workers_only)).is_err(),
+            assemble_components(&fulfiller_identity(), workers_only).is_err(),
             "workers-only manifest (no coordinator) must be rejected"
         );
         assert!(
-            assemble_components(&fulfiller_identity(), Some(vec![])).is_err(),
+            assemble_components(&fulfiller_identity(), vec![]).is_err(),
             "empty manifest (no coordinator) must be rejected"
         );
+    }
+
+    #[test]
+    fn fresh_manifest_components_rejects_missing_manifest() {
+        // updated_at == 0 => the API has never received a push; skip, don't report.
+        let manifest = sp1_cluster_common::proto::ClusterComponentManifest {
+            components: vec![],
+            updated_at: 0,
+        };
+        assert!(fresh_manifest_components(manifest, 1_000_000).is_err());
+    }
+
+    #[test]
+    fn fresh_manifest_components_rejects_stale_manifest() {
+        // Older than MAX_MANIFEST_AGE_SECS => coordinator stopped pushing; skip.
+        let now = 1_000_000;
+        let manifest = sp1_cluster_common::proto::ClusterComponentManifest {
+            components: vec![cluster_entry("coordinator", "coordsha")],
+            updated_at: now - MAX_MANIFEST_AGE_SECS - 1,
+        };
+        assert!(fresh_manifest_components(manifest, now).is_err());
+    }
+
+    #[test]
+    fn fresh_manifest_components_accepts_fresh_manifest() {
+        let now = 1_000_000;
+        let manifest = sp1_cluster_common::proto::ClusterComponentManifest {
+            components: vec![
+                cluster_entry("coordinator", "coordsha"),
+                cluster_entry("cpu-node", "cpusha"),
+            ],
+            updated_at: now - 30,
+        };
+        let components = fresh_manifest_components(manifest, now).unwrap();
+        assert_eq!(components.len(), 2);
+    }
+
+    #[test]
+    fn fresh_manifest_components_tolerates_small_clock_skew() {
+        // updated_at slightly in the future (API clock ahead) must not be "stale".
+        let now = 1_000_000;
+        let manifest = sp1_cluster_common::proto::ClusterComponentManifest {
+            components: vec![cluster_entry("coordinator", "coordsha")],
+            updated_at: now + 30,
+        };
+        assert!(fresh_manifest_components(manifest, now).is_ok());
     }
 }
