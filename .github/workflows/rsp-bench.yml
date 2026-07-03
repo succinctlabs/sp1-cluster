@@ -45,7 +45,9 @@ jobs:
       - name: Select instances + scenario
         id: matrix
         env:
-          FAMILIES: ${{ inputs.families || 'g6e' }}
+          # Push fallback 'none': pushes only build the artifact (no AWS GPU
+          # instances); use workflow_dispatch with explicit families for AWS runs.
+          FAMILIES: ${{ inputs.families || 'none' }}
         run: |
           entries=()
           sel() { case ",$FAMILIES," in *,"$1",*) return 0 ;; *) return 1 ;; esac; }
@@ -79,6 +81,8 @@ jobs:
   bench:
     name: ${{ matrix.gpu }} (${{ matrix.family }})
     needs: build
+    # Skip cleanly when families resolves to none (empty matrix fails at plan time).
+    if: needs.build.outputs.matrix != '{"include":[]}'
     timeout-minutes: 60
     strategy:
       fail-fast: false
