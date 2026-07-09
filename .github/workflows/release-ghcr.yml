@@ -1,0 +1,102 @@
+name: Release Docker to GHCR on tag
+
+on:
+  push:
+    tags:
+      - "*"
+
+env:
+  GHCR_REPOSITORY: ghcr.io/${{ github.repository }}
+  # Set to 'true' to enable private cargo dependencies (requires PRIVATE_PULL_TOKEN secret)
+  # Defaults to false - private deps are opt-in
+  ENABLE_PRIVATE_DEPS: ${{ vars.ENABLE_PRIVATE_DEPS == 'true' }}
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      SHORT_SHA: ${{ steps.short_sha.outputs.SHORT_SHA }}
+      TAG_NAME: ${{ steps.tag_name.outputs.TAG_NAME }}
+    steps:
+      - name: Generate short SHA
+        id: short_sha
+        run: echo "SHORT_SHA=`echo ${GITHUB_SHA} | cut -c1-7`" >> $GITHUB_OUTPUT
+      - name: Extract tag name
+        id: tag_name
+        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+  build-base:
+    needs: setup
+    runs-on:
+      [
+        "runs-on",
+        "runner=32cpu-linux-x64",
+        "run-id=${{ github.run_id }}",
+        "spot=false",
+        "tag=base",
+        "disk=large",
+      ]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Cleanup disk space
+        run: |
+          df -h
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache
+        uses: actions/cache@v3
+        id: cache
+        with:
+          path: |
+            cargo-git
+            cargo-registry
+            target
+          key: cache-base-${{ hashFiles('infra/Dockerfile') }}
+          restore-keys: |
+            cache-base-
+
+      - name: inject cache into docker
+        uses: reproducible-containers/buildkit-cache-dance@v3.1.0
+        with:
+          cache-map: |
+            {
+              "cargo-git": "/usr/local/cargo/git",
+              "cargo-registry": "/usr/local/cargo/registry",
+              "target": "/app/target"
+            }
+
+      - name: Log into GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Base image to GHCR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./infra/Dockerfile
+          push: true
+          tags: |
+            ${{ env.GHCR_REPOSITORY }}:${{ needs.setup.outputs.TAG_NAME }}
+          build-args: |
+            VERGEN_GIT_SHA=${{ needs.setup.outputs.SHORT_SHA }}
+          secrets: |
+            private_pull_token=${{ secrets.PRIVATE_PULL_TOKEN }}
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
