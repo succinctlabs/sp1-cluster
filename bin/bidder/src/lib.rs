@@ -589,6 +589,7 @@ mod tests {
         tonic::Status::new(code, message).into()
     }
 
+    /// Rejections that are normal auction outcomes classify as expected.
     #[test]
     fn business_refusals_and_nonce_races_are_expected() {
         let cases = [
@@ -614,6 +615,7 @@ mod tests {
         }
     }
 
+    /// A transport-level outage must stay a real failure, not a demoted warning.
     #[test]
     fn plain_unavailable_outage_is_not_expected() {
         let e = status_err(
@@ -623,6 +625,7 @@ mod tests {
         assert!(!is_expected_bid_rejection(&e));
     }
 
+    /// Faults needing operator attention classify as failures, even with a nonce message.
     #[test]
     fn other_faults_are_not_expected() {
         let cases = [
