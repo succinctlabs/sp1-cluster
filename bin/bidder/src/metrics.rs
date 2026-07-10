@@ -16,6 +16,10 @@ pub struct BidderMetrics {
     /// The number of proof request bid attempts that failed.
     pub request_bid_failures: Counter,
 
+    /// The number of bids rejected in normal operation (over max price, lost race,
+    /// stale nonce).
+    pub request_bid_rejections: Counter,
+
     /// The total number of proof requests processed (bid on).
     pub total_requests_processed: Counter,
 

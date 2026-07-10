@@ -397,6 +397,10 @@ impl Bidder {
                         self_clone.metrics.requests_bid.increment(1);
                         self_clone.metrics.total_requests_processed.increment(1);
                     }
+                    Err(e) if is_expected_bid_rejection(&e) => {
+                        warn!("bid rejected for request 0x{}: {}", request_id, e);
+                        self_clone.metrics.request_bid_rejections.increment(1);
+                    }
                     Err(e) => {
                         error!("failed to bid on request 0x{}: {:?}", request_id, e);
                         self_clone.metrics.request_bid_failures.increment(1);
@@ -438,6 +442,25 @@ impl Bidder {
 
         Ok(())
     }
+}
+
+/// Whether a failed bid is an expected rejection rather than a bidder fault.
+///
+/// Expected, and only worth a warning:
+/// - Business refusals (`InvalidArgument`, `FailedPrecondition`): bid over the
+///   requester's max price, or another prover won the request first.
+/// - Nonce races: concurrent bid tasks race on the nonce; the loser retries next poll.
+///   Reported as `Aborted`, or as `Unavailable` with a "failed nonce verification"
+///   message. The substring is gated on `Unavailable` so `Internal` nonce faults stay
+///   at error.
+fn is_expected_bid_rejection(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<tonic::Status>().is_some_and(|s| {
+        matches!(
+            s.code(),
+            tonic::Code::InvalidArgument | tonic::Code::FailedPrecondition | tonic::Code::Aborted
+        ) || (s.code() == tonic::Code::Unavailable
+            && s.message().contains("failed nonce verification"))
+    })
 }
 
 /// Fetch PROVE/USD and write it into the cache on success. Returns the µUSD value for the
