@@ -397,6 +397,10 @@ impl Bidder {
                         self_clone.metrics.requests_bid.increment(1);
                         self_clone.metrics.total_requests_processed.increment(1);
                     }
+                    Err(e) if is_expected_bid_rejection(&e) => {
+                        warn!("bid rejected for request 0x{}: {}", request_id, e);
+                        self_clone.metrics.request_bid_rejections.increment(1);
+                    }
                     Err(e) => {
                         error!("failed to bid on request 0x{}: {:?}", request_id, e);
                         self_clone.metrics.request_bid_failures.increment(1);
@@ -438,6 +442,25 @@ impl Bidder {
 
         Ok(())
     }
+}
+
+/// Whether a failed bid is an expected rejection rather than a bidder fault.
+///
+/// Expected, and only worth a warning:
+/// - Business refusals (`InvalidArgument`): bid over the requester's max price, or the
+///   request is no longer in the `REQUESTED` state (another prover won it).
+/// - Nonce races: concurrent bid tasks race on the nonce; the loser retries next poll.
+///   Reported as `Aborted`, or as `Unavailable` with a "failed nonce verification"
+///   message. The substring is gated on `Unavailable` so `Internal` nonce faults stay
+///   at error.
+fn is_expected_bid_rejection(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<tonic::Status>().is_some_and(|s| {
+        matches!(
+            s.code(),
+            tonic::Code::InvalidArgument | tonic::Code::Aborted
+        ) || (s.code() == tonic::Code::Unavailable
+            && s.message().contains("failed nonce verification"))
+    })
 }
 
 /// Fetch PROVE/USD and write it into the cache on success. Returns the µUSD value for the
@@ -561,6 +584,60 @@ async fn fetch_tick_size(network: &mut ProverNetworkClient<Channel>) -> Result<U
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn status_err(code: tonic::Code, message: &str) -> anyhow::Error {
+        tonic::Status::new(code, message).into()
+    }
+
+    /// Rejections that are normal auction outcomes classify as expected.
+    #[test]
+    fn business_refusals_and_nonce_races_are_expected() {
+        let cases = [
+            status_err(
+                tonic::Code::InvalidArgument,
+                "bid exceeds the request's max price",
+            ),
+            status_err(
+                tonic::Code::InvalidArgument,
+                "request is not in the requested state",
+            ),
+            status_err(
+                tonic::Code::Aborted,
+                "failed nonce verification: invalid nonce",
+            ),
+            status_err(
+                tonic::Code::Unavailable,
+                "failed nonce verification: invalid nonce",
+            ),
+        ];
+        for e in &cases {
+            assert!(is_expected_bid_rejection(e), "should be expected: {e}");
+        }
+    }
+
+    /// A transport-level outage must stay a real failure, not a demoted warning.
+    #[test]
+    fn plain_unavailable_outage_is_not_expected() {
+        let e = status_err(
+            tonic::Code::Unavailable,
+            "tcp connect error: connection refused",
+        );
+        assert!(!is_expected_bid_rejection(&e));
+    }
+
+    /// Faults needing operator attention classify as failures, even with a nonce message.
+    #[test]
+    fn other_faults_are_not_expected() {
+        let cases = [
+            status_err(tonic::Code::Internal, "failed nonce verification: db error"),
+            status_err(tonic::Code::ResourceExhausted, "you need to stake"),
+            status_err(tonic::Code::PermissionDenied, "not in the whitelist"),
+            anyhow::anyhow!("not a grpc status"),
+        ];
+        for e in &cases {
+            assert!(!is_expected_bid_rejection(e), "should be a fault: {e}");
+        }
+    }
 
     /// Reference anchor reused across the outcome tests: $0.20/BPGU at PROVE=$0.40 → 500M wei.
     const TARGET_MICROS_PER_BPGU: u64 = 200_000;
