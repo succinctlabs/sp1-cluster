@@ -35,4 +35,15 @@ pub struct BidderMetrics {
     /// Number of bid evaluations where we fell back to the static `bid_amount`
     /// (either dynamic not configured, or the cached price is stale/absent).
     pub static_bid_used_total: Counter,
+
+    /// Bid evaluations where the fulfillment deadline was tightened by the network's
+    /// published performance requirements. Counts evaluations, not distinct requests:
+    /// an unbid request is re-evaluated (and re-counted) every bid pass.
+    pub perf_clamped: Counter,
+
+    /// Whether this prover is currently suspended by the network (1 = suspended).
+    pub suspended: Gauge,
+
+    /// Requirements/status sync errors (caches kept stale, bidding unaffected).
+    pub requirements_sync_errors: Counter,
 }
