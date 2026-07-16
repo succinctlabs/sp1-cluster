@@ -5,7 +5,7 @@ use alloy::primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use futures::future::join_all;
-use time::OffsetDateTime;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::{
     sync::RwLock,
     time::{interval, sleep, MissedTickBehavior},
@@ -317,10 +317,14 @@ impl Bidder {
             .set(if is_suspended { 1.0 } else { 0.0 });
 
         if is_suspended && suspended_until != previous {
+            let ends_at = OffsetDateTime::from_unix_timestamp(suspended_until as i64)
+                .ok()
+                .and_then(|t| t.format(&Rfc3339).ok())
+                .unwrap_or_default();
             error!(
                 suspended_until,
                 "prover is SUSPENDED for performance below the network requirements; \
-                 bidding is paused until the suspension expires"
+                 bidding is paused until {ends_at}"
             );
         } else if !is_suspended && previous > 0 {
             info!("prover suspension expired; resuming bidding");
