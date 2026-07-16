@@ -21,7 +21,7 @@ futures = { workspace = true }
 hex = { workspace = true }
 rustls = { workspace = true, features = ["ring"] }
 serde = { workspace = true }
-time = { workspace = true }
+time = { workspace = true, features = ["formatting"] }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }

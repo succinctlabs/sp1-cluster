@@ -5,25 +5,29 @@ use alloy::primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use futures::future::join_all;
-use time::OffsetDateTime;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::{
     sync::RwLock,
     time::{interval, sleep, MissedTickBehavior},
 };
 use tonic::transport::Channel;
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use spn_network_types::{
     prover_network_client::ProverNetworkClient, BidRequest, BidRequestBody, FulfillmentStatus,
     GetNonceRequest, GetOwnerRequest, GetProofRequestParamsRequest, GetProvePriceRequest,
-    MessageFormat, ProofMode, Signable, TransactionVariant,
+    GetProverRequirementsRequest, GetProverStatusRequest, MessageFormat, ProofMode, ProofRequest,
+    Signable, TransactionVariant,
 };
+
+use crate::requirements::PerformanceRequirements;
 use spn_pricing::{round_down_to_tick, ProvePrice};
 use spn_utils::time_now;
 
 pub mod config;
 pub mod grpc;
 pub mod metrics;
+pub mod requirements;
 
 /// How long to wait between checking if there are any requested proofs to bid on.
 ///
@@ -38,6 +42,11 @@ const REQUEST_LIMIT: u32 = 100;
 
 /// Synchronous prime-fetch cap at startup so a slow RPC can't hang the bidder.
 const PRIME_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Cadence of the poll that fetches the network's published performance requirements
+/// and this prover's suspension status. Policy changes are rare ops events, so this
+/// is deliberately not a knob.
+const REQUIREMENTS_REFRESH_SECS: u64 = 60;
 
 #[derive(Clone)]
 pub struct Bidder {
@@ -80,6 +89,18 @@ pub struct Bidder {
     /// Cache of the last fetched PROVE/USD price. Populated by the refresh task spawned
     /// in `run()` when the USD bid is enabled.
     prove_usd_cache: Arc<RwLock<Option<ProvePrice>>>,
+    /// The network's published performance requirements. `None` (RPC unavailable, not
+    /// yet fetched, or enforcement disabled) degrades to unclamped bidding.
+    requirements: Arc<RwLock<Option<PerformanceRequirements>>>,
+    /// Whether the whitelister judges this prover against the performance
+    /// requirements (whitelisted and not high-availability). Exempt provers bid
+    /// unclamped up to the requester's deadline — they are the network's catch-all
+    /// for requests the governed provers decline. Starts `true` so an unknown status
+    /// errs toward clamping.
+    governed: Arc<RwLock<bool>>,
+    /// Unix timestamp until which this prover is suspended; 0 when not suspended.
+    /// While set in the future, the bidder skips bidding entirely.
+    suspended_until: Arc<RwLock<u64>>,
 }
 
 impl Bidder {
@@ -121,6 +142,9 @@ impl Bidder {
             usd_bid,
             tick_size: U256::ZERO,
             prove_usd_cache: Arc::new(RwLock::new(None)),
+            requirements: Arc::new(RwLock::new(None)),
+            governed: Arc::new(RwLock::new(true)),
+            suspended_until: Arc::new(RwLock::new(0)),
         }
     }
 
@@ -231,6 +255,131 @@ impl Bidder {
         });
     }
 
+    /// Fetch the network's performance requirements and this prover's suspension
+    /// status, updating the shared caches. RPC errors keep the previous values so a
+    /// flaky network — or one that doesn't serve these RPCs — never blocks bidding.
+    async fn sync_performance_policy(&self, prover: &[u8]) {
+        self.sync_requirements().await;
+        self.sync_prover_status(prover).await;
+    }
+
+    /// Refresh the requirements cache from `GetProverRequirements`.
+    async fn sync_requirements(&self) {
+        match self
+            .network
+            .clone()
+            .get_prover_requirements(GetProverRequirementsRequest {})
+            .await
+        {
+            Ok(resp) => {
+                let parsed = PerformanceRequirements::from_response(&resp.into_inner());
+                *self.requirements.write().await = parsed;
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to fetch prover requirements; keeping previous");
+                self.metrics.requirements_sync_errors.increment(1);
+            }
+        }
+    }
+
+    /// Refresh the governed flag and suspension cache from `GetProverStatus`.
+    async fn sync_prover_status(&self, prover: &[u8]) {
+        match self
+            .network
+            .clone()
+            .get_prover_status(GetProverStatusRequest {
+                prover: prover.to_vec(),
+            })
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.into_inner();
+                *self.governed.write().await =
+                    status.is_whitelisted && !status.is_high_availability;
+                self.record_suspension_status(status.suspended_until.unwrap_or(0))
+                    .await;
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to fetch prover status; keeping previous");
+                self.metrics.requirements_sync_errors.increment(1);
+            }
+        }
+    }
+
+    /// Store the freshly fetched suspension timestamp, update the `suspended` gauge,
+    /// and emit edge-triggered logs: one error on entering (or extending) a
+    /// suspension, one info when it lifts. The gauge carries the steady state.
+    async fn record_suspension_status(&self, suspended_until: u64) {
+        let previous = std::mem::replace(&mut *self.suspended_until.write().await, suspended_until);
+        let is_suspended = suspended_until > time_now();
+        self.metrics
+            .suspended
+            .set(if is_suspended { 1.0 } else { 0.0 });
+
+        if is_suspended && suspended_until != previous {
+            let ends_at = OffsetDateTime::from_unix_timestamp(suspended_until as i64)
+                .ok()
+                .and_then(|t| t.format(&Rfc3339).ok())
+                .unwrap_or_default();
+            error!(
+                suspended_until,
+                "prover is SUSPENDED for performance below the network requirements; \
+                 bidding is paused until {ends_at}"
+            );
+        } else if !is_suspended && previous > 0 {
+            info!("prover suspension expired; resuming bidding");
+        }
+    }
+
+    /// Synchronously seed the requirements/suspension caches once, bounded by
+    /// `PRIME_TIMEOUT` so a slow RPC can't hang startup. Failure leaves the caches
+    /// empty and the bidder starts unclamped until the sync task takes over.
+    async fn prime_performance_policy(&self, prover: &[u8]) {
+        if tokio::time::timeout(PRIME_TIMEOUT, self.sync_performance_policy(prover))
+            .await
+            .is_err()
+        {
+            warn!(
+                timeout_secs = PRIME_TIMEOUT.as_secs(),
+                "timed out priming performance policy caches; starting unclamped",
+            );
+        }
+    }
+
+    /// Spawn the background task that keeps the requirements/suspension caches fresh.
+    fn spawn_performance_policy_sync(&self, prover: Vec<u8>) {
+        let bidder = self.clone();
+        let mut ticker = interval(Duration::from_secs(REQUIREMENTS_REFRESH_SECS));
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        tokio::spawn(async move {
+            loop {
+                ticker.tick().await;
+                bidder.sync_performance_policy(&prover).await;
+            }
+        });
+    }
+
+    /// Seconds left to fulfill this request: the requester's deadline, clamped to
+    /// the network's performance budget when one is published — fulfilling later
+    /// than `perf_deadline` counts against our success rate even if the requester's
+    /// deadline allows it. With no published requirements, the requester's deadline
+    /// stands unclamped.
+    fn effective_request_duration(
+        &self,
+        request: &ProofRequest,
+        requirements: Option<&PerformanceRequirements>,
+    ) -> u64 {
+        let Some(req) = requirements else {
+            return request.deadline.saturating_sub(time_now());
+        };
+        let perf = requirements::perf_deadline(request.created_at, request.gas_limit, req);
+        if perf < request.deadline {
+            self.metrics.perf_clamped.increment(1);
+        }
+        perf.min(request.deadline).saturating_sub(time_now())
+    }
+
     /// Runs the bidder loop.
     pub async fn run(mut self) -> Result<()> {
         info!("starting the bidder");
@@ -275,6 +424,9 @@ impl Bidder {
             .owner;
         let prover = Address::from_slice(&prover_bytes);
 
+        self.prime_performance_policy(&prover_bytes).await;
+        self.spawn_performance_policy_sync(prover_bytes.clone());
+
         loop {
             // Check for requests to bid on.
             if let Err(e) = self.bid_requests(prover).await {
@@ -289,6 +441,15 @@ impl Bidder {
     /// Checks for requested proof requests that are in the network and bids on eligible ones.
     #[instrument(skip_all)]
     async fn bid_requests(&mut self, prover: Address) -> Result<()> {
+        // While suspended, every bid is futile — the network won't assign us work.
+        // Skip the pass quietly (this runs every few seconds); the policy sync owns
+        // the loud transition logs and the `suspended` gauge.
+        let suspended_until = *self.suspended_until.read().await;
+        if suspended_until > time_now() {
+            debug!(suspended_until, "prover suspended; skipping bid pass");
+            return Ok(());
+        }
+
         // Get all requests from the network that are biddable.
         let request = spn_network_types::GetFilteredProofRequestsRequest {
             version: Some(self.version.clone()),
@@ -356,20 +517,30 @@ impl Bidder {
         // same price snapshot.
         let bid_amount = self.effective_bid_amount().await;
 
+        // Snapshot the published performance requirements once per pass. `None` — RPC
+        // unavailable, enforcement disabled, or this prover exempt from it (not
+        // whitelisted, or high-availability) — leaves deadlines unclamped: exempt
+        // provers are free to serve requests up to the requester's own deadline.
+        let network_requirements = if *self.governed.read().await {
+            self.requirements.read().await.clone()
+        } else {
+            None
+        };
+
         let mut failure_tasks = Vec::new();
         for request in requests {
             let self_clone = self.clone();
             let mode = request.mode();
+            let request_duration =
+                self.effective_request_duration(&request, network_requirements.as_ref());
             let request_id = hex::encode(request.request_id);
-
-            let request_duration = request.deadline.saturating_sub(time_now());
 
             // In aggressive mode, skip capacity/time checks but optionally enforce min deadline.
             if self.aggressive_mode {
                 if let Some(min_deadline) = self.min_deadline_secs {
                     if request_duration < min_deadline {
                         info!(
-                            "Skipping request 0x{} with deadline in {}s (below minimum {}s)",
+                            "Skipping request 0x{} with effective deadline in {}s (below minimum {}s)",
                             request_id, request_duration, min_deadline
                         );
                         continue;
@@ -380,7 +551,7 @@ impl Bidder {
                 if !self.can_fulfill_proof(active_proofs, request.gas_limit, request_duration, mode)
                 {
                     info!(
-                        "Cannot fulfill request 0x{} with gas limit {} and deadline in {}s",
+                        "Cannot fulfill request 0x{} with gas limit {} and effective deadline in {}s",
                         request_id, request.gas_limit, request_duration
                     );
                     continue;

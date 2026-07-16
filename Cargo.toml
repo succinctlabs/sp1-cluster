@@ -39,14 +39,11 @@ p3-field = "=0.3.3-succinct"
 p3-matrix = "=0.3.3-succinct"
 
 # SPN
-# Pinned to network main f652c93 = the merge commit of network#234, which removes
-# ComponentInfo.instance_id and renumbers the ReportProverInfo build fields. Network
-# crates aren't published to crates.io, so these stay git deps.
-spn-artifacts = { git = "https://github.com/succinctlabs/network", rev = "f652c93" }
-spn-metrics = { git = "https://github.com/succinctlabs/network", rev = "f652c93" }
-spn-network-types = { git = "https://github.com/succinctlabs/network", rev = "f652c93", features = ["network"] }
-spn-pricing = { git = "https://github.com/succinctlabs/network", rev = "f652c93" }
-spn-utils = { git = "https://github.com/succinctlabs/network", rev = "f652c93" }
+spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
+spn-pricing = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
 
 # SP1
 #
