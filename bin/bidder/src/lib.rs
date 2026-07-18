@@ -1,4 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use crate::{config::UsdBidConfig, metrics::BidderMetrics};
 use alloy::primitives::{Address, U256};
@@ -13,11 +17,15 @@ use tokio::{
 use tonic::transport::Channel;
 use tracing::{debug, error, info, instrument, warn};
 
+use spn_bidding::{
+    admission_outcome, expected_gas, AdmissionOutcome, ClusterState, EstimateCache, EstimateLookup,
+    RequestDemand,
+};
 use spn_network_types::{
     prover_network_client::ProverNetworkClient, BidRequest, BidRequestBody, FulfillmentStatus,
-    GetNonceRequest, GetOwnerRequest, GetProofRequestParamsRequest, GetProvePriceRequest,
-    GetProverRequirementsRequest, GetProverStatusRequest, MessageFormat, ProofMode, ProofRequest,
-    Signable, TransactionVariant,
+    GetNonceRequest, GetOwnerRequest, GetProgramGasEstimatesRequest, GetProofRequestParamsRequest,
+    GetProvePriceRequest, GetProverRequirementsRequest, GetProverStatusRequest, MessageFormat,
+    ProofMode, ProofRequest, Signable, TransactionVariant,
 };
 
 use crate::requirements::PerformanceRequirements;
@@ -40,6 +48,10 @@ const REFRESH_INTERVAL_SEC: u64 = 3;
 /// The maximum number of requests to handle in a single refresh loop.
 const REQUEST_LIMIT: u32 = 100;
 
+/// Maximum vk_hashes per `GetProgramGasEstimates` call, matching the server's
+/// per-call cap.
+const ESTIMATES_BATCH_LIMIT: usize = 256;
+
 /// Synchronous prime-fetch cap at startup so a slow RPC can't hang the bidder.
 const PRIME_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -57,8 +69,6 @@ pub struct Bidder {
     domain_bytes: Vec<u8>,
     /// Total cluster throughput in million gas per second
     throughput_mgas: f64,
-    /// Maximum number of concurrent proofs the cluster can handle
-    max_concurrent_proofs: u32,
     /// Token bid amount per PGU in wei
     bid_amount: U256,
     /// Base safety buffer in seconds applied to all proofs
@@ -75,6 +85,12 @@ pub struct Bidder {
     aggressive_mode: bool,
     /// Minimum deadline in seconds to bid on (optional safety check, even in aggressive mode)
     min_deadline_secs: Option<u64>,
+    /// Multiplier applied to published gas estimates; validated finite and positive at startup.
+    gas_estimate_multiplier: f64,
+    /// Per-node CPU-worker capacities in task-weight units (GB of RAM).
+    cpu_worker_max_weights: Vec<u32>,
+    /// TTL cache of the network-published per-program gas estimates.
+    estimate_cache: Arc<RwLock<EstimateCache>>,
     /// USD-denominated bid parameters. `Some` routes bids through the dynamic path
     /// (poll `GetProvePrice`, convert target to PROVE wei via
     /// `target * 10^9 / prove_usd_micros`). `None` keeps the bidder on the static
@@ -112,7 +128,6 @@ impl Bidder {
         metrics: BidderMetrics,
         domain_bytes: Vec<u8>,
         throughput_mgas: f64,
-        max_concurrent_proofs: u32,
         bid_amount: U256,
         buffer_sec: u64,
         groth16_buffer_sec: u64,
@@ -122,6 +137,8 @@ impl Bidder {
         aggressive_mode: bool,
         min_deadline_secs: Option<u64>,
         usd_bid: Option<UsdBidConfig>,
+        gas_estimate_multiplier: f64,
+        cpu_worker_max_weights: Vec<u32>,
     ) -> Self {
         Self {
             network,
@@ -130,7 +147,6 @@ impl Bidder {
             metrics,
             domain_bytes,
             throughput_mgas,
-            max_concurrent_proofs,
             bid_amount,
             buffer_sec,
             groth16_buffer_sec,
@@ -140,6 +156,9 @@ impl Bidder {
             aggressive_mode,
             min_deadline_secs,
             usd_bid,
+            gas_estimate_multiplier,
+            cpu_worker_max_weights,
+            estimate_cache: Arc::new(RwLock::new(EstimateCache::new())),
             tick_size: U256::ZERO,
             prove_usd_cache: Arc::new(RwLock::new(None)),
             requirements: Arc::new(RwLock::new(None)),
@@ -148,44 +167,31 @@ impl Bidder {
         }
     }
 
-    /// Calculate if we can fulfill a proof request within its deadline
-    fn can_fulfill_proof(
-        &self,
-        active_proofs: u32,
-        gas_limit: u64,
-        deadline_secs: u64,
-        mode: ProofMode,
-    ) -> bool {
-        // If the proof mode is disabled, we cannot fulfill it
+    /// Whether this bidder serves the proof mode.
+    fn mode_enabled(&self, mode: ProofMode) -> bool {
         match mode {
-            ProofMode::Groth16 if !self.groth16_enabled => return false,
-            ProofMode::Plonk if !self.plonk_enabled => return false,
-            _ => {}
+            ProofMode::Groth16 => self.groth16_enabled,
+            ProofMode::Plonk => self.plonk_enabled,
+            _ => true,
         }
-        // Calculate effective throughput per proof when at max capacity
-        let effective_throughput = self.throughput_mgas / self.max_concurrent_proofs as f64;
+    }
 
-        // Calculate time needed to complete this proof (in seconds)
-        let completion_time_secs = (gas_limit as f64 / 1_000_000.0) / effective_throughput;
-
-        // Add buffers for safety
-        let mut total_time_needed = completion_time_secs + self.buffer_sec as f64;
-
+    /// Duration and task weight of a request's wrap stage; zeros for modes without
+    /// one. Weights come from the cluster's shared task-weight defaults; the consts
+    /// read this process's environment, so a `WORKER_*_WRAP_WEIGHT` override on the
+    /// workers takes effect here only when the same variable is set on the bidder.
+    fn mode_wrap_demand(&self, mode: ProofMode) -> (f64, u32) {
         match mode {
-            ProofMode::Groth16 => {
-                total_time_needed += self.groth16_buffer_sec as f64;
-            }
-            ProofMode::Plonk => {
-                total_time_needed += self.plonk_buffer_sec as f64;
-            }
-            _ => {}
+            ProofMode::Groth16 => (
+                self.groth16_buffer_sec as f64,
+                *sp1_cluster_common::consts::GROTH16_WRAP_WEIGHT as u32,
+            ),
+            ProofMode::Plonk => (
+                self.plonk_buffer_sec as f64,
+                *sp1_cluster_common::consts::PLONK_WRAP_WEIGHT as u32,
+            ),
+            _ => (0.0, 0),
         }
-
-        // Check if we have enough time and capacity
-        let has_capacity = active_proofs < self.max_concurrent_proofs;
-        let has_time = total_time_needed <= deadline_secs as f64;
-
-        has_capacity && has_time
     }
 
     /// Returns the bid amount to use for this iteration.
@@ -272,7 +278,7 @@ impl Bidder {
             .await
         {
             Ok(resp) => {
-                let parsed = PerformanceRequirements::from_response(&resp.into_inner());
+                let parsed = requirements::from_response(&resp.into_inner());
                 *self.requirements.write().await = parsed;
             }
             Err(e) => {
@@ -360,6 +366,81 @@ impl Bidder {
         });
     }
 
+    /// Resolve the network-published gas estimate for every program in this pass:
+    /// fresh cache entries serve directly; the rest are fetched via
+    /// `GetProgramGasEstimates`, chunked to the server's per-call cap. A failed call
+    /// resolves its chunk to `None` for this pass — expected gas falls back to the
+    /// request's own limits — and keeps cached entries serving. Never blocks or
+    /// fails the pass.
+    async fn resolve_gas_estimates(
+        &self,
+        requests: &[ProofRequest],
+        assigned: &[ProofRequest],
+    ) -> HashMap<Vec<u8>, Option<u64>> {
+        let now = Instant::now();
+        let mut vks: Vec<Vec<u8>> = requests
+            .iter()
+            .chain(assigned)
+            .map(|r| r.vk_hash.clone())
+            .collect();
+        vks.sort_unstable();
+        vks.dedup();
+
+        let mut resolved = HashMap::new();
+        let mut misses = Vec::new();
+        {
+            let cache = self.estimate_cache.read().await;
+            for vk in vks {
+                match cache.lookup(&vk, now) {
+                    EstimateLookup::Hit(estimate) => {
+                        resolved.insert(vk, Some(estimate));
+                    }
+                    EstimateLookup::KnownAbsent => {
+                        resolved.insert(vk, None);
+                    }
+                    EstimateLookup::Miss => misses.push(vk),
+                }
+            }
+        }
+        if misses.is_empty() {
+            return resolved;
+        }
+
+        for chunk in misses.chunks(ESTIMATES_BATCH_LIMIT) {
+            match self
+                .network
+                .clone()
+                .get_program_gas_estimates(GetProgramGasEstimatesRequest {
+                    vk_hashes: chunk.to_vec(),
+                })
+                .await
+            {
+                Ok(resp) => {
+                    let mut by_vk: HashMap<Vec<u8>, u64> = resp
+                        .into_inner()
+                        .estimates
+                        .into_iter()
+                        .map(|e| (e.vk_hash, e.gas_estimate))
+                        .collect();
+                    let mut cache = self.estimate_cache.write().await;
+                    for vk in chunk {
+                        let estimate = by_vk.remove(vk);
+                        cache.store(vk.clone(), estimate, now);
+                        resolved.insert(vk.clone(), estimate);
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to fetch program gas estimates; sizing by request limits this pass");
+                    self.metrics.estimate_sync_errors.increment(1);
+                    for vk in chunk {
+                        resolved.insert(vk.clone(), None);
+                    }
+                }
+            }
+        }
+        resolved
+    }
+
     /// Seconds left to fulfill this request: the requester's deadline, clamped to
     /// the network's performance budget when one is published — fulfilling later
     /// than `perf_deadline` counts against our success rate even if the requester's
@@ -368,16 +449,84 @@ impl Bidder {
     fn effective_request_duration(
         &self,
         request: &ProofRequest,
+        expected_gas: u64,
         requirements: Option<&PerformanceRequirements>,
     ) -> u64 {
         let Some(req) = requirements else {
             return request.deadline.saturating_sub(time_now());
         };
-        let perf = requirements::perf_deadline(request.created_at, request.gas_limit, req);
+        let perf = requirements::perf_deadline(request.created_at, expected_gas, req);
         if perf < request.deadline {
             self.metrics.perf_clamped.increment(1);
         }
         perf.min(request.deadline).saturating_sub(time_now())
+    }
+
+    /// Decide whether to bid on a biddable request under gas-aware admission, sizing it
+    /// against the cluster's committed load and the network's performance deadline.
+    /// Returns `true` to bid — reserving the request's expected gas in `cluster` — or
+    /// `false` (with the reason logged) to skip. Records the limit-fallback and
+    /// admission-outcome metrics.
+    fn admit_request(
+        &self,
+        request: &ProofRequest,
+        request_id: &str,
+        mode: ProofMode,
+        estimate: Option<u64>,
+        requirements: Option<&PerformanceRequirements>,
+        cluster: &mut ClusterState,
+    ) -> bool {
+        if !self.mode_enabled(mode) {
+            info!(
+                "Skipping request 0x{} with disabled mode {:?}",
+                request_id, mode
+            );
+            return false;
+        }
+        if estimate.is_none() {
+            self.metrics.expected_gas_from_limit.increment(1);
+        }
+        let expected = expected_gas(
+            estimate,
+            request.gas_limit,
+            request.cycle_limit,
+            self.gas_estimate_multiplier,
+        );
+        // Clamp the schedulable deadline to the network's performance budget for the
+        // gas we actually expect this request to use.
+        let deadline_secs = self.effective_request_duration(request, expected, requirements);
+        let (wrap_secs, wrap_weight) = self.mode_wrap_demand(mode);
+        let outcome = admission_outcome(
+            cluster,
+            &RequestDemand {
+                expected_gas: expected,
+                deadline_secs,
+                buffer_secs: self.buffer_sec as f64,
+                wrap_secs,
+                wrap_weight,
+            },
+        );
+        match outcome {
+            AdmissionOutcome::AdmitLoaded => self.metrics.admitted_loaded.increment(1),
+            AdmissionOutcome::RejectCap => self.metrics.rejected_cap.increment(1),
+            AdmissionOutcome::RejectInfeasible => self.metrics.rejected_infeasible.increment(1),
+            AdmissionOutcome::RejectLoad => self.metrics.rejected_load.increment(1),
+        }
+        if !outcome.admits() {
+            info!(
+                "Cannot fulfill request 0x{} (outcome {:?}, expected {} gas, effective deadline in {}s)",
+                request_id, outcome, expected, deadline_secs
+            );
+            return false;
+        }
+        cluster.active_proofs += 1;
+        cluster.committed_gas = cluster.committed_gas.saturating_add(expected);
+        // Gate on weight, not duration: the initial active_wraps count is by mode,
+        // and a zero per-mode buffer config must not desynchronize the two.
+        if wrap_weight > 0 {
+            cluster.active_wraps += 1;
+        }
+        true
     }
 
     /// Runs the bidder loop.
@@ -394,6 +543,18 @@ impl Bidder {
         // Validate operator-configured bid amount. Catches misconfig at startup instead of
         // producing silently-rejected bids.
         validate_bid_amount(self.bid_amount, self.tick_size).context("bid_amount")?;
+        anyhow::ensure!(
+            self.gas_estimate_multiplier.is_finite() && self.gas_estimate_multiplier > 0.0,
+            "gas_estimate_multiplier must be finite and positive, got {}",
+            self.gas_estimate_multiplier
+        );
+        // The divisor of every completion-time estimate; a negative value would make
+        // admission fail open and bid on everything.
+        anyhow::ensure!(
+            self.throughput_mgas.is_finite() && self.throughput_mgas > 0.0,
+            "throughput_mgas must be finite and positive, got {}",
+            self.throughput_mgas
+        );
 
         match self.usd_bid.as_ref() {
             Some(bid) => {
@@ -411,6 +572,8 @@ impl Bidder {
                 info!(bid_amount = %self.bid_amount, "USD bid disabled; static-only path");
             }
         }
+
+        info!("gas-aware admission enabled");
 
         // Get the prover.
         let prover_bytes = self
@@ -441,9 +604,8 @@ impl Bidder {
     /// Checks for requested proof requests that are in the network and bids on eligible ones.
     #[instrument(skip_all)]
     async fn bid_requests(&mut self, prover: Address) -> Result<()> {
-        // While suspended, every bid is futile — the network won't assign us work.
-        // Skip the pass quietly (this runs every few seconds); the policy sync owns
-        // the loud transition logs and the `suspended` gauge.
+        // While suspended the network will not assign work, so skip the pass. The
+        // policy sync owns the suspension logging and the `suspended` gauge.
         let suspended_until = *self.suspended_until.read().await;
         if suspended_until > time_now() {
             debug!(suspended_until, "prover suspended; skipping bid pass");
@@ -505,7 +667,37 @@ impl Bidder {
             .await?
             .into_inner()
             .requests;
-        let mut active_proofs = assigned_requests.len() as u32;
+
+        // Published gas estimates for every program in this pass (one batched RPC at most).
+        let gas_estimates = self
+            .resolve_gas_estimates(&requests, &assigned_requests)
+            .await;
+        let estimate_for = |vk_hash: &[u8]| gas_estimates.get(vk_hash).copied().flatten();
+
+        // Expected gas of assigned proofs — the load admission accounts for.
+        let committed_gas: u64 = assigned_requests
+            .iter()
+            .map(|r| {
+                expected_gas(
+                    estimate_for(&r.vk_hash),
+                    r.gas_limit,
+                    r.cycle_limit,
+                    self.gas_estimate_multiplier,
+                )
+            })
+            .fold(0u64, |acc, g| acc.saturating_add(g));
+        let active_wraps = assigned_requests
+            .iter()
+            .filter(|r| matches!(r.mode(), ProofMode::Groth16 | ProofMode::Plonk))
+            .count() as u32;
+        let mut cluster = ClusterState {
+            throughput_mgas: self.throughput_mgas,
+            cpu_worker_max_weights: self.cpu_worker_max_weights.clone(),
+            active_proofs: assigned_requests.len() as u32,
+            committed_gas,
+            active_wraps,
+        };
+        self.metrics.committed_gas.set(cluster.committed_gas as f64);
 
         if requests.is_empty() {
             info!("found no biddable requests");
@@ -531,13 +723,17 @@ impl Bidder {
         for request in requests {
             let self_clone = self.clone();
             let mode = request.mode();
-            let request_duration =
-                self.effective_request_duration(&request, network_requirements.as_ref());
-            let request_id = hex::encode(request.request_id);
+            let request_id = hex::encode(&request.request_id);
 
             // In aggressive mode, skip capacity/time checks but optionally enforce min deadline.
             if self.aggressive_mode {
                 if let Some(min_deadline) = self.min_deadline_secs {
+                    // Aggressive mode skips estimate sizing; clamp on the raw gas_limit.
+                    let request_duration = self.effective_request_duration(
+                        &request,
+                        request.gas_limit,
+                        network_requirements.as_ref(),
+                    );
                     if request_duration < min_deadline {
                         info!(
                             "Skipping request 0x{} with effective deadline in {}s (below minimum {}s)",
@@ -546,17 +742,15 @@ impl Bidder {
                         continue;
                     }
                 }
-            } else {
-                // Normal mode: check capacity and time constraints.
-                if !self.can_fulfill_proof(active_proofs, request.gas_limit, request_duration, mode)
-                {
-                    info!(
-                        "Cannot fulfill request 0x{} with gas limit {} and effective deadline in {}s",
-                        request_id, request.gas_limit, request_duration
-                    );
-                    continue;
-                }
-                active_proofs += 1;
+            } else if !self.admit_request(
+                &request,
+                &request_id,
+                mode,
+                estimate_for(&request.vk_hash),
+                network_requirements.as_ref(),
+                &mut cluster,
+            ) {
+                continue;
             }
             failure_tasks.push(tokio::spawn(async move {
                 match self_clone

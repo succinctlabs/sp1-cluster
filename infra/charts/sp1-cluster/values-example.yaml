@@ -249,7 +249,7 @@ bidder:
           name: cluster-secrets
           key: PRIVATE_KEY
     BIDDER_THROUGHPUT_MGAS: 1
-    BIDDER_MAX_CONCURRENT_PROOFS: 1
+    BIDDER_CPU_WORKER_MAX_WEIGHTS: "96"
     BIDDER_BID_AMOUNT: 1
   image:
     tag: "base-v2.5.4"

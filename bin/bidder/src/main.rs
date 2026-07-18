@@ -74,6 +74,18 @@ async fn main() -> Result<()> {
     let metrics = BidderMetrics::default();
     BidderMetrics::describe();
 
+    // Parse per-node CPU worker weights; fail startup on malformed values.
+    let cpu_worker_max_weights: Vec<u32> = settings
+        .cpu_worker_max_weights
+        .split(',')
+        .map(|w| w.trim().parse::<u32>())
+        .collect::<Result<Vec<_>, _>>()
+        .context("BIDDER_CPU_WORKER_MAX_WEIGHTS must be comma-separated integers")?;
+    anyhow::ensure!(
+        !cpu_worker_max_weights.is_empty() && cpu_worker_max_weights.iter().all(|w| *w > 0),
+        "BIDDER_CPU_WORKER_MAX_WEIGHTS must contain at least one positive weight"
+    );
+
     // Initialize the Bidder with metrics.
     let usd_bid = settings.usd_bid();
     let bidder = Bidder::new(
@@ -83,7 +95,6 @@ async fn main() -> Result<()> {
         metrics,
         settings.domain.to_vec(),
         settings.throughput_mgas,
-        settings.max_concurrent_proofs,
         settings.bid_amount,
         settings.buffer_sec,
         settings.groth16_buffer_sec,
@@ -93,6 +104,8 @@ async fn main() -> Result<()> {
         settings.aggressive_mode,
         settings.min_deadline_secs,
         usd_bid,
+        settings.gas_estimate_multiplier,
+        cpu_worker_max_weights,
     );
 
     // Spawn the bidder task.
