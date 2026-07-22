@@ -425,15 +425,17 @@ impl WorkerClient for WorkerServiceClient {
                                     // were away, and a bare reopen would recreate it
                                     // with no subscriptions, silently dropping their
                                     // results.
-                                    let resub = OpenSubRequest {
-                                        sub_id: sub_id.clone(),
-                                        proof_id: request.proof_id.clone(),
-                                        task_ids: tasks_set.lock().await.iter().cloned().collect(),
-                                    };
+                                    // Snapshot inside the retry so tasks added
+                                    // mid-retry are included.
                                     match backoff::future::retry(retry::infinite(), || async {
+                                        let resub = OpenSubRequest {
+                                            sub_id: sub_id.clone(),
+                                            proof_id: request.proof_id.clone(),
+                                            task_ids: tasks_set.lock().await.iter().cloned().collect(),
+                                        };
                                         connection
                                             .clone()
-                                            .open_sub(resub.clone())
+                                            .open_sub(resub)
                                             .await
                                             .map_err(status_to_backoff_error)
                                     })
@@ -462,15 +464,15 @@ impl WorkerClient for WorkerServiceClient {
                                 tracing::warn!("No heartbeats received from subscriber {}, reconnecting", sub_id);
                                 // See the stream-error branch: reopen must carry our
                                 // live tasks in case the coordinator evicted this sub.
-                                let resub = OpenSubRequest {
-                                    sub_id: sub_id.clone(),
-                                    proof_id: request.proof_id.clone(),
-                                    task_ids: tasks_set.lock().await.iter().cloned().collect(),
-                                };
                                 match backoff::future::retry(retry::infinite(), || async {
+                                    let resub = OpenSubRequest {
+                                        sub_id: sub_id.clone(),
+                                        proof_id: request.proof_id.clone(),
+                                        task_ids: tasks_set.lock().await.iter().cloned().collect(),
+                                    };
                                     connection
                                         .clone()
-                                        .open_sub(resub.clone())
+                                        .open_sub(resub)
                                         .await
                                         .map_err(status_to_backoff_error)
                                 })
