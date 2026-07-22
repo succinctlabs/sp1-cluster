@@ -420,10 +420,20 @@ impl WorkerClient for WorkerServiceClient {
                                 }
                                 Err(e) => {
                                     tracing::error!("Connection error: {:?}", e);
+                                    // Re-subscribe with the tasks we still own: the
+                                    // coordinator may have evicted this sub while we
+                                    // were away, and a bare reopen would recreate it
+                                    // with no subscriptions, silently dropping their
+                                    // results.
+                                    let resub = OpenSubRequest {
+                                        sub_id: sub_id.clone(),
+                                        proof_id: request.proof_id.clone(),
+                                        task_ids: tasks_set.lock().await.iter().cloned().collect(),
+                                    };
                                     match backoff::future::retry(retry::infinite(), || async {
                                         connection
                                             .clone()
-                                            .open_sub(request.clone())
+                                            .open_sub(resub.clone())
                                             .await
                                             .map_err(status_to_backoff_error)
                                     })
@@ -450,10 +460,17 @@ impl WorkerClient for WorkerServiceClient {
                         _ = interval.tick() => {
                             if last_heartbeat.elapsed().unwrap_or_default() > Duration::from_secs(10) {
                                 tracing::warn!("No heartbeats received from subscriber {}, reconnecting", sub_id);
+                                // See the stream-error branch: reopen must carry our
+                                // live tasks in case the coordinator evicted this sub.
+                                let resub = OpenSubRequest {
+                                    sub_id: sub_id.clone(),
+                                    proof_id: request.proof_id.clone(),
+                                    task_ids: tasks_set.lock().await.iter().cloned().collect(),
+                                };
                                 match backoff::future::retry(retry::infinite(), || async {
                                     connection
                                         .clone()
-                                        .open_sub(request.clone())
+                                        .open_sub(resub.clone())
                                         .await
                                         .map_err(status_to_backoff_error)
                                 })

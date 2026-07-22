@@ -332,6 +332,15 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
             let coordinator = self.coordinator.clone();
             let (outer_tx, outer_rx) = mpsc::unbounded_channel::<ServerSubMessage>();
 
+            // Greet every (re)opened stream immediately so the client's
+            // heartbeat window never races the periodic sender.
+            let _ = tx.send(Ok(ServerSubMessage {
+                msg_id: "msg".create_type_id::<V7>().to_string(),
+                message: Some(server_sub_message::Message::ServerHeartbeat(
+                    proto::ServerSubHeartbeat {},
+                )),
+            }));
+
             if let Some(mut sub) = self.subscribers.get_mut(&request.sub_id) {
                 // If the subscriber already exists, replace the handler.
                 sub.sender_handle.abort();
@@ -346,13 +355,6 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
                 );
             } else {
                 let map = Arc::new(DashMap::new());
-
-                let _ = tx.send(Ok(ServerSubMessage {
-                    msg_id: "msg".create_type_id::<V7>().to_string(),
-                    message: Some(server_sub_message::Message::ServerHeartbeat(
-                        proto::ServerSubHeartbeat {},
-                    )),
-                }));
 
                 // Spawn a task to forward messages to the stream and resend any unacked messages.
                 let handle = spawn_subscriber_channel_task(

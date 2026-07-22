@@ -180,6 +180,16 @@ async fn run_worker_inner(
         let token = token.clone();
         async move {
             let mut last_heartbeat = Instant::now();
+            // A reconnect can "succeed" (channel opens) yet never carry
+            // another message — we would loop forever, looking healthy from
+            // outside. Progress = an inbound message, or a failed connect
+            // (unreachable coordinator is an outage, not a wedge: keep
+            // retrying). Sustained silence while reconnects succeed means
+            // wedged channel state: exit for a clean restart. The coordinator
+            // evicts silent workers and requeues their tasks long before this
+            // fires.
+            let mut last_progress = Instant::now();
+            const MAX_CHANNEL_SILENCE: Duration = Duration::from_secs(5 * 60);
             let mut heartbeat_ticker = tokio::time::interval(Duration::from_secs(5));
             let mut closed = false;
             let mut drain_started_at: Option<Instant> = None;
@@ -189,7 +199,9 @@ async fn run_worker_inner(
                 tokio::select! {
                     msg = channel.recv() => {
                         match msg {
-                            Some(server_msg) => match server_msg.message {
+                            Some(server_msg) => {
+                                last_progress = Instant::now();
+                                match server_msg.message {
                                 Some(server_message::Message::NewTask(task)) => {
                                     let data = task.data().unwrap();
                                     tracing::info!("Received task: {}", task.task_id);
@@ -293,7 +305,8 @@ async fn run_worker_inner(
                                     last_heartbeat = Instant::now();
                                 }
                                 None => {}
-                            },
+                                }
+                            }
                             None => {
                                 tracing::error!("Server closed connection");
                                 // Try to reconnect with exponential backoff
@@ -305,6 +318,7 @@ async fn run_worker_inner(
                                     }
                                     Err(e) => {
                                         tracing::error!("Failed to reconnect: {}", e);
+                                        last_progress = Instant::now();
                                         tokio::time::sleep(Duration::from_secs(1)).await;
                                         continue;
                                     }
@@ -341,6 +355,20 @@ async fn run_worker_inner(
                                 last_drain_log_count = Some(in_flight);
                             }
                         }
+                        // Draining has its own timeout (drain_timeout); don't preempt it.
+                        if !closed && last_progress.elapsed() > MAX_CHANNEL_SILENCE {
+                            tracing::error!(
+                                "No message from coordinator for {:?} despite successful reconnects; exiting for a clean restart",
+                                last_progress.elapsed()
+                            );
+                            // Best-effort trace flush; exit(1) would skip the post-loop shutdown.
+                            let _ = tokio::time::timeout(
+                                Duration::from_secs(5),
+                                tokio::task::spawn_blocking(opentelemetry::global::shutdown_tracer_provider),
+                            )
+                            .await;
+                            std::process::exit(1);
+                        }
                         if last_heartbeat.elapsed() > Duration::from_secs(10) {
                             tracing::error!("Heartbeat timed out, reconnecting...");
                             match worker_client.open().await {
@@ -350,6 +378,7 @@ async fn run_worker_inner(
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to reconnect: {}", e);
+                                    last_progress = Instant::now();
                                     tokio::time::sleep(Duration::from_secs(1)).await;
                                     continue;
                                 }
