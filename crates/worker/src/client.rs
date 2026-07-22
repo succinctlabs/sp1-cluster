@@ -11,7 +11,7 @@ use sp1_cluster_common::proto::{
     AckSubRequest, CloseRequest, CompleteTaskRequest, FailTaskRequest, HeartbeatRequest,
     OpenRequest, OpenSubRequest, ServerMessage, TaskData, UpdateSubRequest, WorkerType,
 };
-use sp1_cluster_common::util::{backoff_retry, status_to_backoff_error};
+use sp1_cluster_common::util::status_to_backoff_error;
 use sp1_prover::worker::{
     ProofId, RawTaskRequest, SubscriberBuilder, TaskContext, TaskId, TaskMetadata, WorkerClient,
 };
@@ -71,6 +71,10 @@ impl WorkerServiceClient {
         })
     }
 
+    /// Single connection attempt — no internal retry. Callers own the retry
+    /// loop so every failed attempt is observable; the worker's silence
+    /// watchdog distinguishes an outage (connects failing) from a wedged
+    /// channel (connects succeeding, no messages) and must see the failures.
     pub async fn open(&self) -> Result<mpsc::UnboundedReceiver<ServerMessage>> {
         // Prepare for receiving server messages
         let (server_tx, server_rx) = mpsc::unbounded_channel();
@@ -88,12 +92,7 @@ impl WorkerServiceClient {
             git_sha: crate::VERGEN_GIT_SHA.to_string(),
             image_tag: std::env::var("IMAGE_TAG").unwrap_or_default(),
         };
-        let response = backoff_retry(retry::infinite(), || {
-            let mut client = self.client.clone();
-            let init_msg = init_msg.clone();
-            async move { client.open(init_msg).await }
-        })
-        .await?;
+        let response = self.client.clone().open(init_msg).await?;
         let mut inbound = response.into_inner();
 
         // Spawn a receive task to pump server messages into `server_tx`

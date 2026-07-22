@@ -175,7 +175,17 @@ async fn run_worker_inner(
 ) -> eyre::Result<()> {
     let main_handle = tokio::spawn({
         let tasks: Arc<DashMap<(String, String), ActiveTask>> = Arc::new(DashMap::new());
-        let mut channel = worker_client.open().await?;
+        // `open()` is single-attempt; retry here so a worker booting before
+        // the coordinator is reachable waits instead of crash-looping.
+        let mut channel = loop {
+            match worker_client.open().await {
+                Ok(channel) => break channel,
+                Err(e) => {
+                    tracing::warn!("Failed to open coordinator channel, retrying: {}", e);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        };
         let tasks = tasks.clone();
         let token = token.clone();
         async move {
@@ -295,6 +305,7 @@ async fn run_worker_inner(
                                                 }
                                                 Err(e) => {
                                                     tracing::error!("Failed to reconnect: {}", e);
+                                                    last_progress = Instant::now();
                                                     tokio::time::sleep(Duration::from_secs(1)).await;
                                                     continue;
                                                 }
