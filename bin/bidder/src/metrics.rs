@@ -47,7 +47,8 @@ pub struct BidderMetrics {
     /// Requirements/status sync errors (caches kept stale, bidding unaffected).
     pub requirements_sync_errors: Counter,
 
-    /// Expected gas committed to currently-assigned proofs (gas-aware admission).
+    /// Expected gas the cluster is committed to: currently-assigned proofs plus
+    /// own bids still awaiting assignment.
     pub committed_gas: Gauge,
 
     /// Expected-gas evaluations that fell back to the request's own limit (no

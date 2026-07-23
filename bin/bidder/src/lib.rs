@@ -19,7 +19,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use spn_bidding::{
     admission_outcome, expected_gas, AdmissionOutcome, ClusterState, EstimateCache, EstimateLookup,
-    RequestDemand,
+    PendingBids, RequestDemand,
 };
 use spn_network_types::{
     prover_network_client::ProverNetworkClient, BidRequest, BidRequestBody, FulfillmentStatus,
@@ -91,6 +91,9 @@ pub struct Bidder {
     cpu_worker_max_weights: Vec<u32>,
     /// TTL cache of the network-published per-program gas estimates.
     estimate_cache: Arc<RwLock<EstimateCache>>,
+    /// Own bids awaiting assignment, reconciled into committed load each pass.
+    /// A synchronous mutex: never locked across an await point.
+    pending_bids: Arc<std::sync::Mutex<PendingBids>>,
     /// USD-denominated bid parameters. `Some` routes bids through the dynamic path
     /// (poll `GetProvePrice`, convert target to PROVE wei via
     /// `target * 10^9 / prove_usd_micros`). `None` keeps the bidder on the static
@@ -159,6 +162,7 @@ impl Bidder {
             gas_estimate_multiplier,
             cpu_worker_max_weights,
             estimate_cache: Arc::new(RwLock::new(EstimateCache::new())),
+            pending_bids: Arc::new(std::sync::Mutex::new(PendingBids::default())),
             tick_size: U256::ZERO,
             prove_usd_cache: Arc::new(RwLock::new(None)),
             requirements: Arc::new(RwLock::new(None)),
@@ -441,6 +445,38 @@ impl Bidder {
         resolved
     }
 
+    /// Record an about-to-be-submitted bid in the pending ledger.
+    fn record_pending_bid(&self, request: &ProofRequest, expected_gas: u64, is_wrap: bool) {
+        self.pending_bids
+            .lock()
+            .expect("pending bids lock poisoned")
+            .record(
+                request.request_id.clone(),
+                expected_gas,
+                is_wrap,
+                request.min_auction_period,
+                Instant::now(),
+            );
+    }
+
+    /// Reconcile the pending ledger with this pass's visible requests, counting
+    /// bids still outstanding into `cluster`'s committed load.
+    fn reconcile_pending_bids(
+        &self,
+        cluster: &mut ClusterState,
+        biddable: &[ProofRequest],
+        assigned: &[ProofRequest],
+    ) {
+        self.pending_bids
+            .lock()
+            .expect("pending bids lock poisoned")
+            .reconcile_into(
+                cluster,
+                biddable.iter().chain(assigned).map(|r| &r.request_id),
+                Instant::now(),
+            );
+    }
+
     /// Seconds left to fulfill this request: the requester's deadline, clamped to
     /// the network's performance budget when one is published — fulfilling later
     /// than `perf_deadline` counts against our success rate even if the requester's
@@ -464,9 +500,9 @@ impl Bidder {
 
     /// Decide whether to bid on a biddable request under gas-aware admission, sizing it
     /// against the cluster's committed load and the network's performance deadline.
-    /// Returns `true` to bid — reserving the request's expected gas in `cluster` — or
-    /// `false` (with the reason logged) to skip. Records the limit-fallback and
-    /// admission-outcome metrics.
+    /// Returns `true` to bid — reserving the request's expected gas in `cluster` and
+    /// in the pending-bid ledger — or `false` (with the reason logged) to skip.
+    /// Records the limit-fallback and admission-outcome metrics.
     fn admit_request(
         &self,
         request: &ProofRequest,
@@ -526,6 +562,7 @@ impl Bidder {
         if wrap_weight > 0 {
             cluster.active_wraps += 1;
         }
+        self.record_pending_bid(request, expected, wrap_weight > 0);
         true
     }
 
@@ -720,6 +757,9 @@ impl Bidder {
             committed_gas,
             active_wraps,
         };
+        // Count our own bids still awaiting assignment so a burst is not
+        // re-admitted while the auction settles.
+        self.reconcile_pending_bids(&mut cluster, &requests, &assigned_requests);
         self.metrics.committed_gas.set(cluster.committed_gas as f64);
 
         if requests.is_empty() {
