@@ -39,15 +39,12 @@ p3-field = "=0.3.3-succinct"
 p3-matrix = "=0.3.3-succinct"
 
 # SPN
-# TEMPORARY: all network deps track the network PR branch (succinctlabs/network#238)
-# so spn-bidding and the GetProgramGasEstimates types resolve pre-merge; flip back
-# to branch = "main" once it merges.
-spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "farhad/program-gas-stats-proto" }
-spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "farhad/program-gas-stats-proto" }
-spn-bidding = { git = "https://github.com/succinctlabs/network", branch = "farhad/program-gas-stats-proto" }
-spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "farhad/program-gas-stats-proto", features = ["network"] }
-spn-pricing = { git = "https://github.com/succinctlabs/network", branch = "farhad/program-gas-stats-proto" }
-spn-utils = { git = "https://github.com/succinctlabs/network", branch = "farhad/program-gas-stats-proto" }
+spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-bidding = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
+spn-pricing = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
 
 # SP1
 #

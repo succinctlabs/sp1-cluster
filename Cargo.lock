@@ -9486,7 +9486,7 @@ dependencies = [
 [[package]]
 name = "spn-artifact-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Fprogram-gas-stats-proto#0925cf4364328aed4ce5fbf9782f4e7e034d6133"
+source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
 dependencies = [
  "prost 0.13.5",
  "prost-build",
@@ -9498,7 +9498,7 @@ dependencies = [
 [[package]]
 name = "spn-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Fprogram-gas-stats-proto#0925cf4364328aed4ce5fbf9782f4e7e034d6133"
+source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -9519,12 +9519,12 @@ dependencies = [
 [[package]]
 name = "spn-bidding"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Fprogram-gas-stats-proto#0925cf4364328aed4ce5fbf9782f4e7e034d6133"
+source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
 
 [[package]]
 name = "spn-metrics"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Fprogram-gas-stats-proto#0925cf4364328aed4ce5fbf9782f4e7e034d6133"
+source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
 dependencies = [
  "axum 0.7.9",
  "eyre",
@@ -9543,7 +9543,7 @@ dependencies = [
 [[package]]
 name = "spn-network-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Fprogram-gas-stats-proto#0925cf4364328aed4ce5fbf9782f4e7e034d6133"
+source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -9561,7 +9561,7 @@ dependencies = [
 [[package]]
 name = "spn-pricing"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Fprogram-gas-stats-proto#0925cf4364328aed4ce5fbf9782f4e7e034d6133"
+source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
 dependencies = [
  "alloy-primitives",
  "async-trait",
@@ -9572,7 +9572,7 @@ dependencies = [
 [[package]]
 name = "spn-utils"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Fprogram-gas-stats-proto#0925cf4364328aed4ce5fbf9782f4e7e034d6133"
+source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
