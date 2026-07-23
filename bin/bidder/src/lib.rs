@@ -73,9 +73,9 @@ pub struct Bidder {
     bid_amount: U256,
     /// Base safety buffer in seconds applied to all proofs
     buffer_sec: u64,
-    /// Additional buffer for Groth16 proofs in seconds
+    /// Duration of the Groth16 wrap stage in seconds (own wrap + per queued cycle).
     groth16_buffer_sec: u64,
-    /// Additional buffer for Plonk proofs in seconds
+    /// Duration of the Plonk wrap stage in seconds (own wrap + per queued cycle).
     plonk_buffer_sec: u64,
     /// Whether to bid on Groth16 proofs
     groth16_enabled: bool,

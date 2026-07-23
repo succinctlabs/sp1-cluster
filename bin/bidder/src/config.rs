@@ -34,10 +34,12 @@ pub struct Settings {
     /// Base safety buffer in seconds applied to all proofs
     #[serde(default = "default_buffer_sec")]
     pub buffer_sec: u64,
-    /// Additional buffer for Groth16 proofs in seconds
+    /// Duration of the Groth16 wrap stage in seconds. Admission counts it once as
+    /// the request's own wrap time and once per queued cycle behind in-flight wraps.
     #[serde(default = "default_groth16_buffer_sec")]
     pub groth16_buffer_sec: u64,
-    /// Additional buffer for Plonk proofs in seconds
+    /// Duration of the Plonk wrap stage in seconds. Admission counts it once as
+    /// the request's own wrap time and once per queued cycle behind in-flight wraps.
     #[serde(default = "default_plonk_buffer_sec")]
     pub plonk_buffer_sec: u64,
     /// Whether to bid on Groth16 proofs
