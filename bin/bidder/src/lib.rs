@@ -601,6 +601,52 @@ impl Bidder {
         }
     }
 
+    /// Fetch every proof request currently assigned to this prover. Assigned proofs
+    /// are admission's load inputs, and controller capacity (Σ cpu_worker_max_weights)
+    /// can exceed one page — paginate so the counts are never truncated. Once the
+    /// count exceeds capacity the loop stops early: admission rejects at the cap from
+    /// the fetched counts alone, so exact totals past it are irrelevant.
+    async fn fetch_assigned_requests(&self, prover: Address) -> Result<Vec<ProofRequest>> {
+        let controller_slots = self
+            .cpu_worker_max_weights
+            .iter()
+            .fold(0u32, |acc, w| acc.saturating_add(*w));
+        let mut assigned = Vec::new();
+        let mut page = 1u32;
+        loop {
+            let batch = self
+                .network
+                .clone()
+                .get_filtered_proof_requests(spn_network_types::GetFilteredProofRequestsRequest {
+                    version: Some(self.version.clone()),
+                    fulfillment_status: Some(FulfillmentStatus::Assigned.into()),
+                    execution_status: None,
+                    execute_fail_cause: None,
+                    minimum_deadline: Some(time_now()),
+                    vk_hash: None,
+                    requester: None,
+                    fulfiller: Some(prover.to_vec()),
+                    limit: Some(REQUEST_LIMIT),
+                    page: Some(page),
+                    from: None,
+                    to: None,
+                    mode: None,
+                    not_bid_by: None,
+                    error: None,
+                    settlement_status: None,
+                })
+                .await?
+                .into_inner()
+                .requests;
+            let full_page = batch.len() as u32 == REQUEST_LIMIT;
+            assigned.extend(batch);
+            if !full_page || assigned.len() as u32 > controller_slots {
+                return Ok(assigned);
+            }
+            page += 1;
+        }
+    }
+
     /// Checks for requested proof requests that are in the network and bids on eligible ones.
     #[instrument(skip_all)]
     async fn bid_requests(&mut self, prover: Address) -> Result<()> {
@@ -643,30 +689,7 @@ impl Bidder {
         // requests we can bid on.
         // Note this is done after the biddable requests query to ensure a proof is not ommitted
         // from both queries if it became assigned just after the assigned query.
-        let assigned_requests = self
-            .network
-            .clone()
-            .get_filtered_proof_requests(spn_network_types::GetFilteredProofRequestsRequest {
-                version: Some(self.version.clone()),
-                fulfillment_status: Some(FulfillmentStatus::Assigned.into()),
-                execution_status: None,
-                execute_fail_cause: None,
-                minimum_deadline: Some(time_now()),
-                vk_hash: None,
-                requester: None,
-                fulfiller: Some(prover.to_vec()),
-                limit: Some(REQUEST_LIMIT),
-                page: None,
-                from: None,
-                to: None,
-                mode: None,
-                not_bid_by: None,
-                error: None,
-                settlement_status: None,
-            })
-            .await?
-            .into_inner()
-            .requests;
+        let assigned_requests = self.fetch_assigned_requests(prover).await?;
 
         // Published gas estimates for every program in this pass (one batched RPC at most).
         let gas_estimates = self
