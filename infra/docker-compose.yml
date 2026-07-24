@@ -50,6 +50,7 @@ services:
       - COORDINATOR_CLUSTER_RPC=http://api:50051
       - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
       - COORDINATOR_ADDR=0.0.0.0:50051
+      - SP1_CLUSTER_SHARD_THRESHOLD=402653184
     command: ["/bin/sh", "-c", "/coordinator"]
     # Expose coordinator for remote workers connecting from other machines.
     ports:
@@ -69,6 +70,7 @@ services:
       # when CPU cores are the binding resource.
       - WORKER_MAX_WEIGHT_OVERRIDE=96
       - NODE_ARTIFACT_STORE=redis
+      - SP1_CLUSTER_SHARD_THRESHOLD=402653184
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=CPU
     volumes:
@@ -81,7 +83,7 @@ services:
           cpus: "8"
           memory: 96G
         reservations:
-          cpus: "4"
+          cpus: "8"
           memory: 96G
     depends_on:
       - coordinator
@@ -95,6 +97,7 @@ services:
       # See cpu-node: GiB dedicated to this worker, at most the 96G limit below.
       - WORKER_MAX_WEIGHT_OVERRIDE=96
       - NODE_ARTIFACT_STORE=redis
+      - SP1_CLUSTER_SHARD_THRESHOLD=402653184
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=ALL
     volumes:
@@ -107,7 +110,7 @@ services:
           cpus: "8"
           memory: 96G
         reservations:
-          cpus: "4"
+          cpus: "8"
           memory: 96G
     depends_on:
       - coordinator
@@ -119,18 +122,18 @@ services:
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       # Must be <= container memory in GiB (see deploy.resources.limits.memory below).
-      - WORKER_MAX_WEIGHT_OVERRIDE=24
+      - WORKER_MAX_WEIGHT_OVERRIDE=60
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=GPU
     deploy:
       resources:
         limits:
-          cpus: "32"
-          memory: 24G
+          cpus: "46"
+          memory: 60G
         reservations:
-          cpus: "32"
-          memory: 24G
+          cpus: "46"
+          memory: 60G
     depends_on:
       - coordinator
       - redis
