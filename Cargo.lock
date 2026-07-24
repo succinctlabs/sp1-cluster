@@ -9486,7 +9486,7 @@ dependencies = [
 [[package]]
 name = "spn-artifact-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
+source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
 dependencies = [
  "prost 0.13.5",
  "prost-build",
@@ -9498,7 +9498,7 @@ dependencies = [
 [[package]]
 name = "spn-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
+source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -9524,7 +9524,7 @@ source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d
 [[package]]
 name = "spn-metrics"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
+source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
 dependencies = [
  "axum 0.7.9",
  "eyre",
@@ -9543,7 +9543,7 @@ dependencies = [
 [[package]]
 name = "spn-network-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
+source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -9561,7 +9561,7 @@ dependencies = [
 [[package]]
 name = "spn-pricing"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
+source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
 dependencies = [
  "alloy-primitives",
  "async-trait",
@@ -9572,7 +9572,7 @@ dependencies = [
 [[package]]
 name = "spn-utils"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#98490b21fd08a1cf3205f43abc4588fcc5e368da"
+source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
