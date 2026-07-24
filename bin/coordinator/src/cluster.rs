@@ -189,7 +189,14 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
 
         // Initial catch-up: claim any pending requests that already exist
         // (coordinator restart / pre-existing rows that won't fire NOTIFY).
-        reconcile_pending(&api_client, &coordinator, &task_map, &metrics, &reissue_inflight).await;
+        reconcile_pending(
+            &api_client,
+            &coordinator,
+            &task_map,
+            &metrics,
+            &reissue_inflight,
+        )
+        .await;
 
         // Run the event-driven and safety-net loops concurrently. Either
         // one encountering a transient error logs and retries — we don't
@@ -270,7 +277,14 @@ async fn run_safety_net_poll<P: AssignmentPolicy>(
 ) {
     loop {
         tokio::time::sleep(SAFETY_NET_INTERVAL).await;
-        reconcile_pending(&api_client, &coordinator, &task_map, &metrics, &reissue_inflight).await;
+        reconcile_pending(
+            &api_client,
+            &coordinator,
+            &task_map,
+            &metrics,
+            &reissue_inflight,
+        )
+        .await;
     }
 }
 

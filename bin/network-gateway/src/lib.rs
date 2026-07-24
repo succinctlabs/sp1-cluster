@@ -72,12 +72,14 @@ where
         })?;
     let auth = build_auth(&cfg)?;
     let program_store = build_program_store(&cfg)?;
+    let proof_events = spawn_proof_events(cluster.clone()).await?;
     serve(
         cfg,
         client,
         cluster,
         auth,
         program_store,
+        proof_events,
         shutdown.clone().cancelled_owned(),
         shutdown.cancelled_owned(),
     )
