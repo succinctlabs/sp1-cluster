@@ -13,20 +13,33 @@ pub struct Settings {
     pub log_format: LogFormat,
     #[serde(deserialize_with = "deserialize_domain")]
     pub domain: B256,
-    /// Total cluster throughput in million gas per second
+    /// Total sustained proving throughput of the cluster in million gas per second.
+    /// Admission divides a request's expected gas by this rate to estimate completion
+    /// time, so it should reflect measured end-to-end throughput, not a peak. As a
+    /// rough anchor, a single datacenter GPU sustains on the order of 1–5 MGas/s
+    /// depending on the model; sum your fleet and err low — overstating admits more
+    /// work than the cluster can finish before deadlines, understating only leaves
+    /// capacity idle.
     pub throughput_mgas: f64,
-    /// Maximum number of concurrent proofs the cluster can handle
-    pub max_concurrent_proofs: u32,
+    /// Comma-separated per-node CPU-worker capacities in task-weight units (GB of
+    /// RAM), matching the `max_weight` each CPU worker declares (e.g. "96,96" for
+    /// two 96 GB nodes). Per-node values, not a fleet total: a Groth16/Plonk wrap
+    /// stage must fit within a single node, so "96,96" holds two 60-weight Plonk
+    /// wraps while "192" holds three. The summed total bounds concurrent proofs
+    /// (one weight-1 controller task each).
+    pub cpu_worker_max_weights: String,
     /// Static bid per PGU in wei. Used unconditionally when `usd_bid_enabled` is `false`;
     /// otherwise serves as the safety-net bid when the PROVE/USD cache is missing or stale.
     pub bid_amount: U256,
     /// Base safety buffer in seconds applied to all proofs
     #[serde(default = "default_buffer_sec")]
     pub buffer_sec: u64,
-    /// Additional buffer for Groth16 proofs in seconds
+    /// Duration of the Groth16 wrap stage in seconds. Admission counts it once as
+    /// the request's own wrap time and once per queued cycle behind in-flight wraps.
     #[serde(default = "default_groth16_buffer_sec")]
     pub groth16_buffer_sec: u64,
-    /// Additional buffer for Plonk proofs in seconds
+    /// Duration of the Plonk wrap stage in seconds. Admission counts it once as
+    /// the request's own wrap time and once per queued cycle behind in-flight wraps.
     #[serde(default = "default_plonk_buffer_sec")]
     pub plonk_buffer_sec: u64,
     /// Whether to bid on Groth16 proofs
@@ -40,6 +53,11 @@ pub struct Settings {
     pub aggressive_mode: bool,
     /// Minimum deadline in seconds to bid on (optional safety check, even in aggressive mode)
     pub min_deadline_secs: Option<u64>,
+    /// Multiplier on network-published gas estimates: expected gas = estimate × this,
+    /// still capped by the request's own limits. Leave at 1.0 unless estimates prove
+    /// mis-sized for this cluster.
+    #[serde(default = "default_gas_estimate_multiplier")]
+    pub gas_estimate_multiplier: f64,
     /// USD-denominated bid master switch. `true` (default) routes bids through the
     /// dynamic path when fresh PROVE/USD is available; otherwise falls back to the
     /// static `bid_amount`. `false` keeps the bidder on the static `bid_amount` path
@@ -90,6 +108,10 @@ impl Settings {
             staleness_max_secs: self.usd_bid_staleness_max_secs,
         })
     }
+}
+
+fn default_gas_estimate_multiplier() -> f64 {
+    1.0
 }
 
 fn default_buffer_sec() -> u64 {

@@ -234,8 +234,10 @@ services:
       - BIDDER_METRICS_ADDR=0.0.0.0:9090
       - BIDDER_RPC_GRPC_ADDR=${RPC_GRPC_ADDR}
       - BIDDER_SP1_PRIVATE_KEY=${SP1_PRIVATE_KEY}
+      # Sustained cluster proving rate in MGas/s (roughly 1-5 per GPU; err low).
       - BIDDER_THROUGHPUT_MGAS=1
-      - BIDDER_MAX_CONCURRENT_PROOFS=1
+      # Per-node CPU-worker RAM in GB, comma-separated (e.g. "96,96" for two nodes).
+      - BIDDER_CPU_WORKER_MAX_WEIGHTS=96
       # Static bid in wei/PGU. Safety-net when the USD bid falls back (cache missing
       # or stale), or the unconditional bid if you opt out of the USD bid below.
       - BIDDER_BID_AMOUNT=500000000

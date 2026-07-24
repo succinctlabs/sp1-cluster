@@ -46,4 +46,29 @@ pub struct BidderMetrics {
 
     /// Requirements/status sync errors (caches kept stale, bidding unaffected).
     pub requirements_sync_errors: Counter,
+
+    /// Expected gas the cluster is committed to: currently-assigned proofs plus
+    /// own bids still awaiting assignment.
+    pub committed_gas: Gauge,
+
+    /// Expected-gas evaluations that fell back to the request's own limit (no
+    /// published estimate for the program).
+    pub expected_gas_from_limit: Counter,
+
+    /// Requests admitted because they fit under conservative committed load.
+    pub admitted_loaded: Counter,
+
+    /// Requests rejected as solo-infeasible (can't fit the deadline even alone).
+    pub rejected_infeasible: Counter,
+
+    /// Requests rejected because committed load would miss the deadline.
+    pub rejected_load: Counter,
+
+    /// Requests rejected with no controller slot free (proof count is bounded by
+    /// CPU-worker weight).
+    pub rejected_cap: Counter,
+
+    /// Program gas estimate fetch errors (uncached programs size by their own limits
+    /// for the pass, bidding unaffected).
+    pub estimate_sync_errors: Counter,
 }
