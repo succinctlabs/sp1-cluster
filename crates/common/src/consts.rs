@@ -8,7 +8,7 @@ pub fn task_weight(task_type: TaskType) -> usize {
     match task_type {
         TaskType::UnspecifiedTaskType => 0,
         TaskType::Controller => *CONTROLLER_WEIGHT,
-        TaskType::ProveShard => 4,
+        TaskType::ProveShard => *PROVE_SHARD_WEIGHT,
         TaskType::RecursionDeferred => 3,
         TaskType::RecursionReduce => 3,
         TaskType::ShrinkWrap => 4,
@@ -27,6 +27,18 @@ lazy_static! {
     pub static ref CONTROLLER_WEIGHT: usize = std::env::var("WORKER_CONTROLLER_WEIGHT")
         .map(|s| s.parse().unwrap())
         .unwrap_or(1);
+
+    /// Task weight for prove shard task.
+    ///
+    /// Weights are stamped into the task at creation time (see
+    /// `WorkerClient::create_task`), so this must be set on the workers that
+    /// run controller tasks — GPU workers only read the stamped value. Scale
+    /// it with `SP1_CLUSTER_SHARD_THRESHOLD`: the default 4 assumes the
+    /// cluster's conservative sharding threshold, and shard working-set memory
+    /// grows proportionally with that threshold.
+    pub static ref PROVE_SHARD_WEIGHT: usize = std::env::var("WORKER_PROVE_SHARD_WEIGHT")
+        .map(|s| s.parse().unwrap())
+        .unwrap_or(4);
 
     /// Task weight for groth16 wrap task.
     pub static ref GROTH16_WRAP_WEIGHT: usize = std::env::var("WORKER_GROTH16_WRAP_WEIGHT")
