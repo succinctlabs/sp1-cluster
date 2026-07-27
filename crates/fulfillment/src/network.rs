@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use sp1_cluster_artifact::ArtifactType;
 use sp1_cluster_common::proto::ProofRequest;
 use sp1_sdk::network::signer::NetworkSigner;
-use spn_network_types::ComponentInfo;
+use spn_network_types::{ClusterCapacitySnapshot, ComponentInfo};
 /// Why a request is cancelable. The kind is assigned by the network producer
 /// (which knows which query surfaced the request) and decides the routing in
 /// `cancel_requests`.
@@ -146,6 +146,10 @@ pub trait FulfillmentNetwork: Send + Sync + 'static {
     /// `ReportProverInfo` contract. The fulfiller passes its own component plus
     /// any coordinator/worker components it could collect, in ONE request.
     ///
+    /// `capacity` is the cluster's GPU capacity snapshot; `None` if the cluster reported
+    /// none. It must not pass through the component dedupe, and its absence must not fail
+    /// a report.
+    ///
     /// Best-effort debugging telemetry: implementations must never block or fail
     /// fulfillment on this.
     async fn report_prover_info(
@@ -153,6 +157,7 @@ pub trait FulfillmentNetwork: Send + Sync + 'static {
         domain: &[u8],
         prover: Address,
         components: Vec<ComponentInfo>,
+        capacity: Option<ClusterCapacitySnapshot>,
         signer: &NetworkSigner,
     ) -> Result<()>;
 

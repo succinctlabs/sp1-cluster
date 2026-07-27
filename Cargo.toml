@@ -39,10 +39,13 @@ p3-field = "=0.3.3-succinct"
 p3-matrix = "=0.3.3-succinct"
 
 # SPN
+#
+# spn-network-types is pinned to the network PR head that adds the capacity wire types
+# (7f7369878 = main + one commit). Move it back to branch = "main" after that PR merges.
 spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-bidding = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
-spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
+spn-network-types = { git = "https://github.com/succinctlabs/network", rev = "7f7369878", features = ["network"] }
 spn-pricing = { git = "https://github.com/succinctlabs/network", branch = "main" }
 spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
 

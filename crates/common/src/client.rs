@@ -178,19 +178,20 @@ impl ClusterServiceClient {
 
     /// Replace the API's cluster component build manifest (full snapshot). Called
     /// periodically by the coordinator with its own build + one entry per connected
-    /// worker.
+    /// worker, plus the GPU capacity snapshot from the same state read.
+    ///
+    /// `capacity` is `None` if the coordinator has no capacity data. The API stores it with
+    /// the manifest under the same `updated_at`.
     pub async fn set_cluster_component_info(
         &self,
         components: Vec<proto::ClusterComponentInfo>,
+        capacity: Option<proto::ClusterCapacitySnapshot>,
     ) -> Result<()> {
         self.retry_call(|| {
             let mut client = self.rpc.clone();
             let request = proto::SetClusterComponentInfoRequest {
                 components: components.clone(),
-                // This coordinator doesn't build GPU capacity snapshots yet; the
-                // field is optional on the wire ("absent when the coordinator has
-                // no capacity data to report").
-                capacity: None,
+                capacity: capacity.clone(),
             };
             async move { client.set_cluster_component_info(request).await }
         })
@@ -199,7 +200,8 @@ impl ClusterServiceClient {
     }
 
     /// Fetch the latest cluster component build manifest the coordinator pushed to
-    /// the API. `updated_at == 0` means no coordinator has pushed one yet.
+    /// the API, with the capacity snapshot from the same push.
+    /// `updated_at == 0` means no coordinator has pushed one yet.
     pub async fn get_cluster_component_info(&self) -> Result<proto::ClusterComponentManifest> {
         self.retry_call(|| {
             let mut client = self.rpc.clone();

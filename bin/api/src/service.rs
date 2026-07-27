@@ -74,10 +74,9 @@ impl DbProofRequest {
 /// Implementation of the ClusterService gRPC service
 pub struct ClusterServiceImpl {
     db_pool: Arc<PgPool>,
-    /// Latest cluster component build manifest pushed by the coordinator, held in
-    /// memory only: it is periodically re-pushed telemetry, so it repopulates within
-    /// one push interval after an API restart. `updated_at == 0` means no coordinator
-    /// has pushed a manifest since startup.
+    /// Latest component build manifest and GPU capacity snapshot from the coordinator, held
+    /// in memory only. The coordinator re-pushes it periodically, so it repopulates within
+    /// one push interval after an API restart. `updated_at == 0` means no push since startup.
     component_manifest: RwLock<ClusterComponentManifest>,
 }
 
@@ -381,7 +380,8 @@ impl ClusterService for ClusterServiceImpl {
             .map_err(|e| Status::internal(format!("system time before unix epoch: {e}")))?
             .as_secs();
         // Full-snapshot replace; updated_at is server-owned so readers can judge
-        // freshness against a clock the coordinator doesn't control.
+        // freshness against a clock the coordinator doesn't control. The capacity shares
+        // that `updated_at`, so a stale manifest also invalidates its capacity.
         *self
             .component_manifest
             .write()
@@ -413,7 +413,7 @@ impl ClusterService for ClusterServiceImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sp1_cluster_common::proto::ClusterComponentInfo;
+    use sp1_cluster_common::proto::{ClusterCapacitySnapshot, ClusterComponentInfo, GpuClassCount};
 
     /// The manifest RPCs never touch the database, so a lazy (unconnected) pool is enough.
     fn service() -> ClusterServiceImpl {
@@ -430,6 +430,21 @@ mod tests {
         }
     }
 
+    fn capacity(gpu_nodes: u32) -> ClusterCapacitySnapshot {
+        ClusterCapacitySnapshot {
+            observed_at: 1_700_000_000,
+            counters_since: 1_699_000_000,
+            gpu_nodes,
+            gpu_available_ms_total: 5_000,
+            gpu_busy_ms_total: 1_250,
+            gpus: vec![GpuClassCount {
+                name: "NVIDIA L4".to_string(),
+                memory_total_bytes: 24 * 1024 * 1024 * 1024,
+                node_count: gpu_nodes,
+            }],
+        }
+    }
+
     #[tokio::test]
     async fn manifest_is_empty_with_zero_updated_at_before_any_push() {
         let svc = service();
@@ -440,6 +455,7 @@ mod tests {
             .into_inner();
         assert!(manifest.components.is_empty());
         assert_eq!(manifest.updated_at, 0, "no push yet => updated_at 0");
+        assert!(manifest.capacity.is_none(), "no push yet => no capacity");
     }
 
     #[tokio::test]
@@ -450,7 +466,7 @@ mod tests {
                 entry("coordinator", "abc1234"),
                 entry("cpu-node", "abc1234"),
             ],
-            capacity: None,
+            capacity: Some(capacity(8)),
         }))
         .await
         .unwrap();
@@ -463,6 +479,8 @@ mod tests {
         assert_eq!(manifest.components.len(), 2);
         assert_eq!(manifest.components[0].component, "coordinator");
         assert!(manifest.updated_at > 0, "server stamps updated_at");
+        // The capacity snapshot returns unchanged with its manifest.
+        assert_eq!(manifest.capacity, Some(capacity(8)));
     }
 
     #[tokio::test]
@@ -470,7 +488,37 @@ mod tests {
         let svc = service();
         svc.set_cluster_component_info(Request::new(SetClusterComponentInfoRequest {
             components: vec![entry("coordinator", "oldsha"), entry("gpu-node", "oldsha")],
-            capacity: None,
+            capacity: Some(capacity(8)),
+        }))
+        .await
+        .unwrap();
+        svc.set_cluster_component_info(Request::new(SetClusterComponentInfoRequest {
+            components: vec![entry("coordinator", "newsha")],
+            capacity: Some(capacity(2)),
+        }))
+        .await
+        .unwrap();
+
+        let manifest = svc
+            .get_cluster_component_info(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+        // Replace, not merge: the gpu-node entry from the first push is gone.
+        assert_eq!(manifest.components.len(), 1);
+        assert_eq!(manifest.components[0].git_sha, "newsha");
+        // Capacity is replaced with the manifest, never merged.
+        assert_eq!(manifest.capacity, Some(capacity(2)));
+    }
+
+    #[tokio::test]
+    async fn set_without_capacity_stores_the_manifest_and_clears_capacity() {
+        // A push without capacity must clear the previous capacity. If it does not, a reader
+        // sees old counters attached to a new component list as a recent observation.
+        let svc = service();
+        svc.set_cluster_component_info(Request::new(SetClusterComponentInfoRequest {
+            components: vec![entry("coordinator", "oldsha")],
+            capacity: Some(capacity(8)),
         }))
         .await
         .unwrap();
@@ -486,8 +534,7 @@ mod tests {
             .await
             .unwrap()
             .into_inner();
-        // Replace, not merge: the gpu-node entry from the first push is gone.
-        assert_eq!(manifest.components.len(), 1);
         assert_eq!(manifest.components[0].git_sha, "newsha");
+        assert!(manifest.capacity.is_none());
     }
 }
