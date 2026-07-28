@@ -1076,6 +1076,7 @@ mod tests {
         let manifest = sp1_cluster_common::proto::ClusterComponentManifest {
             components: vec![],
             updated_at: 0,
+            capacity: None,
         };
         assert!(fresh_manifest_components(manifest, 1_000_000).is_err());
     }
@@ -1087,6 +1088,7 @@ mod tests {
         let manifest = sp1_cluster_common::proto::ClusterComponentManifest {
             components: vec![cluster_entry("coordinator", "coordsha")],
             updated_at: now - MAX_MANIFEST_AGE_SECS - 1,
+            capacity: None,
         };
         assert!(fresh_manifest_components(manifest, now).is_err());
     }
@@ -1100,6 +1102,7 @@ mod tests {
                 cluster_entry("cpu-node", "cpusha"),
             ],
             updated_at: now - 30,
+            capacity: None,
         };
         let components = fresh_manifest_components(manifest, now).unwrap();
         assert_eq!(components.len(), 2);
@@ -1112,6 +1115,7 @@ mod tests {
         let manifest = sp1_cluster_common::proto::ClusterComponentManifest {
             components: vec![cluster_entry("coordinator", "coordsha")],
             updated_at: now + 30,
+            capacity: None,
         };
         assert!(fresh_manifest_components(manifest, now).is_ok());
     }
