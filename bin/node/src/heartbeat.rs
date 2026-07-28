@@ -28,11 +28,9 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// Per-attempt deadline. A missed beat is dropped, never retried — the next
 /// tick is a fresher liveness signal than a stale delivery.
 const HEARTBEAT_RPC_TIMEOUT: Duration = Duration::from_secs(3);
-/// Two missed beats, after which the main loop covers.
-///
-/// Handing over costs this plus a prompt, so the coordinator's eviction
-/// timeout has to exceed `BEATS_STALE_AFTER + HEARTBEAT_INTERVAL` or it
-/// evicts a worker that was about to be covered. Its 30s default leaves 2x.
+/// Backstop for a thread that stops beating without reporting a failure —
+/// hung mid-send, or wedged before its first attempt. A thread that is still
+/// running hands over on the failed beat itself, well inside this.
 const BEATS_STALE_AFTER: Duration = Duration::from_secs(10);
 
 /// Stops the heartbeat thread when dropped.
@@ -98,25 +96,28 @@ impl Drop for HeartbeatHandle {
     }
 }
 
-/// When the dedicated thread last landed a beat.
+/// The dedicated thread's last beat, if it landed.
 ///
 /// The thread owns its own connection, which can die while the delivery stream
 /// stays healthy, and a worker that stops beating gets evicted no matter how
-/// alive it is. Tracks only the dedicated path: fallback beats deliberately do
-/// not refresh it, so the main loop keeps covering until the thread recovers.
+/// alive it is. So the main loop watches this and covers when it reads stale.
+///
+/// Holds only what is still worth trusting: a failed beat clears it outright
+/// rather than ageing out, because the eviction timeout is configurable and
+/// can be shorter than any threshold this could wait out. Tracks the dedicated
+/// path alone — fallback beats deliberately do not refresh it, so the main
+/// loop keeps covering until the thread itself recovers.
 pub(crate) struct BeatClock(Mutex<Option<Instant>>);
 
 impl BeatClock {
-    /// Starts stale: until the thread proves its connection works, the main
-    /// loop covers. A worker that boots into a broken connection has only
-    /// until the eviction timeout, which is shorter than [`BEATS_STALE_AFTER`]
-    /// on some clusters.
+    /// Starts stale: the main loop covers until the thread proves its
+    /// connection works.
     fn new() -> Self {
         Self(Mutex::new(None))
     }
 
-    fn record_ok(&self) {
-        *self.0.lock().unwrap() = Some(Instant::now());
+    fn record(&self, landed: bool) {
+        *self.0.lock().unwrap() = landed.then(Instant::now);
     }
 
     /// True when beats stopped landing, so the main loop should cover on the
@@ -192,9 +193,7 @@ async fn heartbeat_loop(
             _ = stop.cancelled() => return,
             _ = ticker.tick() => {}
         }
-        if send_beat(&client, &tasks).await {
-            clock.record_ok();
-        }
+        clock.record(send_beat(&client, &tasks).await);
     }
 }
 
@@ -296,12 +295,31 @@ mod tests {
         // start: on short eviction timeouts it has less than one stale window.
         assert!(clock.is_stale(), "a fresh clock claimed a beat had landed");
 
-        clock.record_ok();
+        clock.record(true);
         assert!(!clock.is_stale());
+    }
 
+    #[test]
+    fn a_failed_beat_hands_over_without_waiting() {
+        let clock = BeatClock::new();
+        clock.record(true);
+
+        clock.record(false);
+
+        // Not "ages out of the window" — the eviction timeout is configurable
+        // and can be shorter than any window we could wait out.
+        assert!(clock.is_stale(), "a failed beat still read healthy");
+    }
+
+    #[test]
+    fn beats_read_stale_once_they_stop_landing() {
+        let clock = BeatClock::new();
+
+        // A thread hung mid-send reports neither success nor failure.
         *clock.0.lock().unwrap() =
             Some(Instant::now() - BEATS_STALE_AFTER - Duration::from_secs(1));
-        assert!(clock.is_stale(), "beats stopped landing but read healthy");
+
+        assert!(clock.is_stale());
     }
 
     #[tokio::test]
