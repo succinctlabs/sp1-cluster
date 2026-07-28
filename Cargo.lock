@@ -8262,7 +8262,7 @@ dependencies = [
 
 [[package]]
 name = "sp1-cluster-coordinator"
-version = "0.1.0"
+version = "2.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8385,7 +8385,7 @@ dependencies = [
 
 [[package]]
 name = "sp1-cluster-node"
-version = "0.1.0"
+version = "2.6.0"
 dependencies = [
  "cfg-if",
  "ctrlc",

@@ -1,6 +1,6 @@
 [package]
 name = "sp1-cluster-node"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 
 [features]
