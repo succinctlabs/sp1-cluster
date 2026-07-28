@@ -357,7 +357,10 @@ impl ClusterService for ClusterServiceImpl {
         &self,
         request: Request<SetClusterComponentInfoRequest>,
     ) -> Result<Response<()>, Status> {
-        let components = request.into_inner().components;
+        let SetClusterComponentInfoRequest {
+            components,
+            capacity,
+        } = request.into_inner();
         let updated_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| Status::internal(format!("system time before unix epoch: {e}")))?
@@ -370,6 +373,7 @@ impl ClusterService for ClusterServiceImpl {
             .unwrap_or_else(|e| e.into_inner()) = ClusterComponentManifest {
             components,
             updated_at,
+            capacity,
         };
         Ok(Response::new(()))
     }
@@ -431,6 +435,7 @@ mod tests {
                 entry("coordinator", "abc1234"),
                 entry("cpu-node", "abc1234"),
             ],
+            capacity: None,
         }))
         .await
         .unwrap();
@@ -450,11 +455,13 @@ mod tests {
         let svc = service();
         svc.set_cluster_component_info(Request::new(SetClusterComponentInfoRequest {
             components: vec![entry("coordinator", "oldsha"), entry("gpu-node", "oldsha")],
+            capacity: None,
         }))
         .await
         .unwrap();
         svc.set_cluster_component_info(Request::new(SetClusterComponentInfoRequest {
             components: vec![entry("coordinator", "newsha")],
+            capacity: None,
         }))
         .await
         .unwrap();

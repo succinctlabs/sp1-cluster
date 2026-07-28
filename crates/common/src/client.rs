@@ -1,6 +1,7 @@
 use crate::{
     proto::{
         self, cluster_service_client::ClusterServiceClient as InnerClusterClient,
+        events::cluster_events_service_client::ClusterEventsServiceClient as InnerEventsClient,
         ProofRequestCancelRequest, ProofRequestCreateRequest, ProofRequestGetRequest,
         ProofRequestListRequest, ProofRequestUpdateRequest,
     },
@@ -74,6 +75,7 @@ pub async fn reconnect_with_backoff(addr: &str) -> Result<Channel> {
 #[derive(Clone)]
 pub struct ClusterServiceClient {
     pub rpc: InnerClusterClient<Channel>,
+    pub events: InnerEventsClient<Channel>,
     pub backoff: ExponentialBackoff,
 }
 
@@ -85,7 +87,12 @@ impl ClusterServiceClient {
             .build();
         let channel = reconnect_with_backoff(&addr).await?;
         let rpc = InnerClusterClient::new(channel.clone());
-        Ok(Self { rpc, backoff })
+        let events = InnerEventsClient::new(channel);
+        Ok(Self {
+            rpc,
+            events,
+            backoff,
+        })
     }
 
     /// Shared call policy: retry transient failures within the backoff budget, each attempt bounded
@@ -166,6 +173,10 @@ impl ClusterServiceClient {
             let mut client = self.rpc.clone();
             let request = proto::SetClusterComponentInfoRequest {
                 components: components.clone(),
+                // This coordinator doesn't build GPU capacity snapshots yet; the
+                // field is optional on the wire ("absent when the coordinator has
+                // no capacity data to report").
+                capacity: None,
             };
             async move { client.set_cluster_component_info(request).await }
         })

@@ -45,6 +45,7 @@ pub fn cluster_fulfillment_filter(
         S::Assigned => vec![],
         S::Fulfilled => vec![C::Completed],
         S::Unfulfillable => vec![C::Failed, C::Cancelled],
+        S::Reverted | S::Expired => vec![C::Failed],
     }
 }
 

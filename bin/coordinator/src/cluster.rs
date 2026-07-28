@@ -7,11 +7,13 @@ use hex;
 use sp1_cluster_common::{
     client::ClusterServiceClient,
     proto::{
-        CreateProofRequest, ProofRequestListRequest, ProofRequestStatus, ProofRequestUpdateRequest,
+        events::SubscribeProofEventsRequest, CreateProofRequest, ProofRequest,
+        ProofRequestGetRequest, ProofRequestListRequest, ProofRequestStatus,
+        ProofRequestUpdateRequest,
     },
 };
 use sp1_prover::worker::ControllerInputMetadata;
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{sync::mpsc, task::JoinHandle, time::Duration};
 
 /// What the coordinator knows about a proof it owns.
 #[derive(Clone)]
@@ -161,7 +163,19 @@ pub fn spawn_manifest_push_task<P: AssignmentPolicy>(
     })
 }
 
-/// Spawn a task to claim proofs from the cluster API. Stops when `token` fires.
+/// How often we re-list proof_requests as a safety net for missed NOTIFY events.
+///
+/// PgListener auto-reconnects on connection drops, but events emitted while
+/// the connection was down are lost. The catch-up at startup uses the same
+/// query, so a coordinator restart inherits everything pending. 1s feels
+/// snappy and an indexed `(handled, deadline, proof_status)` SELECT is
+/// effectively free at our scale; the dominant pickup path is still the
+/// event stream and only flaps fall back here.
+const SAFETY_NET_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Drive proof claims from a stream of `proof_event` NOTIFYs + a slow
+/// safety-net poll. Replaces the previous tight 500ms poll loop — new
+/// requests now hit the coordinator within ms instead of 0–500ms.
 pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
     api_client: Arc<ClusterServiceClient>,
     coordinator: Arc<Coordinator<P>>,
@@ -169,151 +183,278 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
     metrics: Arc<CoordinatorMetrics>,
     token: tokio_util::sync::CancellationToken,
 ) -> JoinHandle<()> {
-    tokio::task::spawn({
-        async move {
-            // Proof ids whose re-issue is in flight, so the next poll doesn't spawn a duplicate.
-            let reissue_inflight: Arc<DashSet<String>> = Arc::new(DashSet::new());
-            loop {
-                match api_client
-                    .get_proof_requests(ProofRequestListRequest {
-                        proof_status: vec![ProofRequestStatus::Pending.into()],
-                        handled: Some(false),
-                        minimum_deadline: Some(
-                            SystemTime::now()
-                                .duration_since(SystemTime::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs(),
-                        ),
-                        limit: Some(1000),
-                        ..Default::default()
-                    })
-                    .await
-                {
-                    Ok(response) => {
-                        let mut seen_set = HashSet::new();
-                        for proof in response.into_iter().rev() {
-                            seen_set.insert(proof.id.clone());
-                            if task_map.contains_key(&proof.id) {
-                                // Already tracking it (proving, or a lost write the sweep handles).
-                                continue;
-                            }
-                            let Some(options_artifact_id) = proof.options_artifact_id else {
-                                tracing::error!(
-                                    "Options artifact ID not found for proof {}",
-                                    proof.id
-                                );
-                                continue;
-                            };
-                            let Some(cycle_limit) = proof.cycle_limit else {
-                                tracing::error!("Cycle limit not found for proof {}", proof.id);
-                                continue;
-                            };
-                            let Some(proof_artifact_id) = proof.proof_artifact_id else {
-                                tracing::error!(
-                                    "Proof artifact ID not found for proof {}",
-                                    proof.id
-                                );
-                                continue;
-                            };
+    tokio::task::spawn(async move {
+        // Proof ids whose re-issue is in flight, so the next sweep doesn't spawn a duplicate.
+        let reissue_inflight: Arc<DashSet<String>> = Arc::new(DashSet::new());
 
-                            let proof_nonce = String::new();
-                            let metadata = match serde_json::to_string(&ControllerInputMetadata {
-                                stdin_private: proof.stdin_private,
-                            }) {
-                                Ok(metadata) => metadata,
-                                Err(e) => {
-                                    tracing::error!(
-                                        "Failed to serialize ControllerInputMetadata: {e}"
-                                    );
-                                    continue;
-                                }
-                            };
+        // Initial catch-up: claim any pending requests that already exist
+        // (coordinator restart / pre-existing rows that won't fire NOTIFY).
+        reconcile_pending(
+            &api_client,
+            &coordinator,
+            &task_map,
+            &metrics,
+            &reissue_inflight,
+        )
+        .await;
 
-                            // TODO: could bulk create
-                            let inputs = vec![
-                                proof.program_artifact_id,
-                                proof.stdin_artifact_id,
-                                options_artifact_id,
-                                cycle_limit.to_string(),
-                                proof_nonce,
-                                metadata,
-                            ];
-                            let outputs = vec![proof_artifact_id];
-                            tracing::info!("inputs: {:?}", inputs);
-                            tracing::info!("outputs: {:?}", outputs);
-                            match coordinator
-                                .create_proof(CreateProofRequest {
-                                    proof_id: proof.id.clone(),
-                                    inputs,
-                                    outputs,
-                                    requester: hex::encode(proof.requester),
-                                    expires_at: proof.deadline as i64,
-                                })
-                                .await
-                            {
-                                Ok(task_id) => {
-                                    tracing::info!(
-                                        "Created proof {} with task {}",
-                                        proof.id,
-                                        task_id
-                                    );
-                                    task_map.insert(proof.id, TaskState::Pending);
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to create proof: {}", e);
-                                }
-                            }
-                        }
-                        // Fail a Pending proof that vanished from the DB list. Keep every Terminal
-                        // entry (it may just be on a later page) — removed only when its write lands.
-                        let mut proofs_to_fail = vec![];
-                        task_map.retain(|id, state| match state {
-                            TaskState::Pending if !seen_set.contains(id) => {
-                                tracing::warn!(
-                                    "Running proof {} is no longer in cluster DB list",
-                                    id
-                                );
-                                proofs_to_fail.push(id.clone());
-                                false
-                            }
-                            _ => true,
-                        });
-                        for id in proofs_to_fail {
-                            if let Err(e) =
-                                coordinator.fail_proof(id.clone(), None, false, None).await
-                            {
-                                tracing::error!("Failed to fail expired proof: {:?}", e);
-                            }
-                        }
+        // Run the event-driven and safety-net loops concurrently. Either
+        // one encountering a transient error logs and retries — we don't
+        // want a stream blip to lose us all subsequent claims.
+        let stream_loop =
+            run_event_stream(api_client.clone(), coordinator.clone(), task_map.clone());
+        let safety_loop =
+            run_safety_net_poll(api_client, coordinator, task_map, metrics, reissue_inflight);
 
-                        // Sweep all unconfirmed terminal writes (not just this page), so a lost write
-                        // beyond the 1000-row page still recovers.
-                        let unconfirmed: Vec<ProofRequestUpdateRequest> = task_map
-                            .iter()
-                            .filter_map(|e| match e.value() {
-                                TaskState::Terminal(update) => Some(update.clone()),
-                                TaskState::Pending => None,
-                            })
-                            .collect();
-                        for update in unconfirmed {
-                            reissue_lost_status_write(
-                                &api_client,
-                                &metrics,
-                                &reissue_inflight,
-                                &task_map,
-                                update,
-                            );
-                        }
+        tokio::select! {
+            _ = async { tokio::join!(stream_loop, safety_loop); } => {}
+            _ = token.cancelled() => {}
+        }
+    })
+}
+
+async fn run_event_stream<P: AssignmentPolicy>(
+    api_client: Arc<ClusterServiceClient>,
+    coordinator: Arc<Coordinator<P>>,
+    task_map: Arc<DashMap<String, TaskState>>,
+) {
+    let pending_status: i32 = ProofRequestStatus::Pending.into();
+    let mut backoff = Duration::from_millis(200);
+    loop {
+        let mut events = api_client.events.clone();
+        let stream = match events
+            .subscribe_proof_events(SubscribeProofEventsRequest::default())
+            .await
+        {
+            Ok(resp) => resp.into_inner(),
+            Err(e) => {
+                tracing::warn!(
+                    "subscribe_proof_events failed: {e}; retrying in {:?}",
+                    backoff
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(10));
+                continue;
+            }
+        };
+        backoff = Duration::from_millis(200);
+
+        let mut stream = stream;
+        loop {
+            match stream.message().await {
+                Ok(Some(event)) => {
+                    // Only react to fresh PENDING rows; status transitions
+                    // (Failed/Completed/Cancelled) don't need a coordinator
+                    // claim. The safety-net loop reconciles task_map for
+                    // out-of-band deletes / cancels.
+                    if event.proof_status != pending_status || event.handled {
+                        continue;
                     }
-                    Err(e) => {
-                        tracing::error!("Failed to get filtered tasks: {}", e);
+                    if task_map.contains_key(&event.proof_id) {
+                        continue;
                     }
+                    claim_one(&api_client, &coordinator, &task_map, &event.proof_id).await;
                 }
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
-                    _ = token.cancelled() => break,
+                Ok(None) => {
+                    tracing::warn!("proof_event stream closed; reconnecting");
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!("proof_event stream error: {e}; reconnecting");
+                    break;
                 }
             }
         }
-    })
+    }
+}
+
+async fn run_safety_net_poll<P: AssignmentPolicy>(
+    api_client: Arc<ClusterServiceClient>,
+    coordinator: Arc<Coordinator<P>>,
+    task_map: Arc<DashMap<String, TaskState>>,
+    metrics: Arc<CoordinatorMetrics>,
+    reissue_inflight: Arc<DashSet<String>>,
+) {
+    loop {
+        tokio::time::sleep(SAFETY_NET_INTERVAL).await;
+        reconcile_pending(
+            &api_client,
+            &coordinator,
+            &task_map,
+            &metrics,
+            &reissue_inflight,
+        )
+        .await;
+    }
+}
+
+/// Event-path: fetch a single proof_request by id and dispatch if new.
+/// Cheaper than the safety-net's full list — at high event rates the load
+/// stays O(1) per event instead of O(N) per event.
+async fn claim_one<P: AssignmentPolicy>(
+    api_client: &ClusterServiceClient,
+    coordinator: &Arc<Coordinator<P>>,
+    task_map: &Arc<DashMap<String, TaskState>>,
+    proof_id: &str,
+) {
+    let proof = match api_client
+        .get_proof_request(ProofRequestGetRequest {
+            proof_id: proof_id.to_string(),
+        })
+        .await
+    {
+        Ok(Some(proof)) => proof,
+        Ok(None) => {
+            tracing::warn!("event for unknown proof {proof_id}");
+            return;
+        }
+        Err(e) => {
+            tracing::error!("Failed to fetch proof {proof_id}: {e}");
+            return;
+        }
+    };
+
+    // The row may have transitioned between NOTIFY and our SELECT. Re-check
+    // before claiming so a Cancelled row doesn't get scheduled.
+    if proof.proof_status != i32::from(ProofRequestStatus::Pending) || proof.handled {
+        return;
+    }
+
+    dispatch_proof(coordinator, task_map, proof).await;
+}
+
+/// Safety-net path: full list of pending proof_requests, dispatch any new
+/// ones, and reconcile `task_map` against the DB. Catches missed events
+/// (PG NOTIFY drops on listener reconnect) and out-of-band cancellations.
+async fn reconcile_pending<P: AssignmentPolicy>(
+    api_client: &Arc<ClusterServiceClient>,
+    coordinator: &Arc<Coordinator<P>>,
+    task_map: &Arc<DashMap<String, TaskState>>,
+    metrics: &Arc<CoordinatorMetrics>,
+    reissue_inflight: &Arc<DashSet<String>>,
+) {
+    let response = match api_client
+        .get_proof_requests(ProofRequestListRequest {
+            proof_status: vec![ProofRequestStatus::Pending.into()],
+            handled: Some(false),
+            minimum_deadline: Some(
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            ),
+            limit: Some(1000),
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(response) => response,
+        Err(e) => {
+            tracing::error!("Failed to list pending proofs: {}", e);
+            return;
+        }
+    };
+
+    let mut seen_set = HashSet::new();
+    for proof in response.into_iter().rev() {
+        seen_set.insert(proof.id.clone());
+        if task_map.contains_key(&proof.id) {
+            continue;
+        }
+        dispatch_proof(coordinator, task_map, proof).await;
+    }
+
+    // Reconcile: fail a Pending proof that vanished from the DB list (cancelled
+    // out-of-band etc.) so the worker pipeline doesn't keep spinning on it. Keep
+    // every Terminal entry (it may just be on a later page) — removed only when
+    // its write lands.
+    let mut proofs_to_fail = vec![];
+    task_map.retain(|id, state| match state {
+        TaskState::Pending if !seen_set.contains(id) => {
+            tracing::warn!("Running proof {} is no longer in cluster DB list", id);
+            proofs_to_fail.push(id.clone());
+            false
+        }
+        _ => true,
+    });
+    for id in proofs_to_fail {
+        if let Err(e) = coordinator.fail_proof(id.clone(), None, false, None).await {
+            tracing::error!("Failed to fail expired proof: {:?}", e);
+        }
+    }
+
+    // Sweep all unconfirmed terminal writes (not just this page), so a lost write
+    // beyond the 1000-row page still recovers.
+    let unconfirmed: Vec<ProofRequestUpdateRequest> = task_map
+        .iter()
+        .filter_map(|e| match e.value() {
+            TaskState::Terminal(update) => Some(update.clone()),
+            TaskState::Pending => None,
+        })
+        .collect();
+    for update in unconfirmed {
+        reissue_lost_status_write(api_client, metrics, reissue_inflight, task_map, update);
+    }
+}
+
+/// Build a CreateProofRequest from a DB row and hand it to the coordinator.
+/// Skips and logs if any required artifact id is missing — same defensive
+/// posture the old polling loop had.
+async fn dispatch_proof<P: AssignmentPolicy>(
+    coordinator: &Arc<Coordinator<P>>,
+    task_map: &Arc<DashMap<String, TaskState>>,
+    proof: ProofRequest,
+) {
+    let Some(options_artifact_id) = proof.options_artifact_id else {
+        tracing::error!("Options artifact ID not found for proof {}", proof.id);
+        return;
+    };
+    let Some(cycle_limit) = proof.cycle_limit else {
+        tracing::error!("Cycle limit not found for proof {}", proof.id);
+        return;
+    };
+    let Some(proof_artifact_id) = proof.proof_artifact_id else {
+        tracing::error!("Proof artifact ID not found for proof {}", proof.id);
+        return;
+    };
+    let proof_nonce = String::new();
+    let metadata = match serde_json::to_string(&ControllerInputMetadata {
+        stdin_private: proof.stdin_private,
+    }) {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            tracing::error!("Failed to serialize ControllerInputMetadata: {e}");
+            return;
+        }
+    };
+
+    let inputs = vec![
+        proof.program_artifact_id,
+        proof.stdin_artifact_id,
+        options_artifact_id,
+        cycle_limit.to_string(),
+        proof_nonce,
+        metadata,
+    ];
+    let outputs = vec![proof_artifact_id];
+    tracing::info!("inputs: {:?}", inputs);
+    tracing::info!("outputs: {:?}", outputs);
+    match coordinator
+        .create_proof(CreateProofRequest {
+            proof_id: proof.id.clone(),
+            inputs,
+            outputs,
+            requester: hex::encode(proof.requester),
+            expires_at: proof.deadline as i64,
+        })
+        .await
+    {
+        Ok(task_id) => {
+            tracing::info!("Created proof {} with task {}", proof.id, task_id);
+            task_map.insert(proof.id, TaskState::Pending);
+        }
+        Err(e) => {
+            tracing::error!("Failed to create proof: {}", e);
+        }
+    }
 }

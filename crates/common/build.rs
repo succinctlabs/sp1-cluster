@@ -3,6 +3,11 @@ use std::env;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-env-changed=BUILD_GIT_SHA");
+    println!("cargo:rerun-if-changed=proto/cluster_events.proto");
+
+    tonic_build::configure()
+        .protoc_arg("--experimental_allow_proto3_optional")
+        .compile_protos(&["proto/cluster_events.proto"], &["proto/"])?;
 
     let git_sha = match env::var("BUILD_GIT_SHA") {
         Ok(git_sha) => git_sha,
