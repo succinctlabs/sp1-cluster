@@ -6,7 +6,9 @@ services:
       - REDIS_PASSWORD=redispassword
       - REDIS_AOF_ENABLED=no
       # Keep below the cgroup limit; RSS overshoots maxmemory via fragmentation.
-      - REDIS_EXTRA_FLAGS=--maxmemory 28gb
+      # Sized ~6x the observed artifact peak (1.5G) on this 2-GPU box; a deeper
+      # proof backlog needs this raised.
+      - REDIS_EXTRA_FLAGS=--maxmemory 10gb
     volumes:
       - redis_data:/bitnami/redis/data
     ports:
@@ -14,9 +16,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 30G
+          memory: 12G
         reservations:
-          memory: 30G
+          memory: 12G
 
   # PostgreSQL database
   postgresql:
@@ -32,7 +34,7 @@ services:
 
   # API Service
   api:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.5.4
+    image: ghcr.io/succinctlabs/sp1-cluster:base-2407b9c
     environment:
       - API_GRPC_ADDR=0.0.0.0:50051
       - API_HTTP_ADDR=0.0.0.0:3000
@@ -45,7 +47,7 @@ services:
 
   # Coordinator Service
   coordinator:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.5.4
+    image: ghcr.io/succinctlabs/sp1-cluster:base-2407b9c
     environment:
       - COORDINATOR_CLUSTER_RPC=http://api:50051
       - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
@@ -60,15 +62,28 @@ services:
 
   # CPU Node
   cpu-node:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.5.4
+    image: ghcr.io/succinctlabs/sp1-cluster:base-2407b9c
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       # Concurrency budget: GiB of RAM dedicated to THIS worker, not the host total.
       # On a shared host (redis/coordinator/etc. co-located) the container memory limit
       # overstates what the worker owns, so the auto-derived budget over-admits tasks —
-      # pin it explicitly. Never above deploy.resources.limits.memory below; set lower
-      # when CPU cores are the binding resource.
-      - WORKER_MAX_WEIGHT_OVERRIDE=96
+      # pin it explicitly. Keep below deploy.resources.limits.memory: the budget only
+      # counts task working sets, not the worker's resident baseline. 34 = two
+      # overlapping CoreExecutes plus controllers; raise by >=14 per concurrent
+      # Groth16Wrap if wrap requests arrive via the gateway/SPN.
+      - WORKER_MAX_WEIGHT_OVERRIDE=34
+      # Task weights are stamped at task creation by the controller running HERE —
+      # GPU nodes only read the stamped value, so these must be set on this worker.
+      # Raised over the defaults (4/8) because SP1_CLUSTER_SHARD_THRESHOLD below is
+      # 2x the cluster default (it's the full sp1 ELEMENT_THRESHOLD). Calibrated
+      # against measured v6/rsp cgroup peaks, not doubled blindly: ~2.7GiB avg
+      # incremental per in-flight ProveShard on the GPU workers (peak-ish 6), and
+      # ~12-13GiB per CoreExecute here. Shard weight 8 halved GPU pipeline depth
+      # and cost ~30% e2e (44s -> 57s); keep weight x depth aligned with the GPU
+      # workers' WORKER_MAX_WEIGHT_OVERRIDE (4 shards in flight).
+      - WORKER_PROVE_SHARD_WEIGHT=6
+      - WORKER_CORE_EXECUTE_WEIGHT=16
       - NODE_ARTIFACT_STORE=redis
       - SP1_CLUSTER_SHARD_THRESHOLD=402653184
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
@@ -76,26 +91,28 @@ services:
     volumes:
       - ${HOME}/.sp1/circuits:/root/.sp1/circuits
     command: ["/bin/sh", "-c", "/node"]
-    shm_size: 96G
+    # Keep shm_size <= the memory limit: shm pages count against the cgroup, and a
+    # larger shm just converts "tmpfs full" errors into OOM kills.
+    shm_size: 44G
     deploy:
       resources:
         limits:
           cpus: "8"
-          memory: 96G
+          memory: 44G
         reservations:
           cpus: "8"
-          memory: 96G
+          memory: 44G
     depends_on:
       - coordinator
       - redis
 
   # CPU Node
   mixed:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.5.4
+    image: ghcr.io/succinctlabs/sp1-cluster:base-2407b9c
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       # See cpu-node: GiB dedicated to this worker, at most the 96G limit below.
-      - WORKER_MAX_WEIGHT_OVERRIDE=96
+      - WORKER_MAX_WEIGHT_OVERRIDE=60
       - NODE_ARTIFACT_STORE=redis
       - SP1_CLUSTER_SHARD_THRESHOLD=402653184
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
@@ -108,32 +125,40 @@ services:
       resources:
         limits:
           cpus: "8"
-          memory: 96G
+          memory: 60G
         reservations:
           cpus: "8"
-          memory: 96G
+          memory: 60G
     depends_on:
       - coordinator
       - redis
 
   # GPU Node
   gpu0:
-    image: ghcr.io/succinctlabs/sp1-cluster:node-gpu-v2.5.4
+    image: ghcr.io/succinctlabs/sp1-cluster:node-gpu-2407b9c
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
-      # Must be <= container memory in GiB (see deploy.resources.limits.memory below).
-      - WORKER_MAX_WEIGHT_OVERRIDE=60
+      # Budget for task working sets only. The GPU node also holds a ~11.5 GiB
+      # resident baseline (CUDA/driver shared memory), so keep
+      # baseline + override <= deploy.resources.limits.memory — 18/18G ignored the
+      # baseline and got memcg OOM-killed. 24 = 4 ProveShards (weight 6) or
+      # 3 shards + 2 reduces in flight, the depth that measured 44s on v6/rsp;
+      # depth 2 measured 57s (GPU stalls on per-shard fetch+tracegen, which runs
+      # in THIS worker — a short queue starves the GPU even when the cpu-node is
+      # producing tasks quickly).
+      - WORKER_MAX_WEIGHT_OVERRIDE=24
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=GPU
+      - SP1_WORKER_VERIFY_INTERMEDIATES=false
     deploy:
       resources:
         limits:
-          cpus: "46"
-          memory: 60G
+          cpus: "20"
+          memory: 28G
         reservations:
-          cpus: "46"
-          memory: 60G
+          cpus: "20"
+          memory: 28G
     depends_on:
       - coordinator
       - redis
@@ -186,7 +211,7 @@ services:
   # Fulfiller Service
   # DOMAIN: set to SPN_MAINNET_V1_DOMAIN for mainnet, defaults to SPN_SEPOLIA_V1_DOMAIN
   fulfiller:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.5.4
+    image: ghcr.io/succinctlabs/sp1-cluster:base-2407b9c
     environment:
       - FULFILLER_CLUSTER_RPC=http://api:50051
       - FULFILLER_LOG_FORMAT=Pretty
@@ -208,7 +233,7 @@ services:
   # why the default points at 127.0.0.1:8081 (same host as compose). For
   # remote SDK callers, override it to your public hostname.
   network-gateway:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.5.4
+    image: ghcr.io/succinctlabs/sp1-cluster:base-2407b9c
     profiles: ["gateway"]
     environment:
       - GATEWAY_GRPC_ADDR=0.0.0.0:50061
@@ -229,7 +254,7 @@ services:
 
   # Bidder Service
   bidder:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.5.4
+    image: ghcr.io/succinctlabs/sp1-cluster:base-2407b9c
     environment:
       - BIDDER_LOG_FORMAT=Pretty
       - BIDDER_VERSION=sp1-v6.1.0
