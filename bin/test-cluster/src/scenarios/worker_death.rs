@@ -21,13 +21,14 @@ pub fn scenario() -> Scenario {
 /// work is requeued, then bring a worker back and verify the proof still completes.
 ///
 /// Deterministic single-victim design: exactly one CPU node, so the killed node is
-/// guaranteed to own the controller task. The heartbeat timeout is shortened to 5s so the
-/// requeue path doesn't idle for the prod default of 30s.
+/// guaranteed to own the controller task. The heartbeat timeout drops to the floor so the
+/// requeue path doesn't idle for the prod default of 30s — any lower and the surviving
+/// worker gets evicted too.
 async fn run() -> anyhow::Result<()> {
     let mut cluster = Cluster::builder()
         .cpu_nodes(1)
         .gpu_nodes(1)
-        .worker_heartbeat_timeout_secs(5)
+        .worker_heartbeat_timeout_secs(sp1_cluster_coordinator::MIN_WORKER_HEARTBEAT_TIMEOUT)
         .start()
         .await?;
     let api = cluster.api_client().await?;

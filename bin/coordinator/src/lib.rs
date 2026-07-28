@@ -105,6 +105,17 @@ const MAX_TASK_RETRIES: u8 = 3;
 /// Configurable per-coordinator via `Settings::worker_heartbeat_timeout_secs`.
 pub const DEFAULT_WORKER_HEARTBEAT_TIMEOUT: u64 = 30;
 
+/// How often workers are prompted to prove they are alive.
+pub const SERVER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Below this, healthy workers get evicted.
+///
+/// A worker only answers when prompted, and covering for a failed heartbeat
+/// path costs it an interval to attempt a beat, an RPC deadline to give up on
+/// it, another interval for the next prompt, and a second deadline for the
+/// covering beat. Four intervals holds that with margin to spare.
+pub const MIN_WORKER_HEARTBEAT_TIMEOUT: u64 = 4 * SERVER_HEARTBEAT_INTERVAL.as_secs();
+
 /// The default weight of a GPU instance
 pub const DEFAULT_GPU_INSTANCE_WEIGHT: u32 = 24;
 
@@ -492,8 +503,24 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .execute_only_mode = execute_only_mode;
     }
 
-    /// Set the dead-worker heartbeat timeout (seconds).
+    /// Set the dead-worker heartbeat timeout (seconds), never below
+    /// [`MIN_WORKER_HEARTBEAT_TIMEOUT`].
+    ///
+    /// Clamped rather than honoured, because under the floor every healthy
+    /// worker is evicted and requeued on a loop — a cluster-wide outage, not
+    /// the faster failure detection the setting reads like.
     pub async fn set_worker_heartbeat_timeout(&self, secs: u64) {
+        let secs = if secs < MIN_WORKER_HEARTBEAT_TIMEOUT {
+            tracing::warn!(
+                "worker heartbeat timeout {}s is under the {}s floor; using the floor, since \
+                 workers cannot prove liveness that fast",
+                secs,
+                MIN_WORKER_HEARTBEAT_TIMEOUT
+            );
+            MIN_WORKER_HEARTBEAT_TIMEOUT
+        } else {
+            secs
+        };
         self.state
             .write()
             .instrument(tracing::debug_span!("acquire_write"))
@@ -2352,6 +2379,19 @@ mod tests {
         let c = Arc::new(coordinator());
         let err = c.close_worker("nonexistent".into()).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_timeout_cannot_be_set_below_the_floor() {
+        let c = Arc::new(coordinator());
+
+        c.set_worker_heartbeat_timeout(5).await;
+
+        assert_eq!(
+            c.state.read().await.worker_heartbeat_timeout_secs,
+            MIN_WORKER_HEARTBEAT_TIMEOUT,
+            "a timeout no worker can meet was accepted"
+        );
     }
 
     #[tokio::test]
