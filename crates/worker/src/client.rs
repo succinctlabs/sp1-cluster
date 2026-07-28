@@ -25,7 +25,7 @@ use tonic::Status;
 
 /// Retry policies. Each call site picks one explicitly — no shared default,
 /// so failure semantics can't be inherited silently.
-/// `infinite` for calls that must eventually land (heartbeat, reports).
+/// `infinite` for calls that must eventually land (task reports, close).
 /// `bounded` for calls whose `Err` is a signal the caller acts on.
 mod retry {
     use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
@@ -120,23 +120,17 @@ impl WorkerServiceClient {
         Ok(server_rx)
     }
 
+    /// Single heartbeat attempt — no internal retry. Callers own the cadence;
+    /// a periodic sender should drop a missed beat, not retry a stale one.
+    pub async fn heartbeat_once(&self, request: HeartbeatRequest) -> Result<(), Status> {
+        self.client.clone().heartbeat(request).await.map(|_| ())
+    }
+
     pub async fn close(&self, request: CloseRequest) -> anyhow::Result<()> {
         backoff::future::retry(retry::infinite(), || async {
             self.client
                 .clone()
                 .close(request.clone())
-                .await
-                .map_err(status_to_backoff_error)
-        })
-        .await?;
-        Ok(())
-    }
-
-    pub async fn heartbeat(&self, request: HeartbeatRequest) -> Result<(), Status> {
-        backoff::future::retry(retry::infinite(), || async {
-            self.client
-                .clone()
-                .heartbeat(request.clone())
                 .await
                 .map_err(status_to_backoff_error)
         })
