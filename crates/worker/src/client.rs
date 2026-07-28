@@ -76,6 +76,7 @@ impl WorkerServiceClient {
         let (server_tx, server_rx) = mpsc::unbounded_channel();
 
         // Perform the initial "Open" request
+        let (gpu_name, gpu_memory_total_bytes) = gpu_identity();
         let init_msg = OpenRequest {
             worker_id: self.worker_id.clone(),
             worker_type: self.worker_type as i32,
@@ -87,6 +88,8 @@ impl WorkerServiceClient {
             version: env!("CARGO_PKG_VERSION").to_string(),
             git_sha: crate::VERGEN_GIT_SHA.to_string(),
             image_tag: std::env::var("IMAGE_TAG").unwrap_or_default(),
+            gpu_name,
+            gpu_memory_total_bytes,
         };
         let response = backoff_retry(retry::infinite(), || {
             let mut client = self.client.clone();
@@ -658,6 +661,35 @@ async fn drive_message_stream<S, F, Fut>(
         }
         break;
     }
+}
+
+/// GPU identity self-reported in the Open handshake (sp1#2903): device name
+/// (e.g. "NVIDIA L4") and total device memory. Empty values mean "worker does
+/// not report" on the wire, which is what CPU builds send. Query failures also
+/// degrade to empty rather than blocking the handshake: a GPU worker that
+/// can't see its device will fail loudly at task time anyway.
+#[cfg(feature = "gpu")]
+fn gpu_identity() -> (String, u64) {
+    let gpu_name = match sp1_gpu_cudart::cuda_device_name() {
+        Ok(name) => name.to_string(),
+        Err(e) => {
+            tracing::warn!("failed to query CUDA device name for Open request: {e}");
+            String::new()
+        }
+    };
+    let gpu_memory_total_bytes = match sp1_gpu_cudart::cuda_memory_info() {
+        Ok((_free, total)) => total as u64,
+        Err(e) => {
+            tracing::warn!("failed to query CUDA memory info for Open request: {e}");
+            0
+        }
+    };
+    (gpu_name, gpu_memory_total_bytes)
+}
+
+#[cfg(not(feature = "gpu"))]
+fn gpu_identity() -> (String, u64) {
+    (String::new(), 0)
 }
 
 #[cfg(test)]

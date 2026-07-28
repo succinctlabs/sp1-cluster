@@ -173,6 +173,10 @@ impl ClusterServiceClient {
             let mut client = self.rpc.clone();
             let request = proto::SetClusterComponentInfoRequest {
                 components: components.clone(),
+                // This coordinator doesn't build GPU capacity snapshots yet; the
+                // field is optional on the wire ("absent when the coordinator has
+                // no capacity data to report").
+                capacity: None,
             };
             async move { client.set_cluster_component_info(request).await }
         })
