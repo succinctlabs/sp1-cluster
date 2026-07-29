@@ -105,6 +105,17 @@ const MAX_TASK_RETRIES: u8 = 3;
 /// Configurable per-coordinator via `Settings::worker_heartbeat_timeout_secs`.
 pub const DEFAULT_WORKER_HEARTBEAT_TIMEOUT: u64 = 30;
 
+/// How often workers are prompted to prove they are alive.
+pub const SERVER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Below this, healthy workers get evicted.
+///
+/// A worker only answers when prompted, and covering for a failed heartbeat
+/// path costs it an interval to attempt a beat, an RPC deadline to give up on
+/// it, another interval for the next prompt, and a second deadline for the
+/// covering beat. Four intervals holds that with margin to spare.
+pub const MIN_WORKER_HEARTBEAT_TIMEOUT: u64 = 4 * SERVER_HEARTBEAT_INTERVAL.as_secs();
+
 /// The default weight of a GPU instance
 pub const DEFAULT_GPU_INSTANCE_WEIGHT: u32 = 24;
 
@@ -492,8 +503,24 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .execute_only_mode = execute_only_mode;
     }
 
-    /// Set the dead-worker heartbeat timeout (seconds).
+    /// Set the dead-worker heartbeat timeout (seconds), never below
+    /// [`MIN_WORKER_HEARTBEAT_TIMEOUT`].
+    ///
+    /// Clamped rather than honoured, because under the floor every healthy
+    /// worker is evicted and requeued on a loop — a cluster-wide outage, not
+    /// the faster failure detection the setting reads like.
     pub async fn set_worker_heartbeat_timeout(&self, secs: u64) {
+        let secs = if secs < MIN_WORKER_HEARTBEAT_TIMEOUT {
+            tracing::warn!(
+                "worker heartbeat timeout {}s is under the {}s floor; using the floor, since \
+                 workers cannot prove liveness that fast",
+                secs,
+                MIN_WORKER_HEARTBEAT_TIMEOUT
+            );
+            MIN_WORKER_HEARTBEAT_TIMEOUT
+        } else {
+            secs
+        };
         self.state
             .write()
             .instrument(tracing::debug_span!("acquire_write"))
@@ -692,6 +719,23 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         Ok(())
     }
 
+    /// Total weight of the tasks this coordinator has assigned to a worker.
+    ///
+    /// Heartbeats carry the worker's own count, but it snapshots that before
+    /// taking delivery of tasks already sent to it. Trusting the snapshot
+    /// would free capacity that is spoken for and pile more work on a worker
+    /// that is already behind.
+    fn assigned_weight(
+        state: &CoordinatorState<P>,
+        active_tasks: &HashSet<(String, String)>,
+    ) -> u32 {
+        active_tasks
+            .iter()
+            .filter_map(|(proof_id, task_id)| state.proofs.get(proof_id)?.tasks.get(task_id))
+            .map(|task| task.data.weight)
+            .sum()
+    }
+
     /// Handle a heartbeat from a worker.
     pub async fn handle_heartbeat(
         self: &Arc<Self>,
@@ -716,7 +760,6 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        worker.weight = current_weight;
 
         // Handle any tasks the worker is working on that are not tracked in the coordinator, and
         // cancel them.
@@ -774,8 +817,19 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 }
             }
         }
+        let assigned = Self::assigned_weight(&state, &worker.active_tasks);
+        if assigned != current_weight {
+            tracing::debug!(
+                "worker {} reports weight {} against {} assigned",
+                worker_id,
+                current_weight,
+                assigned
+            );
+        }
+
         let mut should_assign = false;
         let worker = state.workers.get_mut(worker_id).unwrap();
+        worker.weight = assigned;
         if !tasks_to_remove.is_empty() {
             for tuple in tasks_to_remove {
                 worker.active_tasks.remove(&tuple);
@@ -2325,6 +2379,47 @@ mod tests {
         let c = Arc::new(coordinator());
         let err = c.close_worker("nonexistent".into()).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_timeout_cannot_be_set_below_the_floor() {
+        let c = Arc::new(coordinator());
+
+        c.set_worker_heartbeat_timeout(5).await;
+
+        assert_eq!(
+            c.state.read().await.worker_heartbeat_timeout_secs,
+            MIN_WORKER_HEARTBEAT_TIMEOUT,
+            "a timeout no worker can meet was accepted"
+        );
+    }
+
+    #[tokio::test]
+    async fn heartbeat_weight_follows_assignments_not_the_worker_snapshot() {
+        let c = Arc::new(coordinator());
+        let _rx = {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            state
+                .proofs
+                .get_mut("p1")
+                .unwrap()
+                .tasks
+                .get_mut("t1")
+                .unwrap()
+                .data
+                .weight = 10;
+            insert_dead_worker(&mut state, "w1", WorkerType::Gpu, &[("p1", "t1")])
+        };
+
+        // A worker that has not yet taken delivery reports no tasks, no weight.
+        c.handle_heartbeat("w1", &[], &[], 0).await.unwrap();
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.workers["w1"].weight, 10,
+            "an under-reported snapshot freed capacity that is already assigned"
+        );
     }
 
     #[tokio::test]

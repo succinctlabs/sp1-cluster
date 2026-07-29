@@ -1,12 +1,13 @@
 pub mod config;
+mod heartbeat;
 
 use config::NodeConfig;
+use heartbeat::{send_beat, HeartbeatHandle};
 
 use dashmap::DashMap;
 use sp1_cluster_artifact::ArtifactClient;
 use sp1_cluster_common::proto::{
-    self, server_message, CloseRequest, CompleteTaskRequest, FailTaskRequest, HeartbeatRequest,
-    TaskData, WorkerType,
+    self, server_message, CloseRequest, CompleteTaskRequest, FailTaskRequest, TaskData, WorkerType,
 };
 use sp1_cluster_worker::client::WorkerServiceClient;
 use sp1_cluster_worker::config::cluster_worker_config;
@@ -166,15 +167,21 @@ pub async fn run_gpu_worker(
     .unwrap()
 }
 
-type ActiveTask = (TaskData, JoinHandle<()>, Instant);
+pub(crate) type ActiveTask = (TaskData, JoinHandle<()>, Instant);
+
 async fn run_worker_inner(
     node_config: NodeConfig,
     token: CancellationToken,
     worker_client: WorkerServiceClient,
     worker: Arc<SP1ClusterWorker<impl WorkerClient, impl ArtifactClient, impl SP1ProverComponents>>,
 ) -> eyre::Result<()> {
+    let tasks: Arc<DashMap<(String, String), ActiveTask>> = Arc::new(DashMap::new());
+
+    // Beats stop when this future ends (return or harness kill).
+    let heartbeat = HeartbeatHandle::spawn(node_config.clone(), tasks.clone(), token.clone())?;
+
     let main_handle = tokio::spawn({
-        let tasks: Arc<DashMap<(String, String), ActiveTask>> = Arc::new(DashMap::new());
+        let beats = heartbeat.clock();
         // `open()` is single-attempt; retry here so a worker booting before
         // the coordinator is reachable waits instead of crash-looping.
         let mut channel = loop {
@@ -190,23 +197,44 @@ async fn run_worker_inner(
         let token = token.clone();
         async move {
             let mut last_heartbeat = Instant::now();
-            // A reconnect can "succeed" (channel opens) yet never carry
-            // another message — we would loop forever, looking healthy from
-            // outside. Progress = an inbound message, or a failed connect
-            // (unreachable coordinator is an outage, not a wedge: keep
-            // retrying). Sustained silence while reconnects succeed means
-            // wedged channel state: exit for a clean restart. The coordinator
-            // evicts silent workers and requeues their tasks long before this
-            // fires.
+            // A reconnect can "succeed" yet carry no message, and the dedicated
+            // thread keeps beating, so the coordinator would hold this worker
+            // forever. Exiting stops the beats and lets it requeue. Progress is
+            // an inbound message or a failed connect — an unreachable
+            // coordinator is an outage, not a wedge, so keep retrying.
+            //
+            // Prompts come every 5s and 10s of quiet forces a reconnect, so 45s
+            // is about four reconnects that each carried nothing: no longer a
+            // slow coordinator. Adding the coordinator's 30s eviction, a wedged
+            // worker's tasks are back in the queue in ~75s.
             let mut last_progress = Instant::now();
-            const MAX_CHANNEL_SILENCE: Duration = Duration::from_secs(5 * 60);
-            let mut heartbeat_ticker = tokio::time::interval(Duration::from_secs(5));
+            const MAX_CHANNEL_SILENCE: Duration = Duration::from_secs(45);
+            const WATCHDOG_PERIOD: Duration = Duration::from_secs(5);
+            // Three periods. Long enough that normal scheduling jitter never
+            // trips it, short enough to catch the stalls that do.
+            const STALLED_TICK_GAP: Duration = Duration::from_secs(15);
+            let mut watchdog_ticker = tokio::time::interval(WATCHDOG_PERIOD);
+            watchdog_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut last_tick = Instant::now();
             let mut closed = false;
             let mut drain_started_at: Option<Instant> = None;
             let mut last_drain_log_count: Option<usize> = None;
             let tasks = tasks.clone();
             loop {
                 tokio::select! {
+                    // Biased so a loop waking from a long stall drains buffered
+                    // messages before any watchdog reads their timestamps and
+                    // misreads the stall as a dead channel. Load-bearing: with
+                    // random polling, a woken loop can reconnect on stale
+                    // `last_heartbeat` and discard messages it has not read.
+                    //
+                    // Accepted cost: while the channel is closed, `recv` is
+                    // ready instantly with `None` every iteration, so the
+                    // watchdog arm starves for the length of a coordinator
+                    // outage. Benign — everything it checks either reports to
+                    // the unreachable coordinator or tolerates a bounded delay,
+                    // and the stall guard skips one silence check at recovery.
+                    biased;
                     msg = channel.recv() => {
                         match msg {
                             Some(server_msg) => {
@@ -287,33 +315,16 @@ async fn run_worker_inner(
                                     }
                                 }
                                 Some(server_message::Message::ServerHeartbeat(_)) => {
-                                    let (task_proof_ids, task_ids) = tasks.iter().map(|v| v.key().clone()).unzip();
-                                    let current_weight = tasks.iter().map(|v| v.value().0.weight).sum();
-                                    let request = HeartbeatRequest {
-                                        worker_id: node_config.worker_id.clone(),
-                                        active_task_proof_ids: task_proof_ids,
-                                        active_task_ids: task_ids,
-                                        current_weight,
-                                    };
-                                    if let Err(e) = worker_client.heartbeat(request).await  {
-                                        eprintln!("Failed to send heartbeat: {}", e);
-                                        if e.code() == tonic::Code::NotFound {
-                                            tracing::warn!("Worker not found, reconnecting...");
-                                            match worker_client.open().await {
-                                                Ok(new_channel) => {
-                                                    channel = new_channel;
-                                                }
-                                                Err(e) => {
-                                                    tracing::error!("Failed to reconnect: {}", e);
-                                                    last_progress = Instant::now();
-                                                    tokio::time::sleep(Duration::from_secs(1)).await;
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                    }
-
+                                    // A prompt proves the delivery stream works; liveness
+                                    // replies are the dedicated heartbeat thread's job.
                                     last_heartbeat = Instant::now();
+                                    // The thread has its own connection, which can fail
+                                    // while this stream is fine, and a worker that stops
+                                    // beating is evicted no matter how alive it is.
+                                    if beats.is_stale() {
+                                        tracing::debug!("dedicated beats stale; beating on the delivery stream");
+                                        send_beat(&worker_client, &tasks).await;
+                                    }
                                 }
                                 None => {}
                                 }
@@ -337,7 +348,21 @@ async fn run_worker_inner(
                             }
                         }
                     }
-                    _ = heartbeat_ticker.tick() => {
+                    _ = watchdog_ticker.tick() => {
+                        // A tick this late means the runtime just woke from a stall,
+                        // so inbound messages may still be sitting in the receive
+                        // pump and `last_progress` reads staler than the channel
+                        // really is. Skip the silence check until ticks recover.
+                        let tick_gap = last_tick.elapsed();
+                        let woke_from_stall = tick_gap > STALLED_TICK_GAP;
+                        if woke_from_stall {
+                            // Logged because it disables the silence check, and a
+                            // worker stalling every tick keeps it disabled.
+                            tracing::warn!(
+                                "watchdog tick {tick_gap:?} late; skipping channel silence check"
+                            );
+                        }
+                        last_tick = Instant::now();
                         // If the worker is closed and there's no tasks, break out of the loop.
                         if closed && tasks.is_empty() {
                             tracing::info!("Worker is closed and has no tasks, breaking out of loop");
@@ -367,7 +392,7 @@ async fn run_worker_inner(
                             }
                         }
                         // Draining has its own timeout (drain_timeout); don't preempt it.
-                        if !closed && last_progress.elapsed() > MAX_CHANNEL_SILENCE {
+                        if !closed && !woke_from_stall && last_progress.elapsed() > MAX_CHANNEL_SILENCE {
                             tracing::error!(
                                 "No message from coordinator for {:?} despite successful reconnects; exiting for a clean restart",
                                 last_progress.elapsed()

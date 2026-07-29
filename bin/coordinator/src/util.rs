@@ -61,7 +61,7 @@ pub fn spawn_heartbeat_task<P: AssignmentPolicy>(
             loop {
                 coordinator.send_heartbeats().await;
                 tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                    _ = tokio::time::sleep(crate::SERVER_HEARTBEAT_INTERVAL) => {}
                     _ = token.cancelled() => break,
                 }
             }
