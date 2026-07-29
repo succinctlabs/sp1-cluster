@@ -227,6 +227,13 @@ async fn run_worker_inner(
                     // misreads the stall as a dead channel. Load-bearing: with
                     // random polling, a woken loop can reconnect on stale
                     // `last_heartbeat` and discard messages it has not read.
+                    //
+                    // Accepted cost: while the channel is closed, `recv` is
+                    // ready instantly with `None` every iteration, so the
+                    // watchdog arm starves for the length of a coordinator
+                    // outage. Benign — everything it checks either reports to
+                    // the unreachable coordinator or tolerates a bounded delay,
+                    // and the stall guard skips one silence check at recovery.
                     biased;
                     msg = channel.recv() => {
                         match msg {
