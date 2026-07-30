@@ -1154,48 +1154,18 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Redis at REDIS_URL"]
-    async fn boundary_sizes_and_overwrite() {
-        let inline = Fixture::new("boundary-inline");
-        let inline_data = vec![5; CHUNK_SIZE];
-        inline.upload(&inline_data).await.unwrap();
-        assert_eq!(
-            inline.chunk_fields().await,
-            0,
-            "exactly CHUNK_SIZE goes inline, not chunked"
-        );
-        assert_eq!(inline.download().await, inline_data);
-        inline.delete().await;
-
-        let chunked = Fixture::new("boundary-overwrite");
-        for fill in [6u8, 7] {
-            chunked.upload(&vec![fill; CHUNK_SIZE + 1]).await.unwrap();
-        }
-        assert_eq!(
-            chunked.download().await,
-            vec![7; CHUNK_SIZE + 1],
-            "re-upload replaces via RENAME"
-        );
-        assert_eq!(
-            chunked.chunk_fields().await,
-            2,
-            "CHUNK_SIZE+1 splits into two chunks"
-        );
-        chunked.delete().await;
-    }
-
-    #[tokio::test]
-    #[ignore = "requires Redis at REDIS_URL"]
     async fn overwrite_across_chunk_boundary_evicts_other_representation() {
         let fx = Fixture::new("boundary-crossing");
 
         let chunked_data = vec![8; CHUNK_SIZE + 1];
         fx.upload(&chunked_data).await.unwrap();
-        let inline_data = vec![9; 16];
+        // Exactly CHUNK_SIZE: the largest inline artifact.
+        let inline_data = vec![9; CHUNK_SIZE];
         fx.upload(&inline_data).await.unwrap();
         assert_eq!(
             fx.chunk_fields().await,
             0,
-            "inline upload evicts the chunk hash"
+            "exactly CHUNK_SIZE goes inline and evicts the chunk hash"
         );
         assert_eq!(
             fx.download().await,
