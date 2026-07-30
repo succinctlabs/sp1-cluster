@@ -13,7 +13,21 @@ use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tokio::task::JoinSet;
 use tracing::{instrument, Instrument};
 
-const CHUNK_SIZE: usize = 32 * 1024 * 1024;
+/// Values above this go into a chunk hash instead of one Redis string.
+/// Override via `ARTIFACT_CHUNK_SIZE_BYTES`, which lets a test environment
+/// reach the chunked path on workloads whose artifacts never approach the
+/// default.
+const DEFAULT_CHUNK_SIZE: usize = 32 * 1024 * 1024;
+
+/// Resolved once; a zero or unparseable override falls back to the default,
+/// since a zero chunk size would split every artifact into empty fields.
+static CHUNK_SIZE: LazyLock<usize> = LazyLock::new(|| {
+    std::env::var("ARTIFACT_CHUNK_SIZE_BYTES")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(DEFAULT_CHUNK_SIZE)
+});
 
 /// Default Redis artifact retention. Override via `ARTIFACT_TIMEOUT_SECONDS`.
 ///
@@ -500,7 +514,7 @@ impl RedisArtifactClient {
     ) -> Result<(), backoff::Error<anyhow::Error>> {
         let now = std::time::Instant::now();
 
-        if serialized.len() <= CHUNK_SIZE {
+        if serialized.len() <= *CHUNK_SIZE {
             self.upload_inline(artifact_type, key, serialized).await?;
         } else {
             self.upload_chunked(artifact_type, key, serialized).await?;
@@ -549,7 +563,7 @@ impl RedisArtifactClient {
         serialized: &[u8],
     ) -> Result<(), backoff::Error<anyhow::Error>> {
         let staging_key = staging_chunk_key(artifact_id);
-        let chunk_count = serialized.len().div_ceil(CHUNK_SIZE);
+        let chunk_count = serialized.len().div_ceil(*CHUNK_SIZE);
         self.stage_chunks(artifact_id, &staging_key, serialized)
             .await?;
         self.publish_staged(artifact_type, artifact_id, &staging_key, chunk_count)
@@ -568,7 +582,7 @@ impl RedisArtifactClient {
         let now = std::time::Instant::now();
         let mut join_set = JoinSet::new();
 
-        for (chunk_idx, chunk) in serialized.chunks(CHUNK_SIZE).enumerate() {
+        for (chunk_idx, chunk) in serialized.chunks(*CHUNK_SIZE).enumerate() {
             let conn = self.get_redis_connection(artifact_id).await?;
             join_set.spawn(stage_chunk(
                 conn,
@@ -1060,12 +1074,12 @@ mod tests {
     #[ignore = "requires Redis at REDIS_URL"]
     async fn chunked_upload_publishes_complete_and_readable() {
         let fx = Fixture::new("chunked-upload");
-        let data = vec![42; CHUNK_SIZE + 1];
+        let data = vec![42; *CHUNK_SIZE + 1];
         fx.upload(&data).await.unwrap();
 
         assert!(fx.exists().await, "a complete upload must satisfy exists()");
         assert_eq!(fx.download().await, data);
-        let chunks = data.len().div_ceil(CHUNK_SIZE);
+        let chunks = data.len().div_ceil(*CHUNK_SIZE);
         assert_eq!(
             fx.declared_chunks().await,
             Some(chunks),
@@ -1095,7 +1109,7 @@ mod tests {
     #[ignore = "requires Redis at REDIS_URL"]
     async fn chunked_program_upload_persists() {
         let fx = Fixture::program("chunked-program");
-        fx.upload(&vec![7; CHUNK_SIZE + 1]).await.unwrap();
+        fx.upload(&vec![7; *CHUNK_SIZE + 1]).await.unwrap();
 
         assert_eq!(
             fx.chunk_ttl().await,
@@ -1113,14 +1127,14 @@ mod tests {
         let mut writers = tokio::task::JoinSet::new();
         for fill in [1u8, 2, 3, 4] {
             let fx = fx.clone();
-            writers.spawn(async move { fx.upload(&vec![fill; CHUNK_SIZE + 7]).await });
+            writers.spawn(async move { fx.upload(&vec![fill; *CHUNK_SIZE + 7]).await });
         }
         while let Some(res) = writers.join_next().await {
             res.unwrap().unwrap();
         }
 
         let downloaded = fx.download().await;
-        assert_eq!(downloaded.len(), CHUNK_SIZE + 7);
+        assert_eq!(downloaded.len(), *CHUNK_SIZE + 7);
         assert!(
             downloaded.iter().all(|b| *b == downloaded[0]),
             "the final artifact must be exactly one writer's data, never a mix"
@@ -1161,7 +1175,7 @@ mod tests {
         let fx = Fixture::new("cancelled-upload");
         let cancelled = tokio::time::timeout(
             Duration::from_millis(5),
-            fx.upload(&vec![9; 2 * CHUNK_SIZE + 1]),
+            fx.upload(&vec![9; 2 * *CHUNK_SIZE + 1]),
         )
         .await;
         assert!(cancelled.is_err(), "5ms must cancel a 64MB upload");
@@ -1213,8 +1227,8 @@ mod tests {
     #[ignore = "requires Redis at REDIS_URL"]
     async fn partial_debris_at_final_key_is_repaired() {
         let fx = Fixture::new("debris-repair");
-        let data = vec![3; CHUNK_SIZE + 1];
-        let chunks = data.len().div_ceil(CHUNK_SIZE);
+        let data = vec![3; *CHUNK_SIZE + 1];
+        let chunks = data.len().div_ceil(*CHUNK_SIZE);
 
         // Field count matching the incoming upload's: the case a length check
         // alone cannot tell apart from a complete hash.
@@ -1243,9 +1257,9 @@ mod tests {
     #[ignore = "requires Redis at REDIS_URL"]
     async fn published_hash_is_immutable() {
         let fx = Fixture::new("first-writer");
-        let first = vec![1; CHUNK_SIZE + 1];
+        let first = vec![1; *CHUNK_SIZE + 1];
         fx.upload(&first).await.unwrap();
-        fx.upload(&vec![2; CHUNK_SIZE + 1]).await.unwrap();
+        fx.upload(&vec![2; *CHUNK_SIZE + 1]).await.unwrap();
 
         assert_eq!(
             fx.download().await,
@@ -1265,10 +1279,10 @@ mod tests {
     async fn overwrite_across_chunk_boundary_evicts_other_representation() {
         let fx = Fixture::new("boundary-crossing");
 
-        let chunked_data = vec![8; CHUNK_SIZE + 1];
+        let chunked_data = vec![8; *CHUNK_SIZE + 1];
         fx.upload(&chunked_data).await.unwrap();
         // Exactly CHUNK_SIZE: the largest inline artifact.
-        let inline_data = vec![9; CHUNK_SIZE];
+        let inline_data = vec![9; *CHUNK_SIZE];
         fx.upload(&inline_data).await.unwrap();
         assert_eq!(
             fx.chunk_fields().await,
