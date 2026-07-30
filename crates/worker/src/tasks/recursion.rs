@@ -39,9 +39,10 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
     ) -> Result<TaskMetadata, TaskError> {
         let data = task.data()?;
         let raw_task_request = worker_task_to_raw_task_request(data, None);
-        self.worker
+        let result = self
+            .worker
             .prover_engine()
-            .submit_recursion_reduce(raw_task_request)
+            .submit_recursion_reduce(raw_task_request.clone())
             .await?
             .await
             .map_err(|e| {
@@ -49,6 +50,9 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
                     "failed to execute recursion reduce batch: {}",
                     e
                 ))
-            })?
+            })?;
+        raw_task_request
+            .recover_if_complete(result, self.worker.artifact_client())
+            .await
     }
 }
