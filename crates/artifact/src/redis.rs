@@ -389,11 +389,10 @@ impl RedisArtifactClient {
         Ok(result)
     }
 
-    /// Chunked reads are not isolated: HLEN and the HGETs are separate
-    /// commands, so a concurrent same-id republish can interleave. Artifact
-    /// ids are content-addressed — a replacement carries identical bytes —
-    /// and a torn read of unequal generations fails loudly downstream at
-    /// zstd decode.
+    /// Chunked reads are not isolated — HLEN and the HGETs are separate
+    /// commands — but a published hash is immutable (first writer wins in
+    /// `publish_staged`), so the hash under a reader can only vanish, never
+    /// change. A vanished hash surfaces as a loud absent-field error.
     async fn par_download_file(
         &self,
         _: ArtifactType,
@@ -582,15 +581,17 @@ impl RedisArtifactClient {
         }
     }
 
-    /// Publish the staged hash: completeness check, RENAME, retention — one
-    /// server-side script, so even a cancelled client leaves nothing or
-    /// everything.
+    /// Publish the staged hash in one server-side script: first-writer
+    /// guard, completeness check, RENAME, retention. A cancelled client
+    /// leaves nothing or everything — split commands could publish a
+    /// complete artifact stuck on the staging TTL, which `exists()`-gated
+    /// callers would never re-upload.
     ///
-    /// Split commands would break both guarantees: a crash after RENAME
-    /// leaves the artifact expiring on the staging TTL, and `exists()`-gated
-    /// callers skip the re-upload that would heal it; a hash that lost
-    /// fields must never publish at all. RENAME needs both keys on one node
-    /// — true here (both route by artifact id), impossible on Redis Cluster.
+    /// A published hash never changes until delete or expiry; readers' non-
+    /// isolated HLEN + HGETs can see it vanish (loud absent-field error) but
+    /// never mutate. A repeat publish reclaims its staging and succeeds.
+    /// RENAME needs both keys on one node — true here (routed by artifact
+    /// id), impossible on Redis Cluster.
     async fn publish_staged(
         &self,
         artifact_type: ArtifactType,
@@ -598,13 +599,15 @@ impl RedisArtifactClient {
         staging_key: &str,
         chunk_count: usize,
     ) -> Result<(), backoff::Error<anyhow::Error>> {
-        // UNLINK, not RENAME's implicit delete: replacing a large hash would
-        // otherwise free it synchronously inside the script, stalling the
-        // node. The trailing UNLINK evicts a stale inline value so the two
-        // representations never coexist.
+        // The first-writer guard keeps RENAME from replacing a hash (no
+        // synchronous large-value delete inside the script); the trailing
+        // UNLINK evicts a stale inline twin.
         const PUBLISH_SCRIPT: &str = r"
+            if redis.call('EXISTS', KEYS[2]) == 1 then
+                redis.call('UNLINK', KEYS[1])
+                return 2
+            end
             if redis.call('HLEN', KEYS[1]) ~= tonumber(ARGV[1]) then return 0 end
-            redis.call('UNLINK', KEYS[2])
             redis.call('RENAME', KEYS[1], KEYS[2])
             if tonumber(ARGV[2]) > 0 then
                 redis.call('EXPIRE', KEYS[2], ARGV[2])
@@ -633,14 +636,18 @@ impl RedisArtifactClient {
             .query_async(&mut conn)
             .await
             .map_err(transient)?;
-        if published == 0 {
-            // Return this connection before reclaim borrows another from the
-            // same pool — holding both can exhaust it.
-            drop(conn);
-            self.reclaim_staging(artifact_id, staging_key).await;
-            return Err(transient(anyhow!(
-                "staging hash {staging_key} incomplete or missing at publish"
-            )));
+        match published {
+            2 => tracing::debug!("artifact {artifact_id} already published; kept the first copy"),
+            1 => {}
+            _ => {
+                // Return this connection before reclaim borrows another from
+                // the same pool — holding both can exhaust it.
+                drop(conn);
+                self.reclaim_staging(artifact_id, staging_key).await;
+                return Err(transient(anyhow!(
+                    "staging hash {staging_key} incomplete or missing at publish"
+                )));
+            }
         }
         Ok(())
     }
@@ -1150,6 +1157,27 @@ mod tests {
             !staging_remains,
             "a failed publish must reclaim its staging"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis at REDIS_URL"]
+    async fn published_hash_is_immutable() {
+        let fx = Fixture::new("first-writer");
+        let first = vec![1; CHUNK_SIZE + 1];
+        fx.upload(&first).await.unwrap();
+        fx.upload(&vec![2; CHUNK_SIZE + 1]).await.unwrap();
+
+        assert_eq!(
+            fx.download().await,
+            first,
+            "a repeat publish keeps the first copy"
+        );
+        assert!(
+            fx.staging_keys().await.is_empty(),
+            "a repeat publish reclaims its staging"
+        );
+
+        fx.delete().await;
     }
 
     #[tokio::test]
