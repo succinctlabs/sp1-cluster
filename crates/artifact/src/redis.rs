@@ -615,10 +615,13 @@ impl RedisArtifactClient {
         const PUBLISH_SCRIPT: &str = r"
             local have = redis.call('HLEN', KEYS[2])
             if have == tonumber(ARGV[1]) then
-                redis.call('UNLINK', KEYS[1])
+                redis.call('UNLINK', KEYS[1], KEYS[3])
                 return 2
             end
-            if redis.call('HLEN', KEYS[1]) ~= tonumber(ARGV[1]) then return 0 end
+            if redis.call('HLEN', KEYS[1]) ~= tonumber(ARGV[1]) then
+                redis.call('UNLINK', KEYS[1])
+                return 0
+            end
             if have > 0 then
                 redis.call('UNLINK', KEYS[2])
             end
@@ -654,10 +657,6 @@ impl RedisArtifactClient {
             2 => tracing::debug!("artifact {artifact_id} already published; kept the first copy"),
             1 => {}
             _ => {
-                // Return this connection before reclaim borrows another from
-                // the same pool — holding both can exhaust it.
-                drop(conn);
-                self.reclaim_staging(artifact_id, staging_key).await;
                 return Err(transient(anyhow!(
                     "staging hash {staging_key} incomplete or missing at publish"
                 )));
