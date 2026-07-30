@@ -1,4 +1,3 @@
-use super::recover_task_result;
 use crate::error::TaskError;
 use crate::utils::worker_task_to_raw_task_request;
 use anyhow::Result;
@@ -52,6 +51,8 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
                     e
                 ))
             })?;
-        recover_task_result(&raw_task_request, result, self.worker.artifact_client()).await
+        raw_task_request
+            .recover_if_complete(result, self.worker.artifact_client())
+            .await
     }
 }

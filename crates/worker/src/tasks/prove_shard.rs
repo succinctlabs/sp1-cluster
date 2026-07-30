@@ -8,7 +8,6 @@ use sp1_prover::{
     SP1ProverComponents,
 };
 
-use super::recover_task_result;
 use crate::{error::TaskError, utils::worker_task_to_raw_task_request, SP1ClusterWorker};
 impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorker<W, A, C> {
     /// Prove a single shard.
@@ -27,6 +26,8 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
             .map_err(|e| {
                 TaskError::Fatal(anyhow::anyhow!("failed to execute prove shard: {}", e))
             })?;
-        recover_task_result(&raw_task_request, result, self.worker.artifact_client()).await
+        raw_task_request
+            .recover_if_complete(result, self.worker.artifact_client())
+            .await
     }
 }
