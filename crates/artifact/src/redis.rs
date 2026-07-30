@@ -389,6 +389,11 @@ impl RedisArtifactClient {
         Ok(result)
     }
 
+    /// Chunked reads are not isolated: HLEN and the HGETs are separate
+    /// commands, so a concurrent same-id republish can interleave. Artifact
+    /// ids are content-addressed — a replacement carries identical bytes —
+    /// and a torn read of unequal generations fails loudly downstream at
+    /// zstd decode.
     async fn par_download_file(
         &self,
         _: ArtifactType,
@@ -410,6 +415,10 @@ impl RedisArtifactClient {
             tracing::info!("download took {:?}, size: {}", now.elapsed(), result.len());
             return Ok(result);
         }
+        // Return this connection before the chunk loop borrows more from the
+        // same pool — holding it across those acquisitions can wedge a
+        // saturated pool.
+        drop(conn);
 
         // Get total chunks
         let mut result = Vec::new();
@@ -478,7 +487,9 @@ impl RedisArtifactClient {
         Ok(())
     }
 
-    /// One SET, with retention baked into the write.
+    /// One SET, with retention baked into the write. The UNLINK evicts a
+    /// stale chunked copy — readers prefer the chunk hash, so leaving one
+    /// behind would shadow this write.
     async fn upload_inline(
         &self,
         artifact_type: ArtifactType,
@@ -490,7 +501,13 @@ impl RedisArtifactClient {
         if !matches!(artifact_type, ArtifactType::Program) {
             options = options.with_expiration(SetExpiry::EX(*ARTIFACT_TIMEOUT_SECONDS));
         }
-        conn.set_options::<_, _, ()>(key, serialized, options)
+        deadpool_redis::redis::pipe()
+            .atomic()
+            .set_options(key, serialized, options)
+            .ignore()
+            .unlink(chunk_key(key))
+            .ignore()
+            .query_async::<()>(&mut conn)
             .await
             .map_err(transient)
     }
@@ -581,14 +598,20 @@ impl RedisArtifactClient {
         staging_key: &str,
         chunk_count: usize,
     ) -> Result<(), backoff::Error<anyhow::Error>> {
+        // UNLINK, not RENAME's implicit delete: replacing a large hash would
+        // otherwise free it synchronously inside the script, stalling the
+        // node. The trailing UNLINK evicts a stale inline value so the two
+        // representations never coexist.
         const PUBLISH_SCRIPT: &str = r"
             if redis.call('HLEN', KEYS[1]) ~= tonumber(ARGV[1]) then return 0 end
+            redis.call('UNLINK', KEYS[2])
             redis.call('RENAME', KEYS[1], KEYS[2])
             if tonumber(ARGV[2]) > 0 then
                 redis.call('EXPIRE', KEYS[2], ARGV[2])
             else
                 redis.call('PERSIST', KEYS[2])
             end
+            redis.call('UNLINK', KEYS[3])
             return 1
         ";
 
@@ -601,9 +624,10 @@ impl RedisArtifactClient {
         let mut conn = self.get_redis_connection(artifact_id).await?;
         let published: i64 = deadpool_redis::redis::cmd("EVAL")
             .arg(PUBLISH_SCRIPT)
-            .arg(2)
+            .arg(3)
             .arg(staging_key)
             .arg(&final_key)
+            .arg(artifact_id)
             .arg(chunk_count)
             .arg(retention_seconds)
             .query_async(&mut conn)
@@ -1157,5 +1181,41 @@ mod tests {
             "CHUNK_SIZE+1 splits into two chunks"
         );
         chunked.delete().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis at REDIS_URL"]
+    async fn overwrite_across_chunk_boundary_evicts_other_representation() {
+        let fx = Fixture::new("boundary-crossing");
+
+        let chunked_data = vec![8; CHUNK_SIZE + 1];
+        fx.upload(&chunked_data).await.unwrap();
+        let inline_data = vec![9; 16];
+        fx.upload(&inline_data).await.unwrap();
+        assert_eq!(
+            fx.chunk_fields().await,
+            0,
+            "inline upload evicts the chunk hash"
+        );
+        assert_eq!(
+            fx.download().await,
+            inline_data,
+            "chunked→inline serves the inline value"
+        );
+
+        fx.upload(&chunked_data).await.unwrap();
+        assert_eq!(
+            fx.download().await,
+            chunked_data,
+            "inline→chunked serves the chunk hash"
+        );
+        // Acquired after download: holding a fixture connection across it
+        // starves the pool of 2.
+        let mut conn = fx.conn().await;
+        let inline_remains: bool = conn.exists(&fx.key).await.unwrap();
+        assert!(!inline_remains, "chunked publish evicts the inline value");
+        drop(conn);
+
+        fx.delete().await;
     }
 }
