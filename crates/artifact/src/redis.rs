@@ -403,16 +403,24 @@ impl RedisArtifactClient {
         let key = key.to_string();
 
         // Check if it's a hash (chunked) or regular key
-        let total_chunks: usize = conn.hlen(chunk_key(&key)).await.map_err(transient)?;
+        let mut total_chunks: usize = conn.hlen(chunk_key(&key)).await.map_err(transient)?;
 
         if total_chunks == 0 {
-            let result = conn
-                .get::<_, Option<Vec<u8>>>(&key)
-                .await
-                .map_err(transient)?
-                .ok_or_else(|| backoff::Error::permanent(anyhow!("artifact not found: {}", key)))?;
-            tracing::info!("download took {:?}, size: {}", now.elapsed(), result.len());
-            return Ok(result);
+            let inline: Option<Vec<u8>> = conn.get(&key).await.map_err(transient)?;
+            if let Some(result) = inline {
+                tracing::info!("download took {:?}, size: {}", now.elapsed(), result.len());
+                return Ok(result);
+            }
+            // A chunked publish can land between the HLEN and the GET,
+            // evicting the inline value; one re-check separates that race
+            // from a genuinely absent artifact.
+            total_chunks = conn.hlen(chunk_key(&key)).await.map_err(transient)?;
+            if total_chunks == 0 {
+                return Err(backoff::Error::permanent(anyhow!(
+                    "artifact not found: {}",
+                    key
+                )));
+            }
         }
         // Return this connection before the chunk loop borrows more from the
         // same pool — holding it across those acquisitions can wedge a
@@ -587,9 +595,12 @@ impl RedisArtifactClient {
     /// complete artifact stuck on the staging TTL, which `exists()`-gated
     /// callers would never re-upload.
     ///
-    /// A published hash never changes until delete or expiry; readers' non-
-    /// isolated HLEN + HGETs can see it vanish (loud absent-field error) but
-    /// never mutate. A repeat publish reclaims its staging and succeeds.
+    /// A complete published hash never changes until delete or expiry;
+    /// readers' non-isolated HLEN + HGETs can see it vanish (loud
+    /// absent-field error) but never mutate. A repeat publish reclaims its
+    /// staging and succeeds. "First writer" means a hash with the expected
+    /// field count — a partial written straight to the final key by an
+    /// earlier code generation is debris and gets replaced, not protected.
     /// RENAME needs both keys on one node — true here (routed by artifact
     /// id), impossible on Redis Cluster.
     async fn publish_staged(
@@ -599,15 +610,18 @@ impl RedisArtifactClient {
         staging_key: &str,
         chunk_count: usize,
     ) -> Result<(), backoff::Error<anyhow::Error>> {
-        // The first-writer guard keeps RENAME from replacing a hash (no
-        // synchronous large-value delete inside the script); the trailing
-        // UNLINK evicts a stale inline twin.
+        // UNLINK, never RENAME's implicit delete, frees a replaced value
+        // asynchronously; the trailing UNLINK evicts a stale inline twin.
         const PUBLISH_SCRIPT: &str = r"
-            if redis.call('EXISTS', KEYS[2]) == 1 then
+            local have = redis.call('HLEN', KEYS[2])
+            if have == tonumber(ARGV[1]) then
                 redis.call('UNLINK', KEYS[1])
                 return 2
             end
             if redis.call('HLEN', KEYS[1]) ~= tonumber(ARGV[1]) then return 0 end
+            if have > 0 then
+                redis.call('UNLINK', KEYS[2])
+            end
             redis.call('RENAME', KEYS[1], KEYS[2])
             if tonumber(ARGV[2]) > 0 then
                 redis.call('EXPIRE', KEYS[2], ARGV[2])
@@ -1157,6 +1171,28 @@ mod tests {
             !staging_remains,
             "a failed publish must reclaim its staging"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis at REDIS_URL"]
+    async fn partial_debris_at_final_key_is_repaired() {
+        let fx = Fixture::new("debris-repair");
+        let mut conn = fx.conn().await;
+        let _: usize = conn
+            .hset(chunk_key(&fx.key), 0, b"old-writer partial")
+            .await
+            .unwrap();
+        drop(conn);
+
+        let data = vec![3; CHUNK_SIZE + 1];
+        fx.upload(&data).await.unwrap();
+        assert_eq!(
+            fx.download().await,
+            data,
+            "an incomplete hash is debris, not a protected first writer"
+        );
+
+        fx.delete().await;
     }
 
     #[tokio::test]
