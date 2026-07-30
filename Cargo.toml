@@ -48,23 +48,25 @@ spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
 
 # SP1
 #
-# The whole sp1 family must share one source, or the workspace resolves two
-# sp1-prover-types packages and every crossing type mismatches. Pinned to a main
-# commit ahead of the latest release; move to released crates once one catches up.
-sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427" }
-sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427", features = ["bigint-rug"] }
-sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427" }
-sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427" }
-sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427" }
-sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427" }
-sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427" }
-sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427" }
-sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427" }
-sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427", features = ["network"] }
+# e088a91e2 carries sp1#2862 (the ClusterService manifest RPCs, replacing
+# WorkerService.GetClusterComponentInfo) plus OpenRequest.location. The whole sp1
+# family must share one source, or the workspace resolves two sp1-prover-types
+# packages and every crossing type mismatches. Move back to released crates once
+# one includes both.
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2", features = ["bigint-rug"] }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2" }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2" }
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2", features = ["network"] }
 
 # SP1 GPU
-sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427" }
-sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "ae8da3427" }
+sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2" }
+sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "e088a91e2" }
 
 # Misc
 alloy = { version = "=1.1.3", default-features = false, features = ["serde"] }
@@ -156,4 +158,3 @@ opt-level = 3
 
 [profile.dev.build-override]
 opt-level = 3
-

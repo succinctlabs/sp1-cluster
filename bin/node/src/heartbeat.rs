@@ -172,6 +172,7 @@ async fn heartbeat_loop(
             node_config.coordinator_rpc.clone(),
             node_config.worker_id.clone(),
             node_config.worker_type,
+            node_config.location.clone(),
         ) => match result {
             Ok(client) => client,
             Err(e) => {

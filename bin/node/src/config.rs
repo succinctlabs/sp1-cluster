@@ -21,6 +21,9 @@ pub struct NodeConfig {
     pub cluster: String,
     pub task_timeout: Duration,
     pub drain_timeout: Duration,
+    /// Where this worker runs, as an opaque label the coordinator groups
+    /// workers by. `None` when the environment does not identify one.
+    pub location: Option<String>,
 }
 
 impl Default for NodeConfig {
@@ -32,6 +35,7 @@ impl Default for NodeConfig {
             cluster: "unknown".to_string(),
             task_timeout: DEFAULT_TASK_TIMEOUT,
             drain_timeout: DEFAULT_DRAIN_TIMEOUT,
+            location: None,
         }
     }
 }
@@ -39,18 +43,19 @@ impl Default for NodeConfig {
 impl NodeConfig {
     pub async fn load() -> Self {
         let ecs_task_info = get_ecs_task_info(&reqwest::Client::new()).await;
-        let cluster = ecs_task_info
-            .as_ref()
-            .map_or("unknown".to_string(), |info| info.cluster.clone());
+        // Everything the task metadata identifies, and the fallbacks for a
+        // worker running outside it. The AWS region fills the neutral
+        // `location` field.
+        let (worker_id, location, cluster) = match ecs_task_info {
+            Ok(info) => (info.task_id().to_string(), info.region(), info.cluster),
+            Err(_) => (
+                format!("unknown_{:032x}", rand::rng().random::<u128>()),
+                None,
+                "unknown".to_string(),
+            ),
+        };
         Self {
-            worker_id: {
-                match ecs_task_info {
-                    std::result::Result::Ok(info) => {
-                        info.task_arn.split('/').next_back().unwrap().to_string()
-                    }
-                    _ => format!("unknown_{:032x}", rand::rng().random::<u128>()),
-                }
-            },
+            worker_id,
             worker_type: {
                 let worker_type = std::env::var("WORKER_TYPE").expect("WORKER_TYPE is not set");
                 WorkerType::from_str_name(&worker_type).expect("invalid worker type")
@@ -60,6 +65,7 @@ impl NodeConfig {
             cluster,
             task_timeout: DEFAULT_TASK_TIMEOUT,
             drain_timeout: DEFAULT_DRAIN_TIMEOUT,
+            location,
         }
     }
 }

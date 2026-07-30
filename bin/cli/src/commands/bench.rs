@@ -418,10 +418,14 @@ impl BenchCommand {
             &std::env::var("WORKER_TYPE").unwrap_or_else(|_| "ALL".to_string())
         })
         .expect("Invalid worker type");
-        let client =
-            WorkerServiceClient::new(cluster_rpc.to_string(), worker_id.clone(), worker_type)
-                .await
-                .map_err(|e| eyre::eyre!("Failed to connect to coordinator: {}", e))?;
+        let client = WorkerServiceClient::new(
+            cluster_rpc.to_string(),
+            worker_id.clone(),
+            worker_type,
+            None,
+        )
+        .await
+        .map_err(|e| eyre::eyre!("Failed to connect to coordinator: {}", e))?;
 
         // Create proof ID
         let proof_id = format!(

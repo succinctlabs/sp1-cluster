@@ -67,6 +67,36 @@ pub struct ECSTaskInfo {
     pub task_arn: String,
 }
 
+impl ECSTaskInfo {
+    /// The task's own id: the last segment of the task ARN.
+    pub fn task_id(&self) -> &str {
+        match self.task_arn.rsplit_once('/') {
+            Some((_, id)) => id,
+            None => &self.task_arn,
+        }
+    }
+
+    /// The AWS region this task runs in, read out of its own ARN.
+    ///
+    /// An ARN is six colon-separated fields —
+    /// `arn:aws:ecs:us-west-2:123456789012:task/cluster/id` — and field 4
+    /// (index 3) is the region.
+    ///
+    /// `None` for anything that is not a well-formed ARN with a non-empty
+    /// region field.
+    pub fn region(&self) -> Option<String> {
+        let mut fields = self.task_arn.split(':');
+        if fields.next()? != "arn" {
+            return None;
+        }
+        let region = fields.nth(2).filter(|r| !r.is_empty())?;
+        // Fields 5 (account) and 6 (resource) must exist, or this is not an ARN.
+        fields.next()?;
+        fields.next()?;
+        Some(region.to_string())
+    }
+}
+
 pub async fn get_ecs_task_info(client: &Client) -> anyhow::Result<ECSTaskInfo> {
     let metadata_url = env::var("ECS_CONTAINER_METADATA_URI_V4")?;
     let response = client.get(metadata_url + "/task").send().await?;
@@ -205,5 +235,57 @@ impl<T, F: FnOnce(T)> DeferGuard<T, F> {
             value: Some(value),
             f: Some(f),
         }
+    }
+}
+
+#[cfg(test)]
+mod ecs_task_info_tests {
+    use super::ECSTaskInfo;
+
+    fn info(task_arn: &str) -> ECSTaskInfo {
+        ECSTaskInfo {
+            cluster: "c".into(),
+            task_arn: task_arn.into(),
+        }
+    }
+
+    #[test]
+    fn task_id_is_the_last_arn_segment() {
+        assert_eq!(
+            info("arn:aws:ecs:us-west-2:123456789012:task/my-cluster/abc123").task_id(),
+            "abc123"
+        );
+        // Nothing to split on: the whole string is the id.
+        assert_eq!(info("abc123").task_id(), "abc123");
+    }
+
+    #[test]
+    fn region_is_field_four_of_a_task_arn() {
+        assert_eq!(
+            info("arn:aws:ecs:us-west-2:123456789012:task/my-cluster/abc123").region(),
+            Some("us-west-2".to_string())
+        );
+    }
+
+    #[test]
+    fn region_reads_the_arn_partition_agnostically() {
+        assert_eq!(
+            info("arn:aws-us-gov:ecs:us-gov-west-1:1:task/c/a").region(),
+            Some("us-gov-west-1".to_string())
+        );
+    }
+
+    #[test]
+    fn malformed_arns_have_no_region() {
+        // Not an ARN at all.
+        assert_eq!(info("").region(), None);
+        assert_eq!(info("my-cluster/abc123").region(), None);
+        // Right shape, wrong prefix.
+        assert_eq!(info("urn:aws:ecs:us-west-2:1:task/c/a").region(), None);
+        // Truncated: no account or resource field.
+        assert_eq!(info("arn:aws:ecs:us-west-2").region(), None);
+        assert_eq!(info("arn:aws:ecs:us-west-2:1").region(), None);
+        // Present but empty region field.
+        assert_eq!(info("arn:aws:ecs::1:task/c/a").region(), None);
     }
 }

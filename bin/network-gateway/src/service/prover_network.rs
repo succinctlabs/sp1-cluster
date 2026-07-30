@@ -363,14 +363,24 @@ where
         // Best-effort: the cluster's ProofRequestListRequest doesn't carry
         // vk_hash/requester/fulfiller/from/to/version/mode filters, so those
         // are silently dropped. Status filters and pagination round-trip.
-        let proof_status = req
+        //
+        // A fulfillment filter the cluster cannot express (Assigned, Reverted,
+        // Expired) matches nothing. It must be answered here: the cluster API
+        // reads an empty status list as "no filter", so passing it through
+        // would return every request instead of none.
+        let proof_status: Vec<i32> = match req
             .fulfillment_status
             .and_then(|s| pb::FulfillmentStatus::try_from(s).ok())
             .map(cluster_fulfillment_filter)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|s| s as i32)
-            .collect();
+        {
+            Some(Some(statuses)) if statuses.is_empty() => {
+                return Ok(Response::new(pb::GetFilteredProofRequestsResponse {
+                    requests: vec![],
+                }));
+            }
+            Some(Some(statuses)) => statuses.into_iter().map(|s| s as i32).collect(),
+            Some(None) | None => vec![],
+        };
         let execution_status = req
             .execution_status
             .and_then(|s| pb::ExecutionStatus::try_from(s).ok())
