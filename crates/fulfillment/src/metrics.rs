@@ -25,6 +25,10 @@ pub struct FulfillerMetrics {
     /// The number of proof request schedule attempts that failed.
     pub request_schedule_failures: Counter,
 
+    /// The number of schedule attempts that found the request already in the
+    /// cluster. Nonzero means the dedup list is missing live rows.
+    pub requests_already_in_cluster: Counter,
+
     /// The number of proof request cancellations.
     pub requests_cancelled: Counter,
 

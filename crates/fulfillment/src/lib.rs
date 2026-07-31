@@ -734,10 +734,17 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                     hex::encode(request.requester()),
                 );
                 match self_clone.schedule_request(request).await {
-                    Ok(_) => {
+                    Ok(ScheduleOutcome::Created) => {
                         info!("scheduled request 0x{}", request_id_hex);
                         self_clone.metrics.requests_scheduled.increment(1);
                         self_clone.metrics.total_requests_processed.increment(1);
+                    }
+                    Ok(ScheduleOutcome::AlreadyInCluster) => {
+                        info!(
+                            "request 0x{} already in cluster (create raced dedup list)",
+                            request_id_hex
+                        );
+                        self_clone.metrics.requests_already_in_cluster.increment(1);
                     }
                     Err(e) => {
                         error!("failed to schedule request 0x{}: {:?}", request_id_hex, e);
@@ -845,7 +852,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
     async fn schedule_request(
         &self,
         request: <N as FulfillmentNetwork>::NetworkRequest,
-    ) -> Result<()> {
+    ) -> Result<ScheduleOutcome> {
         use crate::network::NetworkRequest;
         let request_id = request.request_id();
         let program_artifact_id = extract_artifact_name(request.program_uri())?;
@@ -883,7 +890,8 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         }
 
         // Schedule the request to start proving.
-        self.cluster
+        match self
+            .cluster
             .create_proof_request(ProofRequestCreateRequest {
                 proof_id: request_id,
                 program_artifact_id,
@@ -897,11 +905,26 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                 scheduled_by: self.name.clone(),
                 stdin_private: request.stdin_private(),
             })
-            .map_err(|e| anyhow!("failed to create proof request: {}", e))
-            .await?;
-
-        Ok(())
+            .await
+        {
+            Ok(()) => Ok(ScheduleOutcome::Created),
+            Err(e)
+                if e.downcast_ref::<tonic::Status>()
+                    .is_some_and(|s| s.code() == tonic::Code::AlreadyExists) =>
+            {
+                Ok(ScheduleOutcome::AlreadyInCluster)
+            }
+            Err(e) => Err(anyhow!("failed to create proof request: {}", e)),
+        }
     }
+}
+
+/// Outcome of scheduling one request in the cluster.
+enum ScheduleOutcome {
+    Created,
+    /// The row already existed — the create raced the LIMIT-1000 dedup list.
+    /// The request is being handled; nothing was scheduled by this attempt.
+    AlreadyInCluster,
 }
 
 #[must_use]
