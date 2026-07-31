@@ -126,8 +126,17 @@ impl ClusterService for ClusterServiceImpl {
                 Ok(Response::new(()))
             }
             Err(e) => {
-                error!("Failed to create proof request: {:?}", e);
-                Err(Status::internal("Failed to create proof request"))
+                // A duplicate insert means the request is already scheduled, so
+                // callers can treat it as success rather than a real failure.
+                if e.as_database_error()
+                    .is_some_and(|db| db.is_unique_violation())
+                {
+                    info!("Proof request already exists: {}", req.proof_id);
+                    Err(Status::already_exists("proof request already exists"))
+                } else {
+                    error!("Failed to create proof request: {:?}", e);
+                    Err(Status::internal("Failed to create proof request"))
+                }
             }
         }
     }

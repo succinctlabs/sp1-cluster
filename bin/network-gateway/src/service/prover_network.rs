@@ -235,10 +235,18 @@ where
             scheduled_by: None,
             stdin_private: body.stdin_private,
         };
-        self.cluster
-            .create_proof_request(create)
-            .await
-            .map_err(|e| Status::internal(format!("cluster create_proof_request failed: {e}")))?;
+        if let Err(e) = self.cluster.create_proof_request(create).await {
+            // The id is minted in this call, so an existing row can only be an
+            // earlier attempt of this call that committed but timed out client-side.
+            let own_committed_attempt = e
+                .downcast_ref::<tonic::Status>()
+                .is_some_and(|s| s.code() == tonic::Code::AlreadyExists);
+            if !own_committed_attempt {
+                return Err(Status::internal(format!(
+                    "cluster create_proof_request failed: {e}"
+                )));
+            }
+        }
 
         info!(
             proof_id,
