@@ -97,9 +97,18 @@ impl ECSTaskInfo {
     }
 }
 
+/// A worker waits on the metadata endpoint before it can register, and
+/// `reqwest` applies no timeout of its own. An endpoint that accepts the
+/// connection but never answers would otherwise stall startup indefinitely.
+const METADATA_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub async fn get_ecs_task_info(client: &Client) -> anyhow::Result<ECSTaskInfo> {
     let metadata_url = env::var("ECS_CONTAINER_METADATA_URI_V4")?;
-    let response = client.get(metadata_url + "/task").send().await?;
+    let response = client
+        .get(metadata_url + "/task")
+        .timeout(METADATA_TIMEOUT)
+        .send()
+        .await?;
     response.json().await.map_err(|e| e.into())
 }
 
