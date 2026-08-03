@@ -1,24 +1,9 @@
 use rand::Rng;
 
 use sp1_cluster_common::proto::WorkerType;
-use sp1_cluster_worker::utils::get_ecs_task_info;
+use sp1_cluster_worker::location;
 use std::time::Duration;
 use tracing::warn;
-
-/// Where the worker runs, preferring its own task ARN over the region the task
-/// definition sets. A blank value counts as absent.
-///
-/// The coordinator groups workers by this label, and the autoscaler credits
-/// each one to the pool matching its region. A worker reporting nothing is
-/// counted against no pool, so its pool reads one instance short for as long as
-/// the process lives — enough to hold that pool above target and to stop it
-/// ever spilling to the next region.
-fn location_or_ambient(from_task_arn: Option<String>, ambient: Option<String>) -> Option<String> {
-    [from_task_arn, ambient]
-        .into_iter()
-        .flatten()
-        .find(|region| !region.is_empty())
-}
 
 /// To prevent stuck tasks from accumulating due to any deadlock bug or similar issue, tasks will be
 /// killed after running for 6 hours.
@@ -58,21 +43,21 @@ impl Default for NodeConfig {
 
 impl NodeConfig {
     pub async fn load() -> Self {
-        let ecs_task_info = get_ecs_task_info(&reqwest::Client::new()).await;
-        let ambient_region = std::env::var("AWS_REGION").ok();
+        let ecs_task_info = location::get_ecs_task_info(&reqwest::Client::new()).await;
+        let ambient_region = location::ambient_region();
         // Identity from the task metadata endpoint, with fallbacks for a worker
         // that cannot reach it.
         let (worker_id, location, cluster) = match ecs_task_info {
             Ok(info) => (
                 info.task_id().to_string(),
-                location_or_ambient(info.region(), ambient_region),
+                location::resolve(info.region(), ambient_region),
                 info.cluster,
             ),
             Err(e) => {
                 warn!("ECS task metadata unavailable, falling back to AWS_REGION: {e}");
                 (
                     format!("unknown_{:032x}", rand::rng().random::<u128>()),
-                    location_or_ambient(None, ambient_region),
+                    location::resolve(None, ambient_region),
                     "unknown".to_string(),
                 )
             }
@@ -164,28 +149,5 @@ impl PyroscopeConfig {
             worker_type: std::env::var("WORKER_TYPE").unwrap(),
             env_tag: std::env::var("PYROSCOPE_ENV").unwrap_or_else(|_| "default".to_string()),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::location_or_ambient;
-
-    #[test]
-    fn the_task_arn_region_wins_over_the_ambient_one() {
-        let location = location_or_ambient(Some("us-west-2".into()), Some("us-east-1".into()));
-        assert_eq!(location.as_deref(), Some("us-west-2"));
-    }
-
-    #[test]
-    fn the_ambient_region_stands_in_when_metadata_is_unavailable() {
-        let location = location_or_ambient(None, Some("us-east-1".into()));
-        assert_eq!(location.as_deref(), Some("us-east-1"));
-    }
-
-    #[test]
-    fn a_blank_ambient_region_is_no_location_at_all() {
-        assert_eq!(location_or_ambient(None, Some(String::new())), None);
-        assert_eq!(location_or_ambient(None, None), None);
     }
 }
