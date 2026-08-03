@@ -52,6 +52,9 @@ pub struct WorkerServiceClient {
     pub client: InnerWorkerClient<Channel>,
     pub worker_id: String,
     pub worker_type: WorkerType,
+    /// Where this worker runs, or `None` if it could not be determined. Sent
+    /// as the `location` field of every `OpenRequest`.
+    location: Option<String>,
 }
 
 impl WorkerServiceClient {
@@ -59,6 +62,7 @@ impl WorkerServiceClient {
         addr: String,
         worker_id: String,
         worker_type: WorkerType,
+        location: Option<String>,
     ) -> Result<WorkerServiceClient> {
         let channel = reconnect_with_backoff(&addr).await?;
 
@@ -68,6 +72,7 @@ impl WorkerServiceClient {
             client,
             worker_id,
             worker_type,
+            location,
         })
     }
 
@@ -94,6 +99,7 @@ impl WorkerServiceClient {
             image_tag: std::env::var("IMAGE_TAG").unwrap_or_default(),
             gpu_name,
             gpu_memory_total_bytes,
+            location: self.location.clone(),
         };
         let response = self.client.clone().open(init_msg).await?;
         let mut inbound = response.into_inner();

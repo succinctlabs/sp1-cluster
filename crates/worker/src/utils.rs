@@ -1,12 +1,10 @@
 use cfg_if::cfg_if;
 use opentelemetry::{global, Context};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use sp1_cluster_common::proto::TaskData;
 use sp1_prover::worker::{ProofId, RawTaskRequest, RequesterId, TaskContext, TaskId};
 use sp1_prover_types::Artifact;
 use std::collections::HashMap;
-use std::env;
 use std::future::Future;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -56,21 +54,6 @@ pub fn worker_task_to_raw_task_request(
             .collect(),
         context,
     }
-}
-
-/// https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-metadata-endpoint-v4-response.html
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ECSTaskInfo {
-    #[serde(rename = "Cluster")]
-    pub cluster: String,
-    #[serde(rename = "TaskARN")]
-    pub task_arn: String,
-}
-
-pub async fn get_ecs_task_info(client: &Client) -> anyhow::Result<ECSTaskInfo> {
-    let metadata_url = env::var("ECS_CONTAINER_METADATA_URI_V4")?;
-    let response = client.get(metadata_url + "/task").send().await?;
-    response.json().await.map_err(|e| e.into())
 }
 
 pub fn task_metadata(context: &Context) -> HashMap<String, String> {

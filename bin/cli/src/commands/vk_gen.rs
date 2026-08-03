@@ -62,7 +62,7 @@ impl BuildVkeys {
         .expect("Invalid worker type");
 
         let mut cluster_client =
-            WorkerServiceClient::new(cluster_rpc, node_id.clone(), worker_type)
+            WorkerServiceClient::new(cluster_rpc, node_id.clone(), worker_type, None)
                 .await
                 .unwrap();
 

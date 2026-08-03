@@ -21,8 +21,6 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
         self.worker
             .prover_engine()
             .run_shrink_wrap(raw_task_request)
-            .await?;
-        // TODO: return actual metadata
-        Ok(TaskMetadata::default())
+            .await
     }
 }

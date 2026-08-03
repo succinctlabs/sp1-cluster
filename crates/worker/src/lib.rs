@@ -24,6 +24,7 @@ pub mod client;
 pub mod config;
 pub mod error;
 pub mod limiter;
+pub mod location;
 pub mod metrics;
 pub mod tasks;
 pub mod utils;

@@ -60,13 +60,20 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
     ) -> Result<Response<Self::OpenStream>, Status> {
         let (tx, rx) = mpsc::unbounded_channel();
         let hb = request.into_inner();
+        // Absent means the worker could not determine where it runs. Stored as
+        // an empty string, which is the value no pool claims.
+        let location = hb.location.clone().unwrap_or_default();
 
         // Worker registration and message handling
         tokio::spawn({
             let tx = tx.clone();
             let coordinator = self.coordinator.clone();
             async move {
-                tracing::info!("Worker registered: {}", hb.worker_id);
+                tracing::info!(
+                    "Worker registered: {} (location: {:?})",
+                    hb.worker_id,
+                    hb.location
+                );
 
                 if let Err(e) = coordinator
                     .add_worker(
@@ -74,9 +81,12 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
                         hb.worker_type(),
                         hb.max_weight,
                         tx,
-                        hb.version.clone(),
-                        hb.git_sha.clone(),
-                        hb.image_tag.clone(),
+                        WorkerIdentity {
+                            version: hb.version.clone(),
+                            git_sha: hb.git_sha.clone(),
+                            image_tag: hb.image_tag.clone(),
+                            location,
+                        },
                     )
                     .await
                 {
@@ -714,4 +724,71 @@ pub async fn run_coordinator_server<P: AssignmentPolicy + Default + Send + Sync 
 ) -> Result<()> {
     let (_, server_future) = start_coordinator_server::<P>().await?;
     server_future.await
+}
+
+#[cfg(test)]
+mod open_wiring_tests {
+    use super::*;
+    use policy::default::DefaultPolicy;
+    use sp1_cluster_common::proto::worker_service_server::WorkerService;
+    use sp1_cluster_common::proto::{OpenRequest, WorkerType};
+
+    fn open_request(worker_id: &str, location: Option<&str>) -> Request<OpenRequest> {
+        Request::new(OpenRequest {
+            worker_id: worker_id.to_string(),
+            worker_type: WorkerType::Gpu as i32,
+            max_weight: 24,
+            version: "1.0.0".to_string(),
+            git_sha: "sha".to_string(),
+            image_tag: "tag".to_string(),
+            gpu_name: String::new(),
+            gpu_memory_total_bytes: 0,
+            location: location.map(str::to_string),
+        })
+    }
+
+    /// `open()` spawns registration rather than awaiting it, so there is no
+    /// handle to join. Registration has no pending I/O — an uncontended lock and
+    /// a map insert — so on the current-thread runtime it normally completes on
+    /// the first yield; the bound is slack for scheduler changes, not a timer.
+    async fn registered_location<P: AssignmentPolicy + Default + Send + Sync + 'static>(
+        service: &GenericWorkerService<P>,
+        worker_id: &str,
+    ) -> String {
+        for _ in 0..100 {
+            if let Some(worker) = service.coordinator.get_worker(worker_id).await {
+                return worker.identity.location;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("worker should have registered after open()");
+    }
+
+    /// Exercises the real `open()` handler end to end: `OpenRequest.location`
+    /// in, worker registered in the coordinator's in-memory state with the
+    /// right location out.
+    #[tokio::test]
+    async fn open_wires_location_field_into_coordinator_state() {
+        let service: GenericWorkerService<DefaultPolicy> = GenericWorkerService::default();
+
+        WorkerService::open(&service, open_request("w1", Some("us-east-1")))
+            .await
+            .unwrap();
+
+        assert_eq!(registered_location(&service, "w1").await, "us-east-1");
+    }
+
+    /// A worker that could not derive its location (not on ECS, or a
+    /// malformed task ARN) leaves the field unset, which must register as an
+    /// empty location rather than failing the open.
+    #[tokio::test]
+    async fn open_without_location_field_registers_empty_location() {
+        let service: GenericWorkerService<DefaultPolicy> = GenericWorkerService::default();
+
+        WorkerService::open(&service, open_request("w2", None))
+            .await
+            .unwrap();
+
+        assert_eq!(registered_location(&service, "w2").await, "");
+    }
 }

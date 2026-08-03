@@ -272,6 +272,29 @@ pub struct CoordinatorState<P: AssignmentPolicy> {
     pub worker_heartbeat_timeout_secs: u64,
 }
 
+/// What a worker says about itself when it registers (`OpenRequest`): the build
+/// it is running and where it runs.
+///
+/// Grouped rather than passed as four adjacent `String`s, where any two could be
+/// swapped at a call site without the compiler noticing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkerIdentity {
+    /// Crate version of the worker.
+    pub version: String,
+
+    /// Git commit the worker was built from.
+    pub git_sha: String,
+
+    /// Container image tag the worker is running.
+    pub image_tag: String,
+
+    /// Where the worker runs, as an opaque label the worker derives from its
+    /// own environment (empty = it could not tell). sp1-cluster does not
+    /// interpret this value itself; it is read downstream (e.g. by an
+    /// autoscaler) to group workers.
+    pub location: String,
+}
+
 #[derive(Clone)]
 pub struct Worker<P: AssignmentPolicy> {
     /// The worker ID.
@@ -301,29 +324,20 @@ pub struct Worker<P: AssignmentPolicy> {
     /// Whether the worker is closed and should not be sent any more tasks.
     pub closed: bool,
 
-    /// Self-reported crate version of the worker (from OpenRequest).
-    pub version: String,
-
-    /// Self-reported git commit the worker was built from (from OpenRequest).
-    pub git_sha: String,
-
-    /// Self-reported container image tag the worker is running (from OpenRequest).
-    pub image_tag: String,
+    /// What the worker reported about itself in `OpenRequest`.
+    pub identity: WorkerIdentity,
 
     /// Any extra state tracked by the assignment policy.
     pub extra: P::WorkerState,
 }
 
 impl<P: AssignmentPolicy> Worker<P> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         worker_type: WorkerType,
         max_weight: u32,
         channel: mpsc::UnboundedSender<Result<ServerMessage, Status>>,
-        version: String,
-        git_sha: String,
-        image_tag: String,
+        identity: WorkerIdentity,
     ) -> Self {
         Self {
             id,
@@ -338,9 +352,7 @@ impl<P: AssignmentPolicy> Worker<P> {
                 .as_secs(),
             channel,
             closed: false,
-            version,
-            git_sha,
-            image_tag,
+            identity,
             extra: P::WorkerState::default(),
         }
     }
@@ -923,18 +935,17 @@ impl<P: AssignmentPolicy> Coordinator<P> {
 
     /// Add a worker to the Coordinator. Returns true if worker already existed.
     ///
-    /// `version` / `git_sha` / `image_tag` are the worker's self-reported build
-    /// identity (OpenRequest), surfaced via the cluster component manifest.
-    #[allow(clippy::too_many_arguments)]
+    /// `identity` is what the worker reported in `OpenRequest`: its build
+    /// (surfaced via the cluster component manifest) and where it runs
+    /// (consumed downstream, e.g. by an autoscaler, to group workers). See
+    /// [`WorkerIdentity`].
     pub async fn add_worker(
         self: &Arc<Self>,
         worker_id: String,
         worker_type: WorkerType,
         max_weight: u32,
         channel: mpsc::UnboundedSender<Result<ServerMessage, Status>>,
-        version: String,
-        git_sha: String,
-        image_tag: String,
+        identity: WorkerIdentity,
     ) -> Result<bool> {
         let mut state = self
             .state
@@ -948,26 +959,16 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             if let Some(worker) = state.workers.get_mut(&worker_id) {
                 tracing::info!("Worker already exists");
                 worker.channel = channel;
-                // Refresh build identity: a worker reconnecting after an upgrade
+                // Refresh the identity: a worker reconnecting after an upgrade
                 // re-sends OpenRequest with new build fields. Without this the
                 // coordinator would report the worker's pre-upgrade identity.
-                worker.version = version;
-                worker.git_sha = git_sha;
-                worker.image_tag = image_tag;
+                worker.identity = identity;
                 return Ok(true);
             }
 
             state.workers.insert(
                 worker_id.clone(),
-                Worker::new(
-                    worker_id,
-                    worker_type,
-                    max_weight,
-                    channel,
-                    version,
-                    git_sha,
-                    image_tag,
-                ),
+                Worker::new(worker_id, worker_type, max_weight, channel, identity),
             );
             // Assign tasks now that a worker is available.
             self.assign_tasks(state).await?;
@@ -1784,9 +1785,9 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             };
             Some(proto::ClusterComponentInfo {
                 component: component.to_string(),
-                version: w.version.clone(),
-                git_sha: w.git_sha.clone(),
-                image_tag: w.image_tag.clone(),
+                version: w.identity.version.clone(),
+                git_sha: w.identity.git_sha.clone(),
+                image_tag: w.identity.image_tag.clone(),
             })
         }));
 
@@ -2330,9 +2331,7 @@ mod tests {
             worker_type,
             24,
             tx,
-            String::new(),
-            String::new(),
-            String::new(),
+            WorkerIdentity::default(),
         );
         // Force the heartbeat into the distant past so cleanup_dead_workers picks it up.
         worker.last_heartbeat = 0;
@@ -2358,9 +2357,7 @@ mod tests {
                     WorkerType::Gpu,
                     24,
                     tx,
-                    String::new(),
-                    String::new(),
-                    String::new(),
+                    WorkerIdentity::default(),
                 ),
             );
         }
@@ -2613,9 +2610,7 @@ mod tests {
                 worker_type,
                 24,
                 tx,
-                String::new(),
-                String::new(),
-                String::new(),
+                WorkerIdentity::default(),
             ),
         );
     }
@@ -2799,14 +2794,36 @@ mod tests {
 
     // --- build-identity reporting (add_worker registry + manifest) ---
 
-    /// Reads the stored build fields for a worker out of the in-memory registry.
-    async fn worker_build(
+    /// Reads the stored identity for a worker out of the in-memory registry.
+    async fn registered_identity(
         c: &Arc<Coordinator<DefaultPolicy>>,
         worker_id: &str,
-    ) -> (String, String, String) {
+    ) -> WorkerIdentity {
         let state = c.state.read().await;
-        let w = state.workers.get(worker_id).expect("worker registered");
-        (w.version.clone(), w.git_sha.clone(), w.image_tag.clone())
+        state
+            .workers
+            .get(worker_id)
+            .expect("worker registered")
+            .identity
+            .clone()
+    }
+
+    /// Worker crate version for identity fixtures. No test asserts on it.
+    const VERSION: &str = "2.5.0";
+
+    /// The version a reconnecting worker comes back on. Differs from
+    /// [`VERSION`], which is what proves the identity was refreshed.
+    const UPGRADED_VERSION: &str = "2.6.0";
+
+    /// A worker identity with no reported location, which is what most of
+    /// these tests care about.
+    fn build(version: &str, git_sha: &str, image_tag: &str) -> WorkerIdentity {
+        WorkerIdentity {
+            version: version.into(),
+            git_sha: git_sha.into(),
+            image_tag: image_tag.into(),
+            location: String::new(),
+        }
     }
 
     #[tokio::test]
@@ -2814,64 +2831,57 @@ mod tests {
         let c = Arc::new(coordinator());
         let (tx, _rx) = mpsc::unbounded_channel();
 
+        let identity = build(VERSION, "abc1234", "node-gpu-abc1234");
         let existed = c
-            .add_worker(
-                "w1".into(),
-                WorkerType::Gpu,
-                24,
-                tx,
-                "2.5.0".into(),
-                "abc1234".into(),
-                "node-gpu-abc1234".into(),
-            )
+            .add_worker("w1".into(), WorkerType::Gpu, 24, tx, identity.clone())
             .await
             .unwrap();
         assert!(!existed, "first add_worker must report the worker as new");
 
-        let (version, git_sha, image_tag) = worker_build(&c, "w1").await;
-        assert_eq!(version, "2.5.0");
-        assert_eq!(git_sha, "abc1234");
-        assert_eq!(image_tag, "node-gpu-abc1234");
+        assert_eq!(registered_identity(&c, "w1").await, identity);
     }
 
     #[tokio::test]
     async fn add_worker_reconnect_refreshes_build_identity() {
         let c = Arc::new(coordinator());
 
+        let first = WorkerIdentity {
+            location: "us-east-1".into(),
+            ..build(VERSION, "oldsha", "node-gpu-oldsha")
+        };
         let (tx1, _rx1) = mpsc::unbounded_channel();
-        c.add_worker(
-            "w1".into(),
-            WorkerType::Gpu,
-            24,
-            tx1,
-            "2.5.0".into(),
-            "oldsha".into(),
-            "node-gpu-oldsha".into(),
-        )
-        .await
-        .unwrap();
+        c.add_worker("w1".into(), WorkerType::Gpu, 24, tx1, first.clone())
+            .await
+            .unwrap();
 
-        // Same worker_id reconnects after an upgrade with a new build.
+        // Assert on the fresh-insert path (`Worker::new`) before the
+        // reconnect below overwrites it — otherwise a regression dropping
+        // `location` from `Worker::new` would pass this whole test.
+        assert_eq!(
+            registered_identity(&c, "w1").await,
+            first,
+            "identity must be set on the fresh-insert path"
+        );
+
+        // Same worker_id reconnects after an upgrade with a new build, from a
+        // different location (e.g. the worker was redeployed to a different
+        // site).
+        let upgraded = WorkerIdentity {
+            location: "us-west-2".into(),
+            ..build(UPGRADED_VERSION, "newsha", "node-gpu-newsha")
+        };
         let (tx2, _rx2) = mpsc::unbounded_channel();
         let existed = c
-            .add_worker(
-                "w1".into(),
-                WorkerType::Gpu,
-                24,
-                tx2,
-                "2.6.0".into(),
-                "newsha".into(),
-                "node-gpu-newsha".into(),
-            )
+            .add_worker("w1".into(), WorkerType::Gpu, 24, tx2, upgraded.clone())
             .await
             .unwrap();
         assert!(existed, "reconnect with same worker_id must report existed");
 
-        // Build identity must reflect the NEW build, not the stale one.
-        let (version, git_sha, image_tag) = worker_build(&c, "w1").await;
-        assert_eq!(version, "2.6.0", "version must refresh on reconnect");
-        assert_eq!(git_sha, "newsha", "git_sha must refresh on reconnect");
-        assert_eq!(image_tag, "node-gpu-newsha", "image_tag must refresh");
+        assert_eq!(
+            registered_identity(&c, "w1").await,
+            upgraded,
+            "every identity field must refresh on reconnect, not just some"
+        );
     }
 
     #[tokio::test]
@@ -2884,9 +2894,7 @@ mod tests {
             WorkerType::Gpu,
             24,
             tx_gpu,
-            "2.5.0".into(),
-            "gpusha".into(),
-            "node-gpu-gpusha".into(),
+            build(VERSION, "gpusha", "node-gpu-gpusha"),
         )
         .await
         .unwrap();
@@ -2897,9 +2905,7 @@ mod tests {
             WorkerType::Cpu,
             24,
             tx_cpu,
-            "2.5.0".into(),
-            "cpusha".into(),
-            "base-cpusha".into(),
+            build(VERSION, "cpusha", "base-cpusha"),
         )
         .await
         .unwrap();
@@ -2939,9 +2945,7 @@ mod tests {
             WorkerType::All,
             24,
             tx,
-            "2.5.0".into(),
-            "allsha".into(),
-            "node-gpu-allsha".into(),
+            build(VERSION, "allsha", "node-gpu-allsha"),
         )
         .await
         .unwrap();
@@ -2966,9 +2970,7 @@ mod tests {
             WorkerType::UnspecifiedWorkerType,
             24,
             tx_u,
-            "2.5.0".into(),
-            "usha".into(),
-            "base-usha".into(),
+            build(VERSION, "usha", "base-usha"),
         )
         .await
         .unwrap();
@@ -2979,9 +2981,7 @@ mod tests {
             WorkerType::None,
             24,
             tx_n,
-            "2.5.0".into(),
-            "nsha".into(),
-            "base-nsha".into(),
+            build(VERSION, "nsha", "base-nsha"),
         )
         .await
         .unwrap();

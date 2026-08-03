@@ -42,6 +42,7 @@ pub async fn run(
         node_config.coordinator_rpc.clone(),
         node_config.worker_id.clone(),
         node_config.worker_type,
+        node_config.location.clone(),
     )
     .await?;
 

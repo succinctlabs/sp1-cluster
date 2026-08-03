@@ -1,8 +1,9 @@
 use rand::Rng;
 
 use sp1_cluster_common::proto::WorkerType;
-use sp1_cluster_worker::utils::get_ecs_task_info;
+use sp1_cluster_worker::location;
 use std::time::Duration;
+use tracing::warn;
 
 /// To prevent stuck tasks from accumulating due to any deadlock bug or similar issue, tasks will be
 /// killed after running for 6 hours.
@@ -21,6 +22,9 @@ pub struct NodeConfig {
     pub cluster: String,
     pub task_timeout: Duration,
     pub drain_timeout: Duration,
+    /// Where this worker runs, as an opaque label the coordinator groups
+    /// workers by. `None` when the environment does not identify one.
+    pub location: Option<String>,
 }
 
 impl Default for NodeConfig {
@@ -32,25 +36,34 @@ impl Default for NodeConfig {
             cluster: "unknown".to_string(),
             task_timeout: DEFAULT_TASK_TIMEOUT,
             drain_timeout: DEFAULT_DRAIN_TIMEOUT,
+            location: None,
         }
     }
 }
 
 impl NodeConfig {
     pub async fn load() -> Self {
-        let ecs_task_info = get_ecs_task_info(&reqwest::Client::new()).await;
-        let cluster = ecs_task_info
-            .as_ref()
-            .map_or("unknown".to_string(), |info| info.cluster.clone());
+        let ecs_task_info = location::get_ecs_task_info(&reqwest::Client::new()).await;
+        let ambient_region = location::ambient_region();
+        // Identity from the task metadata endpoint, with fallbacks for a worker
+        // that cannot reach it.
+        let (worker_id, location, cluster) = match ecs_task_info {
+            Ok(info) => (
+                info.task_id().to_string(),
+                location::resolve(info.region(), ambient_region),
+                info.cluster,
+            ),
+            Err(e) => {
+                warn!("ECS task metadata unavailable, falling back to AWS_REGION: {e}");
+                (
+                    format!("unknown_{:032x}", rand::rng().random::<u128>()),
+                    location::resolve(None, ambient_region),
+                    "unknown".to_string(),
+                )
+            }
+        };
         Self {
-            worker_id: {
-                match ecs_task_info {
-                    std::result::Result::Ok(info) => {
-                        info.task_arn.split('/').next_back().unwrap().to_string()
-                    }
-                    _ => format!("unknown_{:032x}", rand::rng().random::<u128>()),
-                }
-            },
+            worker_id,
             worker_type: {
                 let worker_type = std::env::var("WORKER_TYPE").expect("WORKER_TYPE is not set");
                 WorkerType::from_str_name(&worker_type).expect("invalid worker type")
@@ -60,6 +73,7 @@ impl NodeConfig {
             cluster,
             task_timeout: DEFAULT_TASK_TIMEOUT,
             drain_timeout: DEFAULT_DRAIN_TIMEOUT,
+            location,
         }
     }
 }

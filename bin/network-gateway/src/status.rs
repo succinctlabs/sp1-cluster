@@ -32,20 +32,24 @@ pub fn execution_from_cluster(status: cluster_pb::ExecutionStatus) -> sdk_pb::Ex
 
 /// Map an SDK `FulfillmentStatus` filter to the cluster states it covers.
 ///
-/// `UnspecifiedFulfillmentStatus` means "no filter"; `Assigned` has no cluster
-/// analogue so returns an empty set (i.e. the filter matches nothing).
+/// `None` means no filter. `Some(vec![])` means the filter matches nothing:
+/// `Assigned`, `Reverted` and `Expired` are on-chain settlement states with no
+/// cluster analogue — the cluster only tracks Pending/Completed/Failed/Cancelled
+/// — and [`fulfillment_from_cluster`] can never produce them, so a caller
+/// filtering by one must get an empty result. The two cannot share an encoding:
+/// the cluster API treats an empty status list as "no filter", which would turn
+/// "matches nothing" into "matches everything".
 pub fn cluster_fulfillment_filter(
     status: sdk_pb::FulfillmentStatus,
-) -> Vec<cluster_pb::ProofRequestStatus> {
+) -> Option<Vec<cluster_pb::ProofRequestStatus>> {
     use cluster_pb::ProofRequestStatus as C;
     use sdk_pb::FulfillmentStatus as S;
     match status {
-        S::UnspecifiedFulfillmentStatus => vec![],
-        S::Requested => vec![C::Pending],
-        S::Assigned => vec![],
-        S::Fulfilled => vec![C::Completed],
-        S::Unfulfillable => vec![C::Failed, C::Cancelled],
-        S::Reverted | S::Expired => vec![C::Failed],
+        S::UnspecifiedFulfillmentStatus => None,
+        S::Requested => Some(vec![C::Pending]),
+        S::Assigned | S::Reverted | S::Expired => Some(vec![]),
+        S::Fulfilled => Some(vec![C::Completed]),
+        S::Unfulfillable => Some(vec![C::Failed, C::Cancelled]),
     }
 }
 
@@ -99,13 +103,26 @@ mod tests {
     fn cluster_fulfillment_filter_maps_correctly() {
         use cluster_pb::ProofRequestStatus as C;
         use sdk_pb::FulfillmentStatus as S;
-        assert!(cluster_fulfillment_filter(S::UnspecifiedFulfillmentStatus).is_empty());
-        assert_eq!(cluster_fulfillment_filter(S::Requested), vec![C::Pending]);
-        assert!(cluster_fulfillment_filter(S::Assigned).is_empty());
-        assert_eq!(cluster_fulfillment_filter(S::Fulfilled), vec![C::Completed]);
+        assert_eq!(
+            cluster_fulfillment_filter(S::UnspecifiedFulfillmentStatus),
+            None
+        );
+        assert_eq!(
+            cluster_fulfillment_filter(S::Requested),
+            Some(vec![C::Pending])
+        );
+        // Settlement states the cluster cannot produce: a filter that matches
+        // nothing, NOT "no filter".
+        assert_eq!(cluster_fulfillment_filter(S::Assigned), Some(vec![]));
+        assert_eq!(cluster_fulfillment_filter(S::Reverted), Some(vec![]));
+        assert_eq!(cluster_fulfillment_filter(S::Expired), Some(vec![]));
+        assert_eq!(
+            cluster_fulfillment_filter(S::Fulfilled),
+            Some(vec![C::Completed])
+        );
         assert_eq!(
             cluster_fulfillment_filter(S::Unfulfillable),
-            vec![C::Failed, C::Cancelled]
+            Some(vec![C::Failed, C::Cancelled])
         );
     }
 
