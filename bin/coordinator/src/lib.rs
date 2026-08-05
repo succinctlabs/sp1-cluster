@@ -669,15 +669,24 @@ impl<P: AssignmentPolicy> Coordinator<P> {
 
             P::post_task_success_update_state(&mut state, task_type);
 
-            P::post_task_update_state(
-                &mut state,
-                proof_extra,
-                &task_id,
-                task_extra,
-                task_weight,
-                &proof_id,
-                task_type,
-            );
+            // Policy weight is charged when a worker takes the task and released when it
+            // gives it up. A completion from a worker that no longer holds it — preempted,
+            // or superseded by a redelivery — was already released by whoever took it.
+            let still_owned = state.workers.get(&worker_id).is_some_and(|w| {
+                w.active_tasks
+                    .contains(&(proof_id.clone(), task_id.clone()))
+            });
+            if still_owned {
+                P::post_task_update_state(
+                    &mut state,
+                    proof_extra,
+                    &task_id,
+                    task_extra,
+                    task_weight,
+                    &proof_id,
+                    task_type,
+                );
+            }
 
             tracing::debug!(
                 "Complete task {} for proof {}, {} tasks remaining",
@@ -1086,7 +1095,8 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         }
     }
 
-    /// Mark a task as failed.
+    /// Mark a task as failed. A task already recorded as succeeded keeps its status
+    /// and only releases its worker slot.
     pub async fn fail_task(
         self: &Arc<Self>,
         worker_id: String,
@@ -1123,6 +1133,39 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             return Err(Status::not_found(format!("task {task_id} not found")));
         };
 
+        // A success already recorded is final. Delivery is at-least-once, so a second
+        // execution of a finished task can report failure afterwards — typically because
+        // it found inputs the first execution had already reclaimed.
+        if task.status == TaskStatus::Succeeded {
+            let task_weight = task.data.weight;
+            let task_type = task.data.task_type();
+            let task_extra = task.extra.clone();
+            let proof_extra = proof.extra.clone();
+            tracing::warn!("Ignoring failure for already-succeeded task {}", task_id);
+            // The task really did finish, so release it the way a completion would.
+            P::post_task_update_state(
+                &mut state,
+                proof_extra,
+                &task_id,
+                task_extra,
+                task_weight,
+                &proof_id,
+                task_type,
+            );
+            if let Some(worker) = state.workers.get_mut(&worker_id) {
+                worker
+                    .active_tasks
+                    .remove(&(proof_id.clone(), task_id.clone()));
+                worker.weight = worker.weight.saturating_sub(task_weight);
+                if worker.active_tasks.is_empty() {
+                    let worker = worker.clone();
+                    let updated = P::post_worker_empty(&mut state, worker);
+                    state.workers.insert(worker_id, updated);
+                }
+            }
+            return self.assign_tasks(state).await;
+        }
+
         // If it's a controller task and we won't retry it, we want to manually fail the proof as
         // there's no way to continue.
         let manual_proof_fail = enable_proof_fail(task.data.task_type())
@@ -1131,7 +1174,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         let status = if retryable {
             if task.retries == MAX_TASK_RETRIES {
                 tracing::error!("task {} retries exhausted", task_id);
-                if task.status != TaskStatus::Succeeded && task.status != TaskStatus::FailedFatal {
+                if task.status != TaskStatus::FailedFatal {
                     proof.active_tasks -= 1;
                 }
 
@@ -1142,7 +1185,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 TaskStatus::FailedRetryable
             }
         } else {
-            if task.status != TaskStatus::Succeeded && task.status != TaskStatus::FailedFatal {
+            if task.status != TaskStatus::FailedFatal {
                 proof.active_tasks -= 1;
             }
             TaskStatus::FailedFatal
@@ -1361,26 +1404,35 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         }
         track_latency!("coordinator.fail_proof", {
             let sender = state.proofs_tx.clone();
-            // Cancel all tasks
+            // Vet the blamed task before tearing anything down: `on_proof_deleted` discards
+            // policy state that re-inserting the proof would not restore.
+            if let (Some(task_id), Some(proof)) = (task_id.as_ref(), state.proofs.get(&proof_id)) {
+                let Some(task) = proof.tasks.get(task_id) else {
+                    tracing::warn!(
+                        "Ignoring proof failure, task {} not found in proof {}",
+                        task_id,
+                        proof_id
+                    );
+                    return Err(Status::not_found(format!(
+                        "task {task_id} not found in proof {proof_id}"
+                    )));
+                };
+                // The blamed task already succeeded, so the proof must outlive the
+                // duplicate's report.
+                if task.status == TaskStatus::Succeeded {
+                    tracing::warn!(
+                        "Ignoring proof failure blamed on already-succeeded task {}",
+                        task_id
+                    );
+                    return Ok(());
+                }
+            }
             P::on_proof_deleted(state, &proof_id);
             let proof = state.proofs.remove(&proof_id);
             let Some(proof) = proof else {
                 tracing::warn!("proof {} not found", proof_id);
                 return Ok(());
             };
-            if let Some(task_id) = task_id {
-                if !proof.tasks.contains_key(&task_id) {
-                    tracing::warn!(
-                        "Ignoring proof failure, task {} not found in proof {}",
-                        task_id,
-                        proof_id
-                    );
-                    state.proofs.insert(proof_id.clone(), proof);
-                    return Err(Status::not_found(format!(
-                        "task {task_id} not found in proof {proof_id}"
-                    )));
-                }
-            }
             // Deliver a terminal TaskResult to each task's subscribers so they drain
             // via the normal completion path once the proof is gone.
             for task in proof.tasks.values() {
@@ -2615,6 +2667,36 @@ mod tests {
         );
     }
 
+    fn mark_task_succeeded(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        proof_id: &str,
+        task_id: &str,
+    ) {
+        state
+            .proofs
+            .get_mut(proof_id)
+            .unwrap()
+            .tasks
+            .get_mut(task_id)
+            .unwrap()
+            .status = TaskStatus::Succeeded;
+    }
+
+    fn insert_worker_holding(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        worker_id: &str,
+        proof_id: &str,
+        task_id: &str,
+    ) {
+        insert_live_worker(state, worker_id, WorkerType::Gpu);
+        let task_weight = state.proofs[proof_id].tasks[task_id].data.weight;
+        let worker = state.workers.get_mut(worker_id).unwrap();
+        worker
+            .active_tasks
+            .insert((proof_id.into(), task_id.into()));
+        worker.weight = task_weight;
+    }
+
     /// Like `insert_proof_with_running_task` but explicitly sets the task_type so
     /// the requeue path actually routes through `DefaultPolicy::enqueue_task` into
     /// the matching queue. `TaskType::UnspecifiedTaskType` (the default used by the
@@ -2648,6 +2730,63 @@ mod tests {
             },
         );
         state.proofs.insert(proof_id.into(), proof);
+    }
+
+    /// `BalancedPolicy` is used here because `DefaultPolicy`'s weight accounting is a
+    /// no-op and would hide the double release.
+    fn balanced_proof_on_worker(
+        state: &mut CoordinatorState<policy::balanced::BalancedPolicy>,
+        owner: &str,
+    ) {
+        let mut proof = Proof::new("p1".into(), None, ());
+        // A second task keeps the proof alive past this completion.
+        proof.active_tasks = 2;
+        proof.tasks.insert(
+            "t1".into(),
+            Task {
+                id: "t1".into(),
+                data: TaskData {
+                    proof_id: "p1".into(),
+                    task_type: TaskType::ProveShard as i32,
+                    weight: 8,
+                    ..Default::default()
+                },
+                created_at: SystemTime::now(),
+                status: TaskStatus::Running,
+                retries: 0,
+                subscribers: HashSet::new(),
+                worker: Some(owner.into()),
+                dead_worker_requeue_count: 0,
+                extra: Default::default(),
+            },
+        );
+        state.proofs.insert("p1".into(), proof);
+        // What assigning the task to `owner` charged.
+        state.policy.proof_gpu_weights.insert("p1".into(), 8);
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut worker = Worker::new(
+            owner.into(),
+            WorkerType::Gpu,
+            24,
+            tx,
+            WorkerIdentity::default(),
+        );
+        worker.active_tasks.insert(("p1".into(), "t1".into()));
+        worker.weight = 8;
+        state.workers.insert(owner.into(), worker);
+
+        let (tx, _rx) = mpsc::unbounded_channel();
+        state.workers.insert(
+            "w_stale".into(),
+            Worker::new(
+                "w_stale".into(),
+                WorkerType::Gpu,
+                24,
+                tx,
+                WorkerIdentity::default(),
+            ),
+        );
     }
 
     /// Regression guard: after `cleanup_dead_workers` removes a dead worker and
@@ -2999,5 +3138,263 @@ mod tests {
             "None worker must be skipped"
         );
         assert_eq!(components.len(), 1, "only the coordinator entry remains");
+    }
+
+    /// A preempted worker's late completion must not release weight the preemption
+    /// already released, or the tenant is credited twice and over-admitted.
+    #[tokio::test]
+    async fn completion_from_a_worker_that_lost_the_task_does_not_release_weight() {
+        let c = Arc::new(Coordinator::<policy::balanced::BalancedPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            balanced_proof_on_worker(&mut state, "w_owner");
+        }
+
+        c.complete_task(
+            "w_stale".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata::default(),
+        )
+        .await
+        .unwrap();
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.policy.proof_gpu_weights.get("p1").copied(),
+            Some(8),
+            "a completion from a worker that no longer holds the task released weight twice"
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_from_the_owning_worker_releases_weight() {
+        let c = Arc::new(Coordinator::<policy::balanced::BalancedPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            balanced_proof_on_worker(&mut state, "w_owner");
+        }
+
+        c.complete_task(
+            "w_owner".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata::default(),
+        )
+        .await
+        .unwrap();
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.policy.proof_gpu_weights.get("p1").copied(),
+            None,
+            "the owning worker's completion must release the weight it charged"
+        );
+    }
+
+    /// The duplicate's own assignment charged weight that nothing else releases, since
+    /// the completion came from a worker that no longer held the task.
+    #[tokio::test]
+    async fn ignoring_a_duplicates_failure_releases_the_weight_it_charged() {
+        let c = Arc::new(Coordinator::<policy::balanced::BalancedPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            balanced_proof_on_worker(&mut state, "w_owner");
+            state
+                .proofs
+                .get_mut("p1")
+                .unwrap()
+                .tasks
+                .get_mut("t1")
+                .unwrap()
+                .status = TaskStatus::Succeeded;
+        }
+
+        c.fail_task("w_owner".into(), "p1".into(), "t1".into(), false)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.policy.proof_gpu_weights.get("p1").copied(),
+            None,
+            "the duplicate's assignment left weight charged to the proof"
+        );
+    }
+
+    /// The path a fatal worker error actually takes: `try_unclaim_proof` sends
+    /// `FailProofRequest` naming the task. A duplicate execution of a finished task must
+    /// not take the proof down with it.
+    #[tokio::test]
+    async fn fail_proof_blamed_on_a_succeeded_task_is_ignored() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            mark_task_succeeded(&mut state, "p1", "t1");
+        }
+
+        c.fail_proof("p1".into(), Some("t1".into()), true, None)
+            .await
+            .expect("a failure blamed on finished work must be ignored, not error");
+
+        let state = c.state.read().await;
+        let proof = state
+            .proofs
+            .get("p1")
+            .expect("proof must survive a duplicate execution's failure");
+        assert_eq!(
+            proof.tasks.get("t1").unwrap().status,
+            TaskStatus::Succeeded,
+            "the recorded success must be untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_proof_blamed_on_an_unknown_task_is_rejected() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+        }
+
+        let result = c
+            .fail_proof("p1".into(), Some("nope".into()), false, None)
+            .await;
+
+        assert!(
+            matches!(result, Err(ref e) if e.code() == tonic::Code::NotFound),
+            "unknown task must be rejected, got: {result:?}"
+        );
+        let state = c.state.read().await;
+        assert!(
+            state.proofs.contains_key("p1"),
+            "proof must survive a failure naming a task it does not own"
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_proof_blamed_on_a_running_task_still_fails_the_proof() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+        }
+
+        c.fail_proof("p1".into(), Some("t1".into()), false, None)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            !state.proofs.contains_key("p1"),
+            "a genuine failure must still fail the proof"
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_task_does_not_downgrade_a_succeeded_task() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            mark_task_succeeded(&mut state, "p1", "t1");
+            insert_worker_holding(&mut state, "w1", "p1", "t1");
+        }
+
+        c.fail_task("w1".into(), "p1".into(), "t1".into(), false)
+            .await
+            .expect("a late failure must be ignored, not surfaced as an error");
+
+        let state = c.state.read().await;
+        let proof = state
+            .proofs
+            .get("p1")
+            .expect("proof must survive a late failure on a finished task");
+        assert_eq!(
+            proof.tasks.get("t1").unwrap().status,
+            TaskStatus::Succeeded,
+            "recorded success was downgraded by a late failure"
+        );
+        assert_eq!(
+            proof.active_tasks, 1,
+            "ignoring the failure must not touch the proof's task accounting"
+        );
+        assert!(
+            !state
+                .workers
+                .get("w1")
+                .unwrap()
+                .active_tasks
+                .contains(&("p1".into(), "t1".into())),
+            "the finished task must still release its worker slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn ignored_failure_frees_the_worker_for_queued_work() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            mark_task_succeeded(&mut state, "p1", "t1");
+            insert_worker_holding(&mut state, "w1", "p1", "t1");
+
+            // A second proof waiting on the only GPU worker.
+            insert_proof_with_running_gpu_task(&mut state, "p2", "t2", None);
+            let queued = state
+                .proofs
+                .get("p2")
+                .unwrap()
+                .tasks
+                .get("t2")
+                .unwrap()
+                .clone();
+            c.enqueue_task(&mut state, queued).await;
+        }
+
+        c.fail_task("w1".into(), "p1".into(), "t1".into(), false)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            state
+                .workers
+                .get("w1")
+                .unwrap()
+                .active_tasks
+                .contains(&("p2".into(), "t2".into())),
+            "freeing the slot must schedule queued work, not wait for the next event"
+        );
+    }
+
+    #[tokio::test]
+    async fn retryable_failure_does_not_requeue_a_succeeded_task() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            mark_task_succeeded(&mut state, "p1", "t1");
+            insert_worker_holding(&mut state, "w1", "p1", "t1");
+        }
+
+        c.fail_task("w1".into(), "p1".into(), "t1".into(), true)
+            .await
+            .expect("a late retryable failure must be ignored");
+
+        let state = c.state.read().await;
+        let task = state.proofs.get("p1").unwrap().tasks.get("t1").unwrap();
+        assert_eq!(task.status, TaskStatus::Succeeded);
+        assert_eq!(task.retries, 0, "a succeeded task must not be retried");
+        assert!(
+            !state
+                .workers
+                .get("w1")
+                .unwrap()
+                .active_tasks
+                .contains(&("p1".into(), "t1".into())),
+            "a succeeded task must not be re-assigned"
+        );
     }
 }

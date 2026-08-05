@@ -212,7 +212,7 @@ fn build_heartbeat_request(
         let (proof_id, task_id) = entry.key();
         active_task_proof_ids.push(proof_id.clone());
         active_task_ids.push(task_id.clone());
-        current_weight += entry.value().0.weight;
+        current_weight += entry.value().data.weight;
     }
     HeartbeatRequest {
         worker_id: worker_id.to_string(),
@@ -326,14 +326,16 @@ mod tests {
     #[tokio::test]
     async fn request_reports_every_task_with_its_weight() {
         let task = |weight| {
-            (
-                TaskData {
+            let work = tokio::spawn(std::future::pending::<()>());
+            ActiveTask {
+                data: TaskData {
                     weight,
                     ..Default::default()
                 },
-                tokio::spawn(std::future::pending::<()>()),
-                Instant::now(),
-            )
+                started_at: Instant::now(),
+                work: work.abort_handle(),
+                reporter: work,
+            }
         };
         let tasks = DashMap::new();
         tasks.insert(("p1".to_string(), "t1".to_string()), task(3));

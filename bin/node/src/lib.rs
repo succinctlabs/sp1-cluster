@@ -13,14 +13,15 @@ use sp1_cluster_worker::client::WorkerServiceClient;
 use sp1_cluster_worker::config::cluster_worker_config;
 use sp1_cluster_worker::metrics::WorkerMetrics;
 use sp1_cluster_worker::SP1ClusterWorker;
-use sp1_prover::worker::WorkerClient;
+use sp1_prover::worker::{TaskMetadata, WorkerClient};
 use sp1_prover::SP1ProverComponents;
 use sp1_sdk::install::try_install_circuit_artifacts;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 pub async fn run(
@@ -168,7 +169,56 @@ pub async fn run_gpu_worker(
     .unwrap()
 }
 
-pub(crate) type ActiveTask = (TaskData, JoinHandle<()>, Instant);
+pub(crate) struct ActiveTask {
+    pub data: TaskData,
+    pub started_at: Instant,
+    pub work: AbortHandle,
+    /// Outlives cancellation of `work`, so a task that finished can still report it.
+    pub reporter: JoinHandle<()>,
+}
+
+/// Drops the task's entry unless a redelivery already replaced it. A cancelled task
+/// reuses its key, so the successor's entry must keep its heartbeat and timeout.
+fn drop_if_current(
+    tasks: &DashMap<(String, String), ActiveTask>,
+    key: &(String, String),
+    work_id: tokio::task::Id,
+) -> Option<((String, String), ActiveTask)> {
+    tasks.remove_if(key, |_, active| active.work.id() == work_id)
+}
+
+/// What the reporter owes the coordinator once a task's work future resolves.
+pub(crate) enum Report {
+    Complete(TaskMetadata),
+    Fail {
+        retryable: bool,
+    },
+    /// The work was aborted before it finished, so its fate is decided elsewhere.
+    /// Anything said here would race that decision.
+    Nothing,
+}
+
+pub(crate) fn report_for(
+    key: &(String, String),
+    result: Result<(proto::TaskStatus, Option<TaskMetadata>), JoinError>,
+) -> Report {
+    match result {
+        Ok((proto::TaskStatus::Succeeded, metadata)) => {
+            Report::Complete(metadata.expect("successful task should have metadata"))
+        }
+        Ok((status, _)) => Report::Fail {
+            retryable: status == proto::TaskStatus::FailedRetryable,
+        },
+        Err(e) if e.is_cancelled() => {
+            tracing::info!("Task {:?} cancelled before completing", key);
+            Report::Nothing
+        }
+        Err(e) => {
+            tracing::error!("Task {:?} panicked: {:?}", key, e);
+            Report::Fail { retryable: false }
+        }
+    }
+}
 
 async fn run_worker_inner(
     node_config: NodeConfig,
@@ -177,6 +227,10 @@ async fn run_worker_inner(
     worker: Arc<SP1ClusterWorker<impl WorkerClient, impl ArtifactClient, impl SP1ProverComponents>>,
 ) -> eyre::Result<()> {
     let tasks: Arc<DashMap<(String, String), ActiveTask>> = Arc::new(DashMap::new());
+    // A cancelled task is dropped from `tasks` immediately so a redelivery under the same
+    // key is accepted, but its reporter may still be mid-RPC. Draining on `tasks` alone
+    // would exit under it and lose the completion.
+    let reporters_in_flight = Arc::new(AtomicUsize::new(0));
 
     // Beats stop when this future ends (return or harness kill).
     let heartbeat = HeartbeatHandle::spawn(node_config.clone(), tasks.clone(), token.clone())?;
@@ -256,8 +310,15 @@ async fn run_worker_inner(
                                     let task_type = data.task_type();
                                     let proof_id = data.proof_id.clone();
                                     let key = (proof_id, task.task_id.clone());
-                                    let handle = tokio::spawn({
+                                    let work = tokio::spawn({
                                         let worker = worker.clone();
+                                        let task = task.clone();
+                                        async move { worker.run_task(&task).await }
+                                    });
+                                    let work_abort = work.abort_handle();
+                                    reporters_in_flight.fetch_add(1, Ordering::SeqCst);
+                                    let reporter = tokio::spawn({
+                                        let in_flight = reporters_in_flight.clone();
                                         let task = task.clone();
                                         let data = data.clone();
                                         let worker_client = worker_client.clone();
@@ -265,12 +326,16 @@ async fn run_worker_inner(
                                         let worker_id = node_config.worker_id.clone();
                                         let tasks = tasks.clone();
                                         async move {
-                                            let (status, metadata) = worker
-                                                .run_task(&task)
-                                                .await;
-                                            match status {
-                                                proto::TaskStatus::Succeeded => {
-                                                    let metadata_string = serde_json::to_string(&metadata.expect("successful task should have metadata")).unwrap();
+                                            let _tracked = sp1_cluster_worker::utils::DeferGuard::new(
+                                                in_flight,
+                                                |c| {
+                                                    c.fetch_sub(1, Ordering::SeqCst);
+                                                },
+                                            );
+                                            let work_id = work.id();
+                                            match report_for(&key, work.await) {
+                                                Report::Complete(metadata) => {
+                                                    let metadata_string = serde_json::to_string(&metadata).unwrap();
                                                     if let Err(e) = worker_client.complete_task(CompleteTaskRequest {
                                                         worker_id,
                                                         proof_id: data.proof_id.clone(),
@@ -280,9 +345,7 @@ async fn run_worker_inner(
                                                         tracing::error!("Failed to complete task: {:?}", e);
                                                     }
                                                 }
-                                                _ => {
-                                                    let retryable = status
-                                                        == sp1_cluster_common::proto::TaskStatus::FailedRetryable;
+                                                Report::Fail { retryable } => {
                                                     if let Err(e) = worker_client.fail_task(FailTaskRequest {
                                                         worker_id,
                                                         proof_id: data.proof_id.clone(),
@@ -292,25 +355,30 @@ async fn run_worker_inner(
                                                         tracing::error!("Failed to fail task: {:?}", e);
                                                     }
                                                 }
+                                                Report::Nothing => return,
                                             }
-                                            let removed = tasks.remove(&key);
+                                            let removed = drop_if_current(&tasks, &key, work_id);
                                             tracing::info!(
                                                 "Completed task {:?} {:?} after {:?}",
                                                 task_type,
                                                 key,
-                                                removed.map(|r| r.1 .2.elapsed())
+                                                removed.map(|r| r.1.started_at.elapsed())
                                             );
                                         }
                                     });
-                                    tasks.insert(key, (task.data.unwrap().clone(), handle, Instant::now()));
+                                    tasks.insert(key, ActiveTask {
+                                        data: task.data.unwrap().clone(),
+                                        started_at: Instant::now(),
+                                        work: work_abort,
+                                        reporter,
+                                    });
                                 }
                                 Some(server_message::Message::CancelTask(task)) => {
                                     if let Some(entry) =
                                         tasks.get(&(task.proof_id.clone(), task.task_id.clone()))
                                     {
-                                        let (_, handle, _) = entry.value();
                                         tracing::info!("Aborting task {} {}", task.proof_id, task.task_id);
-                                        handle.abort();
+                                        entry.value().work.abort();
                                         drop(entry);
                                         tasks.remove(&(task.proof_id, task.task_id.clone()));
                                     }
@@ -365,13 +433,14 @@ async fn run_worker_inner(
                         }
                         last_tick = Instant::now();
                         // If the worker is closed and there's no tasks, break out of the loop.
-                        if closed && tasks.is_empty() {
+                        if closed && tasks.is_empty() && reporters_in_flight.load(Ordering::SeqCst) == 0 {
                             tracing::info!("Worker is closed and has no tasks, breaking out of loop");
                             break;
                         }
                         if let Some(started) = drain_started_at {
                             let elapsed = started.elapsed();
-                            let in_flight = tasks.len();
+                            let in_flight =
+                                tasks.len() + reporters_in_flight.load(Ordering::SeqCst);
                             if elapsed > node_config.drain_timeout {
                                 let stuck: Vec<_> = tasks.iter().map(|e| e.key().clone()).collect();
                                 tracing::warn!(
@@ -425,11 +494,9 @@ async fn run_worker_inner(
                         let mut panicked_tasks = HashSet::new();
                         let mut timed_out_tasks = HashSet::new();
                         for entry in tasks.iter_mut() {
-                            // The threads should be removing from tasks when they complete, so
-                            // if it's reached this point, it must be because it panicked.
-                            if entry.value().1.is_finished() {
+                            if entry.value().reporter.is_finished() {
                                 panicked_tasks.insert(entry.key().clone());
-                            } else if entry.value().2.elapsed() > node_config.task_timeout {
+                            } else if entry.value().started_at.elapsed() > node_config.task_timeout {
                                 timed_out_tasks.insert(entry.key().clone());
                             }
                         }
@@ -438,7 +505,7 @@ async fn run_worker_inner(
                                 tracing::warn!("Task {:?} was panicked but is not in tasks anymore", task_id);
                                 continue;
                             };
-                            if let Err(e) = task.1.await {
+                            if let Err(e) = task.reporter.await {
                                 tracing::error!("Task {:?} panicked: {:?}", task_id, e);
                                 if let Err(e) = worker_client.fail_task(FailTaskRequest {
                                     worker_id: node_config.worker_id.clone(),
@@ -458,7 +525,7 @@ async fn run_worker_inner(
                                 continue;
                             };
                             tracing::error!("Task {:?} timed out after {:?}", task_id, node_config.task_timeout);
-                            task.1.abort();
+                            task.work.abort();
                             if let Err(e) = worker_client.fail_task(FailTaskRequest {
                                 worker_id: node_config.worker_id.clone(),
                                 proof_id: task_id.0,
@@ -477,7 +544,7 @@ async fn run_worker_inner(
                         }).await {
                             tracing::error!("Failed to close worker: {:?}", e);
                         }
-                        if tasks.is_empty() {
+                        if tasks.is_empty() && reporters_in_flight.load(Ordering::SeqCst) == 0 {
                             tracing::info!("No in-flight tasks; shutting down immediately");
                             break;
                         } else {
@@ -517,4 +584,215 @@ async fn run_worker_inner(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key() -> (String, String) {
+        ("p1".to_string(), "t1".to_string())
+    }
+
+    async fn join_result(
+        f: impl std::future::Future<Output = (proto::TaskStatus, Option<TaskMetadata>)> + Send + 'static,
+    ) -> Result<(proto::TaskStatus, Option<TaskMetadata>), JoinError> {
+        tokio::spawn(f).await
+    }
+
+    fn active_task(work: JoinHandle<(proto::TaskStatus, Option<TaskMetadata>)>) -> ActiveTask {
+        ActiveTask {
+            data: TaskData::default(),
+            started_at: Instant::now(),
+            work: work.abort_handle(),
+            reporter: tokio::spawn(std::future::ready(())),
+        }
+    }
+
+    #[tokio::test]
+    async fn success_is_reported() {
+        let result = join_result(async {
+            (
+                proto::TaskStatus::Succeeded,
+                Some(TaskMetadata { gpu_ms: Some(7) }),
+            )
+        })
+        .await;
+
+        match report_for(&key(), result) {
+            Report::Complete(metadata) => assert_eq!(metadata.gpu_ms, Some(7)),
+            _ => panic!("a succeeded task must be reported complete"),
+        }
+    }
+
+    #[tokio::test]
+    async fn failure_carries_its_retryability() {
+        let retryable = join_result(async { (proto::TaskStatus::FailedRetryable, None) }).await;
+        let fatal = join_result(async { (proto::TaskStatus::FailedFatal, None) }).await;
+
+        assert!(matches!(
+            report_for(&key(), retryable),
+            Report::Fail { retryable: true }
+        ));
+        assert!(matches!(
+            report_for(&key(), fatal),
+            Report::Fail { retryable: false }
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancellation_reports_nothing() {
+        let work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        work.abort();
+
+        assert!(matches!(report_for(&key(), work.await), Report::Nothing));
+    }
+
+    #[tokio::test]
+    async fn panic_fails_the_task_fatally() {
+        let result = join_result(async { panic!("boom") }).await;
+
+        assert!(matches!(
+            report_for(&key(), result),
+            Report::Fail { retryable: false }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_task_keeps_the_drain_waiting_on_its_reporter() {
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let tasks: DashMap<(String, String), ActiveTask> = DashMap::new();
+        let key = key();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+        in_flight.fetch_add(1, Ordering::SeqCst);
+        let work = tokio::spawn(std::future::ready((
+            proto::TaskStatus::Succeeded,
+            Some(TaskMetadata { gpu_ms: Some(1) }),
+        )));
+        let work_abort = work.abort_handle();
+        let reporter = tokio::spawn({
+            let in_flight = in_flight.clone();
+            async move {
+                let _tracked = sp1_cluster_worker::utils::DeferGuard::new(in_flight, |c| {
+                    c.fetch_sub(1, Ordering::SeqCst);
+                });
+                let _ = work.await;
+                release_rx.await.unwrap();
+            }
+        });
+        tasks.insert(
+            key.clone(),
+            ActiveTask {
+                data: TaskData::default(),
+                started_at: Instant::now(),
+                work: work_abort,
+                reporter,
+            },
+        );
+
+        // The CancelTask arm drops the entry so a redelivery is accepted.
+        tasks.remove(&key);
+
+        assert!(tasks.is_empty());
+        assert!(
+            in_flight.load(Ordering::SeqCst) > 0,
+            "drain would exit while the reporter is still delivering"
+        );
+
+        release_tx.send(()).unwrap();
+        while in_flight.load(Ordering::SeqCst) > 0 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// A stale reporter finishing after its task was cancelled and redelivered must not
+    /// evict the successor, which would strand it with no heartbeat and no timeout.
+    #[tokio::test]
+    async fn a_stale_reporter_leaves_the_successor_entry_alone() {
+        let tasks: DashMap<(String, String), ActiveTask> = DashMap::new();
+        let key = key();
+
+        let stale_work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        let stale_id = stale_work.id();
+        let successor = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        let successor_id = successor.id();
+        tasks.insert(key.clone(), active_task(successor));
+
+        assert!(
+            drop_if_current(&tasks, &key, stale_id).is_none(),
+            "the stale reporter evicted its successor"
+        );
+        assert!(tasks.contains_key(&key));
+
+        assert!(
+            drop_if_current(&tasks, &key, successor_id).is_some(),
+            "the owning reporter must drop its own entry"
+        );
+        assert!(tasks.is_empty());
+        stale_work.abort();
+    }
+
+    /// `CancelTask` must abort the work, never the reporter. Otherwise a finished
+    /// task goes unreported and the coordinator requeues work that is done.
+    #[tokio::test]
+    async fn cancelling_after_the_work_finished_still_reports_it() {
+        let tasks: DashMap<(String, String), ActiveTask> = DashMap::new();
+        let key = key();
+        let (reported_tx, reported_rx) = tokio::sync::oneshot::channel();
+        let (ran_tx, ran_rx) = tokio::sync::oneshot::channel();
+
+        let work = tokio::spawn(async move {
+            ran_tx.send(()).unwrap();
+            (
+                proto::TaskStatus::Succeeded,
+                Some(TaskMetadata { gpu_ms: Some(1) }),
+            )
+        });
+        let work_abort = work.abort_handle();
+        let reporter = tokio::spawn({
+            let key = key.clone();
+            async move {
+                let reported = matches!(report_for(&key, work.await), Report::Complete(_));
+                // Stands in for the complete_task RPC: the reporter must survive an
+                // abort while it runs.
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                reported_tx.send(reported).unwrap();
+            }
+        });
+        tasks.insert(
+            key.clone(),
+            ActiveTask {
+                data: TaskData::default(),
+                started_at: Instant::now(),
+                work: work_abort,
+                reporter,
+            },
+        );
+
+        ran_rx.await.unwrap();
+        tokio::task::yield_now().await;
+
+        // The CancelTask arm.
+        if let Some(entry) = tasks.get(&key) {
+            entry.value().work.abort();
+            drop(entry);
+            tasks.remove(&key);
+        }
+
+        assert_eq!(
+            reported_rx.await,
+            Ok(true),
+            "the completion was swallowed by the cancel"
+        );
+    }
 }
