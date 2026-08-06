@@ -231,13 +231,32 @@ pub(crate) fn report_for(
     }
 }
 
-/// Whether the timeout sweep should abort and fail this task. Finished work
-/// still in the map is mid-report, not stuck: failing it would race its own
-/// completion. The reporter drops the entry once the report lands, and a
-/// coordinator that stays unreachable trips the channel-silence exit instead.
-fn timed_out(active: &ActiveTask, timeout: Duration) -> bool {
-    !active.work.is_finished() && active.started_at.elapsed() > timeout
+enum TimeoutAction {
+    /// Running normally, or finished and mid-report — failing the latter would
+    /// race its own completion; the reporter drops the entry once it lands.
+    Leave,
+    /// Flag and abort; the reporter turns the abort into a failure report.
+    Abort,
+    /// The work ignored its abort — it never reached a yield point — so the
+    /// reporter is stuck on it and the sweep must report the failure itself.
+    /// The reporter's eventual duplicate is rejected by the coordinator.
+    Report,
 }
+
+fn timeout_action(active: &ActiveTask, timeout: Duration, grace: Duration) -> TimeoutAction {
+    if active.work.is_finished() || active.started_at.elapsed() <= timeout {
+        return TimeoutAction::Leave;
+    }
+    if active.timed_out.load(Ordering::SeqCst) && active.started_at.elapsed() > timeout + grace {
+        TimeoutAction::Report
+    } else {
+        TimeoutAction::Abort
+    }
+}
+
+/// Two watchdog ticks: enough for an abort to land at the work's next yield
+/// point, short enough that a truly wedged proof requeues promptly.
+const ABORT_GRACE: Duration = Duration::from_secs(10);
 
 async fn run_worker_inner(
     node_config: NodeConfig,
@@ -520,11 +539,20 @@ async fn run_worker_inner(
                         // Handle panicked tasks
                         let mut panicked_tasks = HashSet::new();
                         let mut timed_out_tasks = HashSet::new();
+                        let mut wedged_tasks = HashSet::new();
                         for entry in tasks.iter_mut() {
                             if entry.value().reporter.is_finished() {
                                 panicked_tasks.insert(entry.key().clone());
-                            } else if timed_out(entry.value(), node_config.task_timeout) {
-                                timed_out_tasks.insert(entry.key().clone());
+                            } else {
+                                match timeout_action(entry.value(), node_config.task_timeout, ABORT_GRACE) {
+                                    TimeoutAction::Leave => {}
+                                    TimeoutAction::Abort => {
+                                        timed_out_tasks.insert(entry.key().clone());
+                                    }
+                                    TimeoutAction::Report => {
+                                        wedged_tasks.insert(entry.key().clone());
+                                    }
+                                }
                             }
                         }
                         for task_id in panicked_tasks {
@@ -557,6 +585,25 @@ async fn run_worker_inner(
                             // and drops the entry once it lands.
                             entry.value().timed_out.store(true, Ordering::SeqCst);
                             entry.value().work.abort();
+                        }
+                        for task_id in wedged_tasks {
+                            let Some((_, task)) = tasks.remove(&task_id) else {
+                                continue;
+                            };
+                            tracing::error!(
+                                "Task {:?} ignored its abort for {:?}; reporting failure directly",
+                                task_id,
+                                ABORT_GRACE,
+                            );
+                            task.work.abort();
+                            if let Err(e) = worker_client.fail_task(FailTaskRequest {
+                                worker_id: node_config.worker_id.clone(),
+                                proof_id: task_id.0,
+                                task_id: task_id.1,
+                                retryable: true,
+                            }).await {
+                                tracing::error!("Failed to update task status: {:?}", e);
+                            }
                         }
                     }
                     _ = token.cancelled(), if !closed => {
@@ -721,7 +768,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finished_work_mid_report_is_not_timed_out() {
+    async fn finished_work_mid_report_is_left_alone() {
         let work = tokio::spawn(std::future::ready((proto::TaskStatus::Succeeded, None)));
         let task = active_task(work);
         while !task.work.is_finished() {
@@ -729,13 +776,16 @@ mod tests {
         }
 
         assert!(
-            !timed_out(&task, Duration::ZERO),
+            matches!(
+                timeout_action(&task, Duration::ZERO, Duration::ZERO),
+                TimeoutAction::Leave
+            ),
             "failing a finished task races its own completion report"
         );
     }
 
     #[tokio::test]
-    async fn stuck_work_is_timed_out_only_past_the_timeout() {
+    async fn stuck_work_is_aborted_only_past_the_timeout() {
         let work = tokio::spawn(std::future::pending::<(
             proto::TaskStatus,
             Option<TaskMetadata>,
@@ -743,8 +793,37 @@ mod tests {
         let task = active_task(work);
         tokio::time::sleep(Duration::from_millis(2)).await;
 
-        assert!(timed_out(&task, Duration::ZERO));
-        assert!(!timed_out(&task, Duration::from_secs(3600)));
+        assert!(matches!(
+            timeout_action(&task, Duration::ZERO, Duration::from_secs(3600)),
+            TimeoutAction::Abort
+        ));
+        assert!(matches!(
+            timeout_action(&task, Duration::from_secs(3600), Duration::ZERO),
+            TimeoutAction::Leave
+        ));
+    }
+
+    /// Work that never yields cannot observe its abort; once the grace passes
+    /// the sweep must report the failure itself or the proof wedges forever.
+    #[tokio::test]
+    async fn work_that_ignored_its_abort_is_reported_after_the_grace() {
+        let work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        let task = active_task(work);
+        task.timed_out.store(true, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+
+        assert!(matches!(
+            timeout_action(&task, Duration::ZERO, Duration::ZERO),
+            TimeoutAction::Report
+        ));
+        // Still inside the grace: keep waiting for the abort to land.
+        assert!(matches!(
+            timeout_action(&task, Duration::ZERO, Duration::from_secs(3600)),
+            TimeoutAction::Abort
+        ));
     }
 
     #[tokio::test]
