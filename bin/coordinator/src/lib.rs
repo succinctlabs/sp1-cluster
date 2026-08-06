@@ -660,12 +660,12 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             // Drop task here so we can borrow proof as mutable again.
             if !already_succeeded {
                 P::post_task_success_update_proof(proof, &task_extra, metadata);
+                P::post_task_success_update_state(&mut state, task_type);
             }
-            // Drop proof here so we can borrow state as mutable again.
 
             // Cleanup proof if there's no more active tasks. Drop it after state is released.
             let mut released_assignments = false;
-            let removed = if proof.active_tasks == 0 {
+            let removed = if remaining_tasks == 0 {
                 tracing::info!("Proof {} has no more active tasks, removing", proof_id);
                 P::on_proof_deleted(&mut state, &proof_id);
                 let removed = state.proofs.remove(&proof_id);
@@ -682,10 +682,6 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             } else {
                 None
             };
-
-            if !already_succeeded {
-                P::post_task_success_update_state(&mut state, task_type);
-            }
 
             // Policy weight is charged when a worker takes the task and released when it
             // gives it up. A completion from a worker that no longer holds it — preempted,
