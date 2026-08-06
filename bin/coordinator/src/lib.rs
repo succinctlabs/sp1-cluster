@@ -2720,25 +2720,49 @@ mod tests {
         );
     }
 
-    /// Insert a live (healthy) worker with default capacity. Returns the tx side of
-    /// its message channel; the corresponding rx is dropped (not used in tests that
-    /// only care about state, not sent payloads).
-    fn insert_live_worker(
-        state: &mut CoordinatorState<DefaultPolicy>,
-        worker_id: &str,
-        worker_type: WorkerType,
-    ) {
+    fn gpu_task<P: AssignmentPolicy>(
+        id: &str,
+        proof_id: &str,
+        weight: u32,
+        status: TaskStatus,
+        worker: Option<&str>,
+    ) -> Task<P> {
+        Task {
+            id: id.into(),
+            data: TaskData {
+                proof_id: proof_id.into(),
+                task_type: TaskType::ProveShard as i32,
+                weight,
+                ..Default::default()
+            },
+            created_at: SystemTime::now(),
+            status,
+            retries: 0,
+            subscribers: HashSet::new(),
+            worker: worker.map(String::from),
+            dead_worker_requeue_count: 0,
+            extra: Default::default(),
+        }
+    }
+
+    /// GPU worker with default capacity. The rx side of its message channel is
+    /// dropped, so sends to it fail silently — fine for tests that only assert
+    /// on state, not sent payloads.
+    fn gpu_worker<P: AssignmentPolicy>(id: &str) -> Worker<P> {
         let (tx, _rx) = mpsc::unbounded_channel();
-        state.workers.insert(
-            worker_id.into(),
-            Worker::new(
-                worker_id.into(),
-                worker_type,
-                24,
-                tx,
-                WorkerIdentity::default(),
-            ),
-        );
+        Worker::new(
+            id.into(),
+            WorkerType::Gpu,
+            24,
+            tx,
+            WorkerIdentity::default(),
+        )
+    }
+
+    fn insert_live_worker(state: &mut CoordinatorState<DefaultPolicy>, worker_id: &str) {
+        state
+            .workers
+            .insert(worker_id.into(), gpu_worker(worker_id));
     }
 
     fn mark_task_succeeded(
@@ -2762,7 +2786,7 @@ mod tests {
         proof_id: &str,
         task_id: &str,
     ) {
-        insert_live_worker(state, worker_id, WorkerType::Gpu);
+        insert_live_worker(state, worker_id);
         let task_weight = state.proofs[proof_id].tasks[task_id].data.weight;
         let worker = state.workers.get_mut(worker_id).unwrap();
         worker
@@ -2787,21 +2811,7 @@ mod tests {
         proof.active_tasks = 1;
         proof.tasks.insert(
             task_id.into(),
-            Task {
-                id: task_id.into(),
-                data: TaskData {
-                    proof_id: proof_id.into(),
-                    task_type: TaskType::ProveShard as i32,
-                    ..Default::default()
-                },
-                created_at: SystemTime::now(),
-                status: TaskStatus::Running,
-                retries: 0,
-                subscribers: HashSet::new(),
-                worker: worker_id.map(String::from),
-                dead_worker_requeue_count: 0,
-                extra: Default::default(),
-            },
+            gpu_task(task_id, proof_id, 0, TaskStatus::Running, worker_id),
         );
         state.proofs.insert(proof_id.into(), proof);
     }
@@ -2817,50 +2827,20 @@ mod tests {
         proof.active_tasks = 2;
         proof.tasks.insert(
             "t1".into(),
-            Task {
-                id: "t1".into(),
-                data: TaskData {
-                    proof_id: "p1".into(),
-                    task_type: TaskType::ProveShard as i32,
-                    weight: 8,
-                    ..Default::default()
-                },
-                created_at: SystemTime::now(),
-                status: TaskStatus::Running,
-                retries: 0,
-                subscribers: HashSet::new(),
-                worker: Some(owner.into()),
-                dead_worker_requeue_count: 0,
-                extra: Default::default(),
-            },
+            gpu_task("t1", "p1", 8, TaskStatus::Running, Some(owner)),
         );
         state.proofs.insert("p1".into(), proof);
         // What assigning the task to `owner` charged.
         state.policy.proof_gpu_weights.insert("p1".into(), 8);
 
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let mut worker = Worker::new(
-            owner.into(),
-            WorkerType::Gpu,
-            24,
-            tx,
-            WorkerIdentity::default(),
-        );
+        let mut worker = gpu_worker(owner);
         worker.active_tasks.insert(("p1".into(), "t1".into()));
         worker.weight = 8;
         state.workers.insert(owner.into(), worker);
 
-        let (tx, _rx) = mpsc::unbounded_channel();
-        state.workers.insert(
-            "w_stale".into(),
-            Worker::new(
-                "w_stale".into(),
-                WorkerType::Gpu,
-                24,
-                tx,
-                WorkerIdentity::default(),
-            ),
-        );
+        state
+            .workers
+            .insert("w_stale".into(), gpu_worker("w_stale"));
     }
 
     /// Regression guard: after `cleanup_dead_workers` removes a dead worker and
@@ -2874,7 +2854,7 @@ mod tests {
             let mut state = c.state.write().await;
             insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w_dead"));
             insert_dead_worker(&mut state, "w_dead", WorkerType::Gpu, &[("p1", "t1")]);
-            insert_live_worker(&mut state, "w_live", WorkerType::Gpu);
+            insert_live_worker(&mut state, "w_live");
         }
 
         c.cleanup_dead_workers().await;
@@ -2928,7 +2908,7 @@ mod tests {
             let mut state = c.state.write().await;
             insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w_dead"));
             insert_dead_worker(&mut state, "w_dead", WorkerType::Gpu, &[("p1", "t1")]);
-            insert_live_worker(&mut state, "w_live", WorkerType::Gpu);
+            insert_live_worker(&mut state, "w_live");
         }
 
         // 1. Dead-worker cleanup: w_dead removed, task re-enqueued.
@@ -3283,33 +3263,12 @@ mod tests {
         for (id, status, worker_id) in tasks {
             proof.tasks.insert(
                 (*id).into(),
-                Task {
-                    id: (*id).into(),
-                    data: TaskData {
-                        proof_id: "p1".into(),
-                        task_type: TaskType::ProveShard as i32,
-                        weight: 8,
-                        ..Default::default()
-                    },
-                    created_at: SystemTime::now(),
-                    status: *status,
-                    retries: 0,
-                    subscribers: HashSet::new(),
-                    worker: Some((*worker_id).into()),
-                    dead_worker_requeue_count: 0,
-                    extra: (),
-                },
+                gpu_task(id, "p1", 8, *status, Some(worker_id)),
             );
-            let (tx, _rx) = mpsc::unbounded_channel();
-            let worker = state.workers.entry((*worker_id).into()).or_insert_with(|| {
-                Worker::new(
-                    (*worker_id).into(),
-                    WorkerType::Gpu,
-                    24,
-                    tx,
-                    WorkerIdentity::default(),
-                )
-            });
+            let worker = state
+                .workers
+                .entry((*worker_id).into())
+                .or_insert_with(|| gpu_worker(worker_id));
             worker.active_tasks.insert(("p1".into(), (*id).into()));
             worker.weight += 8;
         }
@@ -3516,21 +3475,7 @@ mod tests {
             proof.active_tasks = 2;
             proof.tasks.insert(
                 "t1".into(),
-                Task {
-                    id: "t1".into(),
-                    data: TaskData {
-                        proof_id: "p1".into(),
-                        task_type: TaskType::ProveShard as i32,
-                        ..Default::default()
-                    },
-                    created_at: SystemTime::now(),
-                    status: TaskStatus::Running,
-                    retries: 0,
-                    subscribers: HashSet::new(),
-                    worker: Some("w_owner".into()),
-                    dead_worker_requeue_count: 0,
-                    extra: (),
-                },
+                gpu_task("t1", "p1", 0, TaskStatus::Running, Some("w_owner")),
             );
             state.proofs.insert("p1".into(), proof);
         }
@@ -3635,7 +3580,7 @@ mod tests {
         let c = Arc::new(coordinator());
         {
             let mut state = c.state.write().await;
-            insert_live_worker(&mut state, "w1", WorkerType::Gpu);
+            insert_live_worker(&mut state, "w1");
             state
                 .workers
                 .get_mut("w1")
