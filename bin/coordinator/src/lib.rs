@@ -664,10 +664,21 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             // Drop proof here so we can borrow state as mutable again.
 
             // Cleanup proof if there's no more active tasks. Drop it after state is released.
+            let mut released_assignments = false;
             let removed = if proof.active_tasks == 0 {
                 tracing::info!("Proof {} has no more active tasks, removing", proof_id);
                 P::on_proof_deleted(&mut state, &proof_id);
-                Some(state.proofs.remove(&proof_id))
+                let removed = state.proofs.remove(&proof_id);
+                // A stale completion can finish a proof while a redelivered copy of
+                // its final task still runs elsewhere. With the proof gone, that
+                // worker's own report dies on NotFound, so its assignment must be
+                // released here or its slot and policy weight leak.
+                if let Some(proof) = &removed {
+                    released_assignments = Self::release_remaining_assignments(
+                        &mut state, proof, &proof_id, &worker_id,
+                    );
+                }
+                removed
             } else {
                 None
             };
@@ -702,6 +713,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 remaining_tasks
             );
             // Update worker state.
+            let mut capacity_freed = released_assignments;
             if let Some(worker) = state.workers.get_mut(&worker_id) {
                 if worker
                     .active_tasks
@@ -715,15 +727,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                         let updated = P::post_worker_empty(&mut state, worker);
                         state.workers.insert(worker_id, updated);
                     }
-
-                    // Assign tasks now that a worker is available.
-                    self.assign_tasks(state).await?;
+                    capacity_freed = true;
                 } else if task_type != TaskType::MarkerDeferredRecord {
                     // This is only an issue if it's not a marker task.
                     tracing::warn!("worker {} was not working on task {}", worker_id, task_id);
-                    drop(state);
-                } else {
-                    drop(state);
                 }
             } else {
                 // Expected under dead-worker churn (e.g. spot eviction): the worker
@@ -734,6 +741,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                     task_id,
                     worker_id
                 );
+            }
+            if capacity_freed {
+                self.assign_tasks(state).await?;
+            } else {
                 drop(state);
             }
 
@@ -745,6 +756,63 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         });
 
         Ok(())
+    }
+
+    /// Returns whether anything was released.
+    fn release_remaining_assignments(
+        state: &mut CoordinatorState<P>,
+        proof: &Proof<P>,
+        proof_id: &str,
+        completing_worker: &str,
+    ) -> bool {
+        let mut released = false;
+        for task in proof.tasks.values() {
+            let Some(owner) = &task.worker else {
+                continue;
+            };
+            if owner == completing_worker {
+                continue;
+            }
+            let Some(worker) = state.workers.get_mut(owner) else {
+                continue;
+            };
+            if !worker
+                .active_tasks
+                .remove(&(proof_id.to_string(), task.id.clone()))
+            {
+                continue;
+            }
+            released = true;
+            if worker
+                .channel
+                .send(Ok(ServerMessage {
+                    message: Some(server_message::Message::CancelTask(CancelTask {
+                        proof_id: proof_id.to_string(),
+                        task_id: task.id.clone(),
+                    })),
+                }))
+                .is_err()
+            {
+                tracing::error!("Failed to send CancelTask to worker {}", worker.id);
+            }
+            worker.weight = worker.weight.saturating_sub(task.data.weight);
+            if worker.active_tasks.is_empty() {
+                let id = worker.id.clone();
+                let worker = worker.clone();
+                let updated = P::post_worker_empty(state, worker);
+                state.workers.insert(id, updated);
+            }
+            P::post_task_update_state(
+                state,
+                proof.extra.clone(),
+                &task.id,
+                task.extra.clone(),
+                task.data.weight,
+                proof_id,
+                task.data.task_type(),
+            );
+        }
+        released
     }
 
     /// Total weight of the tasks this coordinator has assigned to a worker.
@@ -3196,6 +3264,46 @@ mod tests {
             state.policy.proof_gpu_weights.get("p1").copied(),
             None,
             "the owning worker's completion must release the weight it charged"
+        );
+    }
+
+    /// A stale completion that finishes the proof leaves the redelivered copy's
+    /// worker holding a slot and policy weight nothing else releases: with the
+    /// proof gone, that worker's own report dies on NotFound before any cleanup.
+    #[tokio::test]
+    async fn stale_completion_finishing_a_proof_releases_the_redelivered_assignment() {
+        let c = Arc::new(Coordinator::<policy::balanced::BalancedPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            balanced_proof_on_worker(&mut state, "w_owner");
+            // t1 is the proof's only live task, so this completion finishes it.
+            state.proofs.get_mut("p1").unwrap().active_tasks = 1;
+        }
+
+        c.complete_task(
+            "w_stale".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata::default(),
+        )
+        .await
+        .unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            !state.proofs.contains_key("p1"),
+            "the proof must be removed"
+        );
+        let owner = state.workers.get("w_owner").unwrap();
+        assert!(
+            owner.active_tasks.is_empty(),
+            "the redelivered assignment must be released with the proof"
+        );
+        assert_eq!(owner.weight, 0, "the worker's slot weight must be freed");
+        assert_eq!(
+            state.policy.proof_gpu_weights.get("p1").copied(),
+            None,
+            "the policy weight the redelivery charged must be released"
         );
     }
 
