@@ -17,7 +17,7 @@ use sp1_prover::worker::{TaskMetadata, WorkerClient};
 use sp1_prover::SP1ProverComponents;
 use sp1_sdk::install::try_install_circuit_artifacts;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
@@ -175,6 +175,9 @@ pub(crate) struct ActiveTask {
     pub work: AbortHandle,
     /// Outlives cancellation of `work`, so a task that finished can still report it.
     pub reporter: JoinHandle<()>,
+    /// Set by the timeout sweep before aborting `work`, so the reporter fails
+    /// the task instead of staying silent.
+    pub timed_out: Arc<AtomicBool>,
 }
 
 /// Drops the task's entry unless a redelivery already replaced it. A cancelled task
@@ -201,6 +204,7 @@ pub(crate) enum Report {
 pub(crate) fn report_for(
     key: &(String, String),
     result: Result<(proto::TaskStatus, Option<TaskMetadata>), JoinError>,
+    timed_out: bool,
 ) -> Report {
     match result {
         Ok((proto::TaskStatus::Succeeded, Some(metadata))) => Report::Complete(metadata),
@@ -210,6 +214,12 @@ pub(crate) fn report_for(
         Ok((status, _)) => Report::Fail {
             retryable: status == proto::TaskStatus::FailedRetryable,
         },
+        // Only reached when the work truly died: a finish that beat the abort
+        // takes the arms above, so the flag never overrides a real result.
+        Err(e) if e.is_cancelled() && timed_out => {
+            tracing::error!("Task {:?} timed out and was aborted", key);
+            Report::Fail { retryable: true }
+        }
         Err(e) if e.is_cancelled() => {
             tracing::info!("Task {:?} cancelled before completing", key);
             Report::Nothing
@@ -325,9 +335,11 @@ async fn run_worker_inner(
                                         async move { worker.run_task(&task).await }
                                     });
                                     let work_abort = work.abort_handle();
+                                    let timed_out_flag = Arc::new(AtomicBool::new(false));
                                     reporters_in_flight.fetch_add(1, Ordering::SeqCst);
                                     let reporter = tokio::spawn({
                                         let in_flight = reporters_in_flight.clone();
+                                        let timed_out_flag = timed_out_flag.clone();
                                         let task = task.clone();
                                         let data = data.clone();
                                         let worker_client = worker_client.clone();
@@ -342,7 +354,9 @@ async fn run_worker_inner(
                                                 },
                                             );
                                             let work_id = work.id();
-                                            match report_for(&key, work.await) {
+                                            let result = work.await;
+                                            let timed_out = timed_out_flag.load(Ordering::SeqCst);
+                                            match report_for(&key, result, timed_out) {
                                                 Report::Complete(metadata) => {
                                                     let metadata_string = serde_json::to_string(&metadata).unwrap();
                                                     if let Err(e) = worker_client.complete_task(CompleteTaskRequest {
@@ -380,6 +394,7 @@ async fn run_worker_inner(
                                         started_at: Instant::now(),
                                         work: work_abort,
                                         reporter,
+                                        timed_out: timed_out_flag,
                                     });
                                 }
                                 Some(server_message::Message::CancelTask(task)) => {
@@ -532,20 +547,16 @@ async fn run_worker_inner(
                             }
                         }
                         for task_id in timed_out_tasks {
-                            let Some((_, task)) = tasks.remove(&task_id) else {
+                            let Some(entry) = tasks.get(&task_id) else {
                                 tracing::warn!("Task {:?} timed out but is not in tasks anymore", task_id);
                                 continue;
                             };
                             tracing::error!("Task {:?} timed out after {:?}", task_id, node_config.task_timeout);
-                            task.work.abort();
-                            if let Err(e) = worker_client.fail_task(FailTaskRequest {
-                                worker_id: node_config.worker_id.clone(),
-                                proof_id: task_id.0,
-                                task_id: task_id.1,
-                                retryable: true,
-                            }).await {
-                                tracing::error!("Failed to update task status: {:?}", e);
-                            }
+                            // Reporting here would race a completion from work that
+                            // finished after the check. The reporter owns the report,
+                            // and drops the entry once it lands.
+                            entry.value().timed_out.store(true, Ordering::SeqCst);
+                            entry.value().work.abort();
                         }
                     }
                     _ = token.cancelled(), if !closed => {
@@ -618,6 +629,7 @@ mod tests {
             started_at: Instant::now(),
             work: work.abort_handle(),
             reporter: tokio::spawn(std::future::ready(())),
+            timed_out: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -631,7 +643,7 @@ mod tests {
         })
         .await;
 
-        match report_for(&key(), result) {
+        match report_for(&key(), result, false) {
             Report::Complete(metadata) => assert_eq!(metadata.gpu_ms, Some(7)),
             _ => panic!("a succeeded task must be reported complete"),
         }
@@ -643,11 +655,11 @@ mod tests {
         let fatal = join_result(async { (proto::TaskStatus::FailedFatal, None) }).await;
 
         assert!(matches!(
-            report_for(&key(), retryable),
+            report_for(&key(), retryable, false),
             Report::Fail { retryable: true }
         ));
         assert!(matches!(
-            report_for(&key(), fatal),
+            report_for(&key(), fatal, false),
             Report::Fail { retryable: false }
         ));
     }
@@ -660,7 +672,42 @@ mod tests {
         )>());
         work.abort();
 
-        assert!(matches!(report_for(&key(), work.await), Report::Nothing));
+        assert!(matches!(
+            report_for(&key(), work.await, false),
+            Report::Nothing
+        ));
+    }
+
+    #[tokio::test]
+    async fn timeout_abort_fails_the_task_retryably() {
+        let work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        work.abort();
+
+        assert!(matches!(
+            report_for(&key(), work.await, true),
+            Report::Fail { retryable: true }
+        ));
+    }
+
+    /// Work can finish between the sweep's check and its abort; the flag must
+    /// not turn that success into a failure.
+    #[tokio::test]
+    async fn a_timeout_that_lost_the_race_to_finished_work_reports_success() {
+        let result = join_result(async {
+            (
+                proto::TaskStatus::Succeeded,
+                Some(TaskMetadata { gpu_ms: Some(7) }),
+            )
+        })
+        .await;
+
+        assert!(matches!(
+            report_for(&key(), result, true),
+            Report::Complete(_)
+        ));
     }
 
     #[tokio::test]
@@ -668,7 +715,7 @@ mod tests {
         let result = join_result(async { (proto::TaskStatus::Succeeded, None) }).await;
 
         assert!(matches!(
-            report_for(&key(), result),
+            report_for(&key(), result, false),
             Report::Fail { retryable: false }
         ));
     }
@@ -705,7 +752,7 @@ mod tests {
         let result = join_result(async { panic!("boom") }).await;
 
         assert!(matches!(
-            report_for(&key(), result),
+            report_for(&key(), result, false),
             Report::Fail { retryable: false }
         ));
     }
@@ -740,6 +787,7 @@ mod tests {
                 started_at: Instant::now(),
                 work: work_abort,
                 reporter,
+                timed_out: Arc::new(AtomicBool::new(false)),
             },
         );
 
@@ -811,7 +859,7 @@ mod tests {
         let reporter = tokio::spawn({
             let key = key.clone();
             async move {
-                let reported = matches!(report_for(&key, work.await), Report::Complete(_));
+                let reported = matches!(report_for(&key, work.await, false), Report::Complete(_));
                 // Stands in for the complete_task RPC: the reporter must survive an
                 // abort while it runs.
                 tokio::time::sleep(Duration::from_millis(200)).await;
@@ -825,6 +873,7 @@ mod tests {
                 started_at: Instant::now(),
                 work: work_abort,
                 reporter,
+                timed_out: Arc::new(AtomicBool::new(false)),
             },
         );
 

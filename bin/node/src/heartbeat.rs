@@ -226,6 +226,7 @@ fn build_heartbeat_request(
 mod tests {
     use super::*;
     use sp1_cluster_common::proto::TaskData;
+    use std::sync::atomic::AtomicBool;
 
     /// Valid but unreachable, so the thread sits in its connect retry — the
     /// state a worker boots into when the coordinator is down.
@@ -335,6 +336,7 @@ mod tests {
                 started_at: Instant::now(),
                 work: work.abort_handle(),
                 reporter: work,
+                timed_out: Arc::new(AtomicBool::new(false)),
             }
         };
         let tasks = DashMap::new();

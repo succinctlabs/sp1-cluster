@@ -2765,36 +2765,6 @@ mod tests {
             .insert(worker_id.into(), gpu_worker(worker_id));
     }
 
-    fn mark_task_succeeded(
-        state: &mut CoordinatorState<DefaultPolicy>,
-        proof_id: &str,
-        task_id: &str,
-    ) {
-        state
-            .proofs
-            .get_mut(proof_id)
-            .unwrap()
-            .tasks
-            .get_mut(task_id)
-            .unwrap()
-            .status = TaskStatus::Succeeded;
-    }
-
-    fn insert_worker_holding(
-        state: &mut CoordinatorState<DefaultPolicy>,
-        worker_id: &str,
-        proof_id: &str,
-        task_id: &str,
-    ) {
-        insert_live_worker(state, worker_id);
-        let task_weight = state.proofs[proof_id].tasks[task_id].data.weight;
-        let worker = state.workers.get_mut(worker_id).unwrap();
-        worker
-            .active_tasks
-            .insert((proof_id.into(), task_id.into()));
-        worker.weight = task_weight;
-    }
-
     /// Like `insert_proof_with_running_task` but explicitly sets the task_type so
     /// the requeue path actually routes through `DefaultPolicy::enqueue_task` into
     /// the matching queue. `TaskType::UnspecifiedTaskType` (the default used by the
@@ -3246,6 +3216,87 @@ mod tests {
         );
     }
 
+    /// Counts success-hook invocations; the built-in policies implement both
+    /// hooks as no-ops, so double-running them is invisible through those.
+    #[derive(Clone, Default)]
+    struct CountingPolicy {
+        success_state_calls: u32,
+        release_calls: u32,
+    }
+
+    #[async_trait::async_trait]
+    impl AssignmentPolicy for CountingPolicy {
+        type ProofState = u32;
+        type TaskState = ();
+        type WorkerState = ();
+        type ProofResultMetadata = ();
+
+        fn create_proof_state(
+            _state: &CoordinatorState<Self>,
+            _request: &proto::CreateProofRequest,
+        ) -> u32 {
+            0
+        }
+
+        fn enqueue_task(_state: &mut CoordinatorState<Self>, _task: Task<Self>) {}
+
+        fn post_task_success_update_proof(
+            proof: &mut Proof<Self>,
+            _task_extra: &(),
+            _metadata: policy::TaskMetadata,
+        ) {
+            proof.extra += 1;
+        }
+
+        fn post_task_success_update_state(
+            state: &mut CoordinatorState<Self>,
+            _task_type: TaskType,
+        ) {
+            state.policy.success_state_calls += 1;
+        }
+
+        fn post_task_update_state(
+            state: &mut CoordinatorState<Self>,
+            _proof_extra: u32,
+            _task_id: &str,
+            _task_extra: (),
+            _task_weight: u32,
+            _proof_id: &str,
+            _task_type: TaskType,
+        ) {
+            state.policy.release_calls += 1;
+        }
+
+        fn debug_proof(_proof: &u32) -> &str {
+            ""
+        }
+
+        fn post_worker_empty(
+            _state: &mut CoordinatorState<Self>,
+            worker: Worker<Self>,
+        ) -> Worker<Self> {
+            worker
+        }
+
+        async fn assign_tasks(
+            _coord: &Arc<Coordinator<Self>>,
+            state: OwnedRwLockWriteGuard<CoordinatorState<Self>>,
+        ) -> Result<(), Status> {
+            drop(state);
+            Ok(())
+        }
+
+        fn get_proof_result_metadata(_proof: &Proof<Self>) {}
+
+        fn cpu_queue_len(_state: &CoordinatorState<Self>) -> u32 {
+            0
+        }
+
+        fn gpu_queue_len(_state: &CoordinatorState<Self>) -> u32 {
+            0
+        }
+    }
+
     /// Proof "p1" under `CountingPolicy` with the given `(id, status, worker)`
     /// tasks, each held by its worker at weight 8; `active_tasks` counts the
     /// non-terminal ones.
@@ -3351,117 +3402,6 @@ mod tests {
         );
     }
 
-    /// The duplicate's own assignment charged weight that nothing else releases, since
-    /// the completion came from a worker that no longer held the task.
-    #[tokio::test]
-    async fn ignoring_a_duplicates_failure_releases_the_weight_it_charged() {
-        let c = Arc::new(Coordinator::<policy::balanced::BalancedPolicy>::new());
-        {
-            let mut state = c.state.write().await;
-            balanced_proof_on_worker(&mut state, "w_owner");
-            state
-                .proofs
-                .get_mut("p1")
-                .unwrap()
-                .tasks
-                .get_mut("t1")
-                .unwrap()
-                .status = TaskStatus::Succeeded;
-        }
-
-        c.fail_task("w_owner".into(), "p1".into(), "t1".into(), false)
-            .await
-            .unwrap();
-
-        let state = c.state.read().await;
-        assert_eq!(
-            state.policy.proof_gpu_weights.get("p1").copied(),
-            None,
-            "the duplicate's assignment left weight charged to the proof"
-        );
-    }
-
-    /// Counts success-hook invocations; the built-in policies implement both
-    /// hooks as no-ops, so double-running them is invisible through those.
-    #[derive(Clone, Default)]
-    struct CountingPolicy {
-        success_state_calls: u32,
-        release_calls: u32,
-    }
-
-    #[async_trait::async_trait]
-    impl AssignmentPolicy for CountingPolicy {
-        type ProofState = u32;
-        type TaskState = ();
-        type WorkerState = ();
-        type ProofResultMetadata = ();
-
-        fn create_proof_state(
-            _state: &CoordinatorState<Self>,
-            _request: &proto::CreateProofRequest,
-        ) -> u32 {
-            0
-        }
-
-        fn enqueue_task(_state: &mut CoordinatorState<Self>, _task: Task<Self>) {}
-
-        fn post_task_success_update_proof(
-            proof: &mut Proof<Self>,
-            _task_extra: &(),
-            _metadata: policy::TaskMetadata,
-        ) {
-            proof.extra += 1;
-        }
-
-        fn post_task_success_update_state(
-            state: &mut CoordinatorState<Self>,
-            _task_type: TaskType,
-        ) {
-            state.policy.success_state_calls += 1;
-        }
-
-        fn post_task_update_state(
-            state: &mut CoordinatorState<Self>,
-            _proof_extra: u32,
-            _task_id: &str,
-            _task_extra: (),
-            _task_weight: u32,
-            _proof_id: &str,
-            _task_type: TaskType,
-        ) {
-            state.policy.release_calls += 1;
-        }
-
-        fn debug_proof(_proof: &u32) -> &str {
-            ""
-        }
-
-        fn post_worker_empty(
-            _state: &mut CoordinatorState<Self>,
-            worker: Worker<Self>,
-        ) -> Worker<Self> {
-            worker
-        }
-
-        async fn assign_tasks(
-            _coord: &Arc<Coordinator<Self>>,
-            state: OwnedRwLockWriteGuard<CoordinatorState<Self>>,
-        ) -> Result<(), Status> {
-            drop(state);
-            Ok(())
-        }
-
-        fn get_proof_result_metadata(_proof: &Proof<Self>) {}
-
-        fn cpu_queue_len(_state: &CoordinatorState<Self>) -> u32 {
-            0
-        }
-
-        fn gpu_queue_len(_state: &CoordinatorState<Self>) -> u32 {
-            0
-        }
-    }
-
     /// Success hooks record billing and scheduling history, charged once per
     /// task. A preempted worker's reporter landing next to its redelivery's
     /// report must not run them twice.
@@ -3501,6 +3441,36 @@ mod tests {
             state.policy.success_state_calls, 1,
             "scheduling history was recorded per report, not per task"
         );
+    }
+
+    fn mark_task_succeeded(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        proof_id: &str,
+        task_id: &str,
+    ) {
+        state
+            .proofs
+            .get_mut(proof_id)
+            .unwrap()
+            .tasks
+            .get_mut(task_id)
+            .unwrap()
+            .status = TaskStatus::Succeeded;
+    }
+
+    fn insert_worker_holding(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        worker_id: &str,
+        proof_id: &str,
+        task_id: &str,
+    ) {
+        insert_live_worker(state, worker_id);
+        let task_weight = state.proofs[proof_id].tasks[task_id].data.weight;
+        let worker = state.workers.get_mut(worker_id).unwrap();
+        worker
+            .active_tasks
+            .insert((proof_id.into(), task_id.into()));
+        worker.weight = task_weight;
     }
 
     /// The path a fatal worker error actually takes: `try_unclaim_proof` sends
@@ -3677,6 +3647,36 @@ mod tests {
                 .active_tasks
                 .contains(&("p1".into(), "t1".into())),
             "the finished task must still release its worker slot"
+        );
+    }
+
+    /// The duplicate's own assignment charged weight that nothing else releases, since
+    /// the completion came from a worker that no longer held the task.
+    #[tokio::test]
+    async fn ignoring_a_duplicates_failure_releases_the_weight_it_charged() {
+        let c = Arc::new(Coordinator::<policy::balanced::BalancedPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            balanced_proof_on_worker(&mut state, "w_owner");
+            state
+                .proofs
+                .get_mut("p1")
+                .unwrap()
+                .tasks
+                .get_mut("t1")
+                .unwrap()
+                .status = TaskStatus::Succeeded;
+        }
+
+        c.fail_task("w_owner".into(), "p1".into(), "t1".into(), false)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.policy.proof_gpu_weights.get("p1").copied(),
+            None,
+            "the duplicate's assignment left weight charged to the proof"
         );
     }
 
