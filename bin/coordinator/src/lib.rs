@@ -675,7 +675,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 // released here or its slot and policy weight leak.
                 if let Some(proof) = &removed {
                     released_assignments = Self::release_remaining_assignments(
-                        &mut state, proof, &proof_id, &worker_id,
+                        &mut state, proof, &proof_id, &worker_id, &task_id,
                     );
                 }
                 removed
@@ -764,13 +764,16 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         proof: &Proof<P>,
         proof_id: &str,
         completing_worker: &str,
+        completed_task: &str,
     ) -> bool {
         let mut released = false;
         for task in proof.tasks.values() {
             let Some(owner) = &task.worker else {
                 continue;
             };
-            if owner == completing_worker {
+            // The completer's own hold on the completed task is settled by the
+            // caller; anything else it still holds on this proof is orphaned too.
+            if owner == completing_worker && task.id == completed_task {
                 continue;
             }
             let Some(worker) = state.workers.get_mut(owner) else {
@@ -3267,17 +3270,65 @@ mod tests {
         );
     }
 
+    /// Proof "p1" under `CountingPolicy` with the given `(id, status, worker)`
+    /// tasks, each held by its worker at weight 8; `active_tasks` counts the
+    /// non-terminal ones.
+    fn counting_proof_with_holds(
+        state: &mut CoordinatorState<CountingPolicy>,
+        tasks: &[(&str, TaskStatus, &str)],
+    ) {
+        let mut proof = Proof::new("p1".into(), None, 0);
+        proof.active_tasks = tasks
+            .iter()
+            .filter(|(_, status, _)| {
+                *status != TaskStatus::Succeeded && *status != TaskStatus::FailedFatal
+            })
+            .count() as u32;
+        for (id, status, worker_id) in tasks {
+            proof.tasks.insert(
+                (*id).into(),
+                Task {
+                    id: (*id).into(),
+                    data: TaskData {
+                        proof_id: "p1".into(),
+                        task_type: TaskType::ProveShard as i32,
+                        weight: 8,
+                        ..Default::default()
+                    },
+                    created_at: SystemTime::now(),
+                    status: *status,
+                    retries: 0,
+                    subscribers: HashSet::new(),
+                    worker: Some((*worker_id).into()),
+                    dead_worker_requeue_count: 0,
+                    extra: (),
+                },
+            );
+            let (tx, _rx) = mpsc::unbounded_channel();
+            let worker = state.workers.entry((*worker_id).into()).or_insert_with(|| {
+                Worker::new(
+                    (*worker_id).into(),
+                    WorkerType::Gpu,
+                    24,
+                    tx,
+                    WorkerIdentity::default(),
+                )
+            });
+            worker.active_tasks.insert(("p1".into(), (*id).into()));
+            worker.weight += 8;
+        }
+        state.proofs.insert("p1".into(), proof);
+    }
+
     /// A stale completion that finishes the proof leaves the redelivered copy's
     /// worker holding a slot and policy weight nothing else releases: with the
     /// proof gone, that worker's own report dies on NotFound before any cleanup.
     #[tokio::test]
     async fn stale_completion_finishing_a_proof_releases_the_redelivered_assignment() {
-        let c = Arc::new(Coordinator::<policy::balanced::BalancedPolicy>::new());
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
         {
             let mut state = c.state.write().await;
-            balanced_proof_on_worker(&mut state, "w_owner");
-            // t1 is the proof's only live task, so this completion finishes it.
-            state.proofs.get_mut("p1").unwrap().active_tasks = 1;
+            counting_proof_with_holds(&mut state, &[("t1", TaskStatus::Running, "w_owner")]);
         }
 
         c.complete_task(
@@ -3301,9 +3352,47 @@ mod tests {
         );
         assert_eq!(owner.weight, 0, "the worker's slot weight must be freed");
         assert_eq!(
-            state.policy.proof_gpu_weights.get("p1").copied(),
-            None,
-            "the policy weight the redelivery charged must be released"
+            state.policy.release_calls, 1,
+            "the policy weight the redelivery charged must be released exactly once"
+        );
+    }
+
+    /// The completing worker can itself hold another already-terminal task of the
+    /// proof — a redelivery whose stale twin reported first. Finishing the proof
+    /// must release that hold too, not just other workers'.
+    #[tokio::test]
+    async fn finishing_a_proof_releases_the_completers_other_orphans() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            counting_proof_with_holds(
+                &mut state,
+                &[
+                    ("t1", TaskStatus::Running, "w1"),
+                    ("t2", TaskStatus::Succeeded, "w1"),
+                ],
+            );
+        }
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata::default(),
+        )
+        .await
+        .unwrap();
+
+        let state = c.state.read().await;
+        let worker = state.workers.get("w1").unwrap();
+        assert!(
+            worker.active_tasks.is_empty(),
+            "the orphaned hold on t2 must be released with the proof"
+        );
+        assert_eq!(worker.weight, 0, "both holds' slot weight must be freed");
+        assert_eq!(
+            state.policy.release_calls, 2,
+            "one policy release per assignment: t2's orphan and t1's own"
         );
     }
 
@@ -3342,6 +3431,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct CountingPolicy {
         success_state_calls: u32,
+        release_calls: u32,
     }
 
     #[async_trait::async_trait]
@@ -3376,7 +3466,7 @@ mod tests {
         }
 
         fn post_task_update_state(
-            _state: &mut CoordinatorState<Self>,
+            state: &mut CoordinatorState<Self>,
             _proof_extra: u32,
             _task_id: &str,
             _task_extra: (),
@@ -3384,6 +3474,7 @@ mod tests {
             _proof_id: &str,
             _task_type: TaskType,
         ) {
+            state.policy.release_calls += 1;
         }
 
         fn debug_proof(_proof: &u32) -> &str {

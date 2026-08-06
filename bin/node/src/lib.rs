@@ -448,8 +448,11 @@ async fn run_worker_inner(
                         }
                         if let Some(started) = drain_started_at {
                             let elapsed = started.elapsed();
-                            let in_flight =
-                                tasks.len() + reporters_in_flight.load(Ordering::SeqCst);
+                            // Every undelivered outcome has exactly one live reporter;
+                            // map entries are a subset (a cancelled task leaves the map
+                            // while its reporter lives on), so adding them would count
+                            // running tasks twice.
+                            let in_flight = reporters_in_flight.load(Ordering::SeqCst);
                             if elapsed > node_config.drain_timeout {
                                 let stuck: Vec<_> = tasks.iter().map(|e| e.key().clone()).collect();
                                 tracing::warn!(
