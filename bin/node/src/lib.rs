@@ -203,9 +203,10 @@ pub(crate) fn report_for(
     result: Result<(proto::TaskStatus, Option<TaskMetadata>), JoinError>,
 ) -> Report {
     match result {
-        Ok((proto::TaskStatus::Succeeded, metadata)) => {
-            Report::Complete(metadata.expect("successful task should have metadata"))
-        }
+        Ok((proto::TaskStatus::Succeeded, Some(metadata))) => Report::Complete(metadata),
+        // Success with no metadata means an execution error, which already unclaimed the
+        // proof. There is no proof to report complete.
+        Ok((proto::TaskStatus::Succeeded, None)) => Report::Fail { retryable: false },
         Ok((status, _)) => Report::Fail {
             retryable: status == proto::TaskStatus::FailedRetryable,
         },
@@ -649,6 +650,16 @@ mod tests {
         work.abort();
 
         assert!(matches!(report_for(&key(), work.await), Report::Nothing));
+    }
+
+    #[tokio::test]
+    async fn success_without_metadata_fails_fatally() {
+        let result = join_result(async { (proto::TaskStatus::Succeeded, None) }).await;
+
+        assert!(matches!(
+            report_for(&key(), result),
+            Report::Fail { retryable: false }
+        ));
     }
 
     #[tokio::test]

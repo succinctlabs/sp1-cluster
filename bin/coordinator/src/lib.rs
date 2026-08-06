@@ -3292,6 +3292,74 @@ mod tests {
         );
     }
 
+    /// An execution error unclaims the proof, then the reporter's `fail_task` lands on
+    /// a proof that is already gone.
+    #[tokio::test]
+    async fn fail_task_after_the_proof_was_unclaimed_is_rejected() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_live_worker(&mut state, "w1", WorkerType::Gpu);
+            state
+                .workers
+                .get_mut("w1")
+                .unwrap()
+                .active_tasks
+                .insert(("p1".into(), "t1".into()));
+        }
+
+        let result = c
+            .fail_task("w1".into(), "p1".into(), "t1".into(), false)
+            .await;
+
+        assert!(
+            matches!(result, Err(ref e) if e.code() == tonic::Code::NotFound),
+            "expected NotFound for a proof already unclaimed, got: {result:?}"
+        );
+    }
+
+    /// Backstop when the unclaim RPC never landed: a fatal `fail_task` on a CoreExecute
+    /// task must fail the proof itself.
+    #[tokio::test]
+    async fn fatal_failure_of_a_core_execute_task_fails_the_proof() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            let mut proof = Proof::new("p1".into(), None, ());
+            proof.active_tasks = 1;
+            proof.tasks.insert(
+                "t1".into(),
+                Task {
+                    id: "t1".into(),
+                    data: TaskData {
+                        proof_id: "p1".into(),
+                        task_type: TaskType::CoreExecute as i32,
+                        ..Default::default()
+                    },
+                    created_at: SystemTime::now(),
+                    status: TaskStatus::Running,
+                    retries: 0,
+                    subscribers: HashSet::new(),
+                    worker: Some("w1".into()),
+                    dead_worker_requeue_count: 0,
+                    extra: Default::default(),
+                },
+            );
+            state.proofs.insert("p1".into(), proof);
+            insert_worker_holding(&mut state, "w1", "p1", "t1");
+        }
+
+        c.fail_task("w1".into(), "p1".into(), "t1".into(), false)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            !state.proofs.contains_key("p1"),
+            "a fatal CoreExecute failure must fail the proof when nothing else has"
+        );
+    }
+
     #[tokio::test]
     async fn fail_task_does_not_downgrade_a_succeeded_task() {
         let c = Arc::new(coordinator());
