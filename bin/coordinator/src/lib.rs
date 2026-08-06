@@ -675,7 +675,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 // released here or its slot and policy weight leak.
                 if let Some(proof) = &removed {
                     released_assignments = Self::release_remaining_assignments(
-                        &mut state, proof, &proof_id, &worker_id, &task_id,
+                        &mut state,
+                        proof,
+                        &proof_id,
+                        Some((&worker_id, &task_id)),
                     );
                 }
                 removed
@@ -754,22 +757,21 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         Ok(())
     }
 
-    /// Returns whether anything was released.
+    /// Releases every assignment still held on `proof`'s tasks, except `skip` —
+    /// the (worker, task) pair the caller settles itself. Returns whether
+    /// anything was released.
     fn release_remaining_assignments(
         state: &mut CoordinatorState<P>,
         proof: &Proof<P>,
         proof_id: &str,
-        completing_worker: &str,
-        completed_task: &str,
+        skip: Option<(&str, &str)>,
     ) -> bool {
         let mut released = false;
         for task in proof.tasks.values() {
             let Some(owner) = &task.worker else {
                 continue;
             };
-            // The completer's own hold on the completed task is settled by the
-            // caller; anything else it still holds on this proof is orphaned too.
-            if owner == completing_worker && task.id == completed_task {
+            if Some((owner.as_str(), task.id.as_str())) == skip {
                 continue;
             }
             let Some(worker) = state.workers.get_mut(owner) else {
@@ -1280,7 +1282,18 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         let removed = if !manual_proof_fail && proof.active_tasks == 0 {
             tracing::info!("Proof {} has no more active tasks, removing", proof_id);
             P::on_proof_deleted(&mut state, &proof_id);
-            Some(state.proofs.remove(&proof_id))
+            let removed = state.proofs.remove(&proof_id);
+            // Same orphan as complete_task's removal: another worker can still hold
+            // a redelivered copy of one of this proof's tasks.
+            if let Some(proof) = &removed {
+                Self::release_remaining_assignments(
+                    &mut state,
+                    proof,
+                    &proof_id,
+                    Some((&worker_id, &task_id)),
+                );
+            }
+            removed
         } else {
             None
         };
@@ -1519,53 +1532,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                     );
                 }
             }
-            for task in proof.tasks.values() {
-                if task.status == TaskStatus::Running {
-                    if let Some(worker_id) = &task.worker {
-                        if let Some(worker) = state.workers.get_mut(worker_id) {
-                            if worker
-                                .channel
-                                .send(Ok(ServerMessage {
-                                    message: Some(server_message::Message::CancelTask(
-                                        CancelTask {
-                                            proof_id: proof_id.clone(),
-                                            task_id: task.id.clone(),
-                                        },
-                                    )),
-                                }))
-                                .is_err()
-                            {
-                                tracing::error!(
-                                    "Failed to send CancelTask to worker {}",
-                                    worker.id
-                                );
-                            }
-                            worker
-                                .active_tasks
-                                .remove(&(proof_id.clone(), task.id.clone()));
-                            worker.weight = worker.weight.saturating_sub(task.data.weight);
-
-                            // If the worker has no more tasks, handle it.
-                            if worker.active_tasks.is_empty() {
-                                let id = worker.id.clone();
-                                let worker = worker.clone();
-                                let updated = P::post_worker_empty(state, worker);
-                                state.workers.insert(id, updated);
-                            }
-
-                            P::post_task_update_state(
-                                state,
-                                proof.extra.clone(),
-                                &task.id,
-                                task.extra.clone(),
-                                task.data.weight,
-                                &proof_id,
-                                task.data.task_type(),
-                            );
-                        }
-                    }
-                }
-            }
+            // Holder-gated on `active_tasks`, not task status: a Succeeded task can
+            // still be held as a redelivered copy, and a requeued Running task's
+            // stale `task.worker` must not release a hold that is already gone.
+            Self::release_remaining_assignments(state, &proof, &proof_id, None);
 
             for task in proof.tasks.values() {
                 self.close_task_channel(&task.id);
@@ -3647,6 +3617,93 @@ mod tests {
                 .active_tasks
                 .contains(&("p1".into(), "t1".into())),
             "the finished task must still release its worker slot"
+        );
+    }
+
+    /// A fatal failure can drain the proof the same way a completion can; the
+    /// redelivered copy another worker still holds must be released here too.
+    #[tokio::test]
+    async fn failure_finishing_a_proof_releases_other_workers_holds() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            counting_proof_with_holds(
+                &mut state,
+                &[
+                    ("t1", TaskStatus::Running, "w2"),
+                    ("t2", TaskStatus::Succeeded, "w1"),
+                ],
+            );
+        }
+
+        c.fail_task("w2".into(), "p1".into(), "t1".into(), false)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            !state.proofs.contains_key("p1"),
+            "the proof must be removed"
+        );
+        let holder = state.workers.get("w1").unwrap();
+        assert!(
+            holder.active_tasks.is_empty(),
+            "the redelivered hold must be released with the proof"
+        );
+        assert_eq!(holder.weight, 0);
+        assert_eq!(
+            state.policy.release_calls, 2,
+            "one release per assignment: t1's own and t2's orphan"
+        );
+    }
+
+    /// Proof teardown releases whoever actually holds a task, whatever its
+    /// status: a Succeeded task can still be held as a redelivered copy.
+    #[tokio::test]
+    async fn failing_a_proof_releases_a_succeeded_but_held_redelivery() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            counting_proof_with_holds(
+                &mut state,
+                &[
+                    ("t1", TaskStatus::Succeeded, "w1"),
+                    ("t2", TaskStatus::Running, "w2"),
+                ],
+            );
+        }
+
+        c.fail_proof("p1".into(), None, false, None).await.unwrap();
+
+        let state = c.state.read().await;
+        for w in ["w1", "w2"] {
+            let worker = state.workers.get(w).unwrap();
+            assert!(worker.active_tasks.is_empty(), "{w} must be released");
+            assert_eq!(worker.weight, 0, "{w} slot weight must be freed");
+        }
+        assert_eq!(state.policy.release_calls, 2);
+    }
+
+    /// A requeued task keeps a stale `task.worker` until reassignment; teardown
+    /// must not release a hold that preemption already released.
+    #[tokio::test]
+    async fn failing_a_proof_ignores_a_stale_worker_reference() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            counting_proof_with_holds(&mut state, &[("t1", TaskStatus::Running, "w1")]);
+            // Preemption released the hold; the task still names w1.
+            let worker = state.workers.get_mut("w1").unwrap();
+            worker.active_tasks.clear();
+            worker.weight = 0;
+        }
+
+        c.fail_proof("p1".into(), None, false, None).await.unwrap();
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.policy.release_calls, 0,
+            "a hold released at preemption must not be released again"
         );
     }
 
