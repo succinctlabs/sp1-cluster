@@ -221,6 +221,14 @@ pub(crate) fn report_for(
     }
 }
 
+/// Whether the timeout sweep should abort and fail this task. Finished work
+/// still in the map is mid-report, not stuck: failing it would race its own
+/// completion. The reporter drops the entry once the report lands, and a
+/// coordinator that stays unreachable trips the channel-silence exit instead.
+fn timed_out(active: &ActiveTask, timeout: Duration) -> bool {
+    !active.work.is_finished() && active.started_at.elapsed() > timeout
+}
+
 async fn run_worker_inner(
     node_config: NodeConfig,
     token: CancellationToken,
@@ -497,7 +505,7 @@ async fn run_worker_inner(
                         for entry in tasks.iter_mut() {
                             if entry.value().reporter.is_finished() {
                                 panicked_tasks.insert(entry.key().clone());
-                            } else if entry.value().started_at.elapsed() > node_config.task_timeout {
+                            } else if timed_out(entry.value(), node_config.task_timeout) {
                                 timed_out_tasks.insert(entry.key().clone());
                             }
                         }
@@ -660,6 +668,33 @@ mod tests {
             report_for(&key(), result),
             Report::Fail { retryable: false }
         ));
+    }
+
+    #[tokio::test]
+    async fn finished_work_mid_report_is_not_timed_out() {
+        let work = tokio::spawn(std::future::ready((proto::TaskStatus::Succeeded, None)));
+        let task = active_task(work);
+        while !task.work.is_finished() {
+            tokio::task::yield_now().await;
+        }
+
+        assert!(
+            !timed_out(&task, Duration::ZERO),
+            "failing a finished task races its own completion report"
+        );
+    }
+
+    #[tokio::test]
+    async fn stuck_work_is_timed_out_only_past_the_timeout() {
+        let work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        let task = active_task(work);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+
+        assert!(timed_out(&task, Duration::ZERO));
+        assert!(!timed_out(&task, Duration::from_secs(3600)));
     }
 
     #[tokio::test]
