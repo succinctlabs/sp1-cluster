@@ -632,9 +632,12 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 task.data.proof_id,
                 P::debug_proof(&proof.extra),
             );
-            // Don't repeat notify if task is already succeeded, which is possible rarely
-            // for example when tasks are being retried.
-            let subscribers = if task.status == TaskStatus::Succeeded {
+            // A task can complete twice — a retry, or a preempted worker's reporter
+            // landing next to its redelivery's. Only the first report notifies and
+            // runs the success hooks; those record billing and scheduling history,
+            // charged once per task.
+            let already_succeeded = task.status == TaskStatus::Succeeded;
+            let subscribers = if already_succeeded {
                 None
             } else {
                 if task.status != TaskStatus::FailedFatal {
@@ -655,7 +658,9 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             let task_extra = task.extra.clone();
             let proof_extra = proof.extra.clone();
             // Drop task here so we can borrow proof as mutable again.
-            P::post_task_success_update_proof(proof, &task_extra, metadata);
+            if !already_succeeded {
+                P::post_task_success_update_proof(proof, &task_extra, metadata);
+            }
             // Drop proof here so we can borrow state as mutable again.
 
             // Cleanup proof if there's no more active tasks. Drop it after state is released.
@@ -667,7 +672,9 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 None
             };
 
-            P::post_task_success_update_state(&mut state, task_type);
+            if !already_succeeded {
+                P::post_task_success_update_state(&mut state, task_type);
+            }
 
             // Policy weight is charged when a worker takes the task and released when it
             // gives it up. A completion from a worker that no longer holds it — preempted,
@@ -3219,6 +3226,140 @@ mod tests {
             state.policy.proof_gpu_weights.get("p1").copied(),
             None,
             "the duplicate's assignment left weight charged to the proof"
+        );
+    }
+
+    /// Counts success-hook invocations; the built-in policies implement both
+    /// hooks as no-ops, so double-running them is invisible through those.
+    #[derive(Clone, Default)]
+    struct CountingPolicy {
+        success_state_calls: u32,
+    }
+
+    #[async_trait::async_trait]
+    impl AssignmentPolicy for CountingPolicy {
+        type ProofState = u32;
+        type TaskState = ();
+        type WorkerState = ();
+        type ProofResultMetadata = ();
+
+        fn create_proof_state(
+            _state: &CoordinatorState<Self>,
+            _request: &proto::CreateProofRequest,
+        ) -> u32 {
+            0
+        }
+
+        fn enqueue_task(_state: &mut CoordinatorState<Self>, _task: Task<Self>) {}
+
+        fn post_task_success_update_proof(
+            proof: &mut Proof<Self>,
+            _task_extra: &(),
+            _metadata: policy::TaskMetadata,
+        ) {
+            proof.extra += 1;
+        }
+
+        fn post_task_success_update_state(
+            state: &mut CoordinatorState<Self>,
+            _task_type: TaskType,
+        ) {
+            state.policy.success_state_calls += 1;
+        }
+
+        fn post_task_update_state(
+            _state: &mut CoordinatorState<Self>,
+            _proof_extra: u32,
+            _task_id: &str,
+            _task_extra: (),
+            _task_weight: u32,
+            _proof_id: &str,
+            _task_type: TaskType,
+        ) {
+        }
+
+        fn debug_proof(_proof: &u32) -> &str {
+            ""
+        }
+
+        fn post_worker_empty(
+            _state: &mut CoordinatorState<Self>,
+            worker: Worker<Self>,
+        ) -> Worker<Self> {
+            worker
+        }
+
+        async fn assign_tasks(
+            _coord: &Arc<Coordinator<Self>>,
+            state: OwnedRwLockWriteGuard<CoordinatorState<Self>>,
+        ) -> Result<(), Status> {
+            drop(state);
+            Ok(())
+        }
+
+        fn get_proof_result_metadata(_proof: &Proof<Self>) {}
+
+        fn cpu_queue_len(_state: &CoordinatorState<Self>) -> u32 {
+            0
+        }
+
+        fn gpu_queue_len(_state: &CoordinatorState<Self>) -> u32 {
+            0
+        }
+    }
+
+    /// Success hooks record billing and scheduling history, charged once per
+    /// task. A preempted worker's reporter landing next to its redelivery's
+    /// report must not run them twice.
+    #[tokio::test]
+    async fn duplicate_completion_runs_the_success_hooks_once() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            let mut proof = Proof::new("p1".into(), None, 0);
+            // A second live task keeps the proof alive across both completions.
+            proof.active_tasks = 2;
+            proof.tasks.insert(
+                "t1".into(),
+                Task {
+                    id: "t1".into(),
+                    data: TaskData {
+                        proof_id: "p1".into(),
+                        task_type: TaskType::ProveShard as i32,
+                        ..Default::default()
+                    },
+                    created_at: SystemTime::now(),
+                    status: TaskStatus::Running,
+                    retries: 0,
+                    subscribers: HashSet::new(),
+                    worker: Some("w_owner".into()),
+                    dead_worker_requeue_count: 0,
+                    extra: (),
+                },
+            );
+            state.proofs.insert("p1".into(), proof);
+        }
+
+        for worker in ["w_owner", "w_stale"] {
+            c.complete_task(
+                worker.into(),
+                "p1".into(),
+                "t1".into(),
+                policy::TaskMetadata::default(),
+            )
+            .await
+            .unwrap();
+        }
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.proofs.get("p1").unwrap().extra,
+            1,
+            "proof billing metadata was recorded per report, not per task"
+        );
+        assert_eq!(
+            state.policy.success_state_calls, 1,
+            "scheduling history was recorded per report, not per task"
         );
     }
 
