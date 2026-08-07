@@ -586,6 +586,7 @@ async fn run_worker_inner(
                             entry.value().timed_out.store(true, Ordering::SeqCst);
                             entry.value().work.abort();
                         }
+                        let mut wedged_reports = Vec::new();
                         for task_id in wedged_tasks {
                             let Some((_, task)) = tasks.remove(&task_id) else {
                                 continue;
@@ -596,28 +597,52 @@ async fn run_worker_inner(
                                 ABORT_GRACE,
                             );
                             task.work.abort();
+                            wedged_reports.push(task_id);
+                        }
+                        if !wedged_reports.is_empty() {
                             // Close before failing: fail_task requeues the task and
                             // triggers assignment, and an open worker with freed
                             // capacity can win its own retry back while the wedged
                             // work still burns the machine. Draining ends in a
                             // restart, the only thing that actually frees it.
-                            if !closed {
-                                closed = true;
-                                drain_started_at = Some(Instant::now());
-                                if let Err(e) = worker_client.close(CloseRequest {
-                                    worker_id: node_config.worker_id.clone(),
-                                }).await {
-                                    tracing::error!("Failed to close worker: {:?}", e);
+                            let close_worker = !closed;
+                            closed = true;
+                            drain_started_at.get_or_insert_with(Instant::now);
+                            // Both RPCs retry transient errors for minutes; awaiting
+                            // them here would freeze this loop while heartbeats keep
+                            // the worker looking alive. The drain waits on
+                            // `reporters_in_flight` for the spawned report.
+                            reporters_in_flight.fetch_add(1, Ordering::SeqCst);
+                            tokio::spawn({
+                                let in_flight = reporters_in_flight.clone();
+                                let worker_client = worker_client.clone();
+                                let worker_id = node_config.worker_id.clone();
+                                async move {
+                                    let _tracked = sp1_cluster_worker::utils::DeferGuard::new(
+                                        in_flight,
+                                        |c| {
+                                            c.fetch_sub(1, Ordering::SeqCst);
+                                        },
+                                    );
+                                    if close_worker {
+                                        if let Err(e) = worker_client.close(CloseRequest {
+                                            worker_id: worker_id.clone(),
+                                        }).await {
+                                            tracing::error!("Failed to close worker: {:?}", e);
+                                        }
+                                    }
+                                    for (proof_id, task_id) in wedged_reports {
+                                        if let Err(e) = worker_client.fail_task(FailTaskRequest {
+                                            worker_id: worker_id.clone(),
+                                            proof_id,
+                                            task_id,
+                                            retryable: true,
+                                        }).await {
+                                            tracing::error!("Failed to update task status: {:?}", e);
+                                        }
+                                    }
                                 }
-                            }
-                            if let Err(e) = worker_client.fail_task(FailTaskRequest {
-                                worker_id: node_config.worker_id.clone(),
-                                proof_id: task_id.0,
-                                task_id: task_id.1,
-                                retryable: true,
-                            }).await {
-                                tracing::error!("Failed to update task status: {:?}", e);
-                            }
+                            });
                         }
                     }
                     _ = token.cancelled(), if !closed => {
