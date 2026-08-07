@@ -1301,7 +1301,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         // Handle manual proof failure.
         if manual_proof_fail {
             tracing::info!("Proof {} controller has no more retries, failing", proof_id);
-            // The reporting pair's release belongs to this function's tail below.
+            // The reporting pair's release belongs to this function's tail.
             self.fail_proof_internal(
                 &mut state,
                 proof_id.clone(),
@@ -3724,8 +3724,7 @@ mod tests {
     }
 
     /// A fatal controller failure tears the proof down mid-`fail_task`; the
-    /// reporting pair's release belongs to `fail_task`'s own tail, not to the
-    /// teardown sweep.
+    /// reporting pair's release belongs to the tail, not the teardown sweep.
     #[tokio::test]
     async fn manual_proof_fail_releases_the_reporting_task_once() {
         let c = Arc::new(Coordinator::<CountingPolicy>::new());
