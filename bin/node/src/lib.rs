@@ -596,6 +596,20 @@ async fn run_worker_inner(
                                 ABORT_GRACE,
                             );
                             task.work.abort();
+                            // Close before failing: fail_task requeues the task and
+                            // triggers assignment, and an open worker with freed
+                            // capacity can win its own retry back while the wedged
+                            // work still burns the machine. Draining ends in a
+                            // restart, the only thing that actually frees it.
+                            if !closed {
+                                closed = true;
+                                drain_started_at = Some(Instant::now());
+                                if let Err(e) = worker_client.close(CloseRequest {
+                                    worker_id: node_config.worker_id.clone(),
+                                }).await {
+                                    tracing::error!("Failed to close worker: {:?}", e);
+                                }
+                            }
                             if let Err(e) = worker_client.fail_task(FailTaskRequest {
                                 worker_id: node_config.worker_id.clone(),
                                 proof_id: task_id.0,
