@@ -77,6 +77,14 @@ services:
         - private_pull_token
     command: ["/bin/sh", "-c", "/coordinator"]
 
+  # Docker gives a fresh volume root ownership. The worker runs as UID 1001, so hand
+  # it the volume first.
+  circuit-cache-init:
+    image: busybox:stable
+    entrypoint: ["/bin/sh", "-c", "chown -R 1001:1001 /var/cache/sp1/circuits"]
+    volumes:
+      - circuit-cache:/var/cache/sp1/circuits
+
   cpu-node:
     extends:
       file: docker-compose.yml
@@ -107,7 +115,7 @@ services:
         - private_pull_token
     command: ["/bin/sh", "-c", "/node"]
     volumes:
-      - ~/.sp1/circuits:/var/cache/sp1/circuits
+      - circuit-cache:/var/cache/sp1/circuits
 
   gpu0:
     extends:
@@ -215,6 +223,7 @@ services:
 volumes:
   redis_data:
   postgresql_data:
+  circuit-cache:
 
 secrets:
   private_pull_token:
