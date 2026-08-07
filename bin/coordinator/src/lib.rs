@@ -2491,6 +2491,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assign_tasks_skips_a_closed_worker() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", None);
+            let queued = state
+                .proofs
+                .get("p1")
+                .unwrap()
+                .tasks
+                .get("t1")
+                .unwrap()
+                .clone();
+            c.enqueue_task(&mut state, queued).await;
+            insert_live_worker(&mut state, "w1");
+            state.workers.get_mut("w1").unwrap().closed = true;
+        }
+
+        let state = c.state.clone().write_owned().await;
+        c.assign_tasks(state).await.unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            state.workers.get("w1").unwrap().active_tasks.is_empty(),
+            "a closed worker must not receive assignments"
+        );
+    }
+
+    #[tokio::test]
     async fn heartbeat_timeout_cannot_be_set_below_the_floor() {
         let c = Arc::new(coordinator());
 
@@ -3562,27 +3591,16 @@ mod tests {
         let c = Arc::new(coordinator());
         {
             let mut state = c.state.write().await;
-            let mut proof = Proof::new("p1".into(), None, ());
-            proof.active_tasks = 1;
-            proof.tasks.insert(
-                "t1".into(),
-                Task {
-                    id: "t1".into(),
-                    data: TaskData {
-                        proof_id: "p1".into(),
-                        task_type: TaskType::CoreExecute as i32,
-                        ..Default::default()
-                    },
-                    created_at: SystemTime::now(),
-                    status: TaskStatus::Running,
-                    retries: 0,
-                    subscribers: HashSet::new(),
-                    worker: Some("w1".into()),
-                    dead_worker_requeue_count: 0,
-                    extra: Default::default(),
-                },
-            );
-            state.proofs.insert("p1".into(), proof);
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            state
+                .proofs
+                .get_mut("p1")
+                .unwrap()
+                .tasks
+                .get_mut("t1")
+                .unwrap()
+                .data
+                .task_type = TaskType::CoreExecute as i32;
             insert_worker_holding(&mut state, "w1", "p1", "t1");
         }
 

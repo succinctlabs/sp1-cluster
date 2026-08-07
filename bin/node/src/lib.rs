@@ -821,6 +821,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn panic_fails_the_task_fatally() {
+        let result = join_result(async { panic!("boom") }).await;
+
+        assert!(matches!(
+            report_for(&key(), result, false),
+            Report::Fail { retryable: false }
+        ));
+    }
+
+    #[tokio::test]
     async fn finished_work_mid_report_is_left_alone() {
         let work = tokio::spawn(std::future::ready((proto::TaskStatus::Succeeded, None)));
         let task = active_task(work);
@@ -876,16 +886,6 @@ mod tests {
         assert!(matches!(
             timeout_action(&task, Duration::ZERO, Duration::from_secs(3600)),
             TimeoutAction::Abort
-        ));
-    }
-
-    #[tokio::test]
-    async fn panic_fails_the_task_fatally() {
-        let result = join_result(async { panic!("boom") }).await;
-
-        assert!(matches!(
-            report_for(&key(), result, false),
-            Report::Fail { retryable: false }
         ));
     }
 
