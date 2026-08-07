@@ -17,8 +17,8 @@ use sp1_prover::worker::{TaskMetadata, WorkerClient};
 use sp1_prover::SP1ProverComponents;
 use sp1_sdk::install::try_install_circuit_artifacts;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 use tokio::task::{AbortHandle, JoinError, JoinHandle};
@@ -175,9 +175,9 @@ pub(crate) struct ActiveTask {
     pub work: AbortHandle,
     /// Outlives cancellation of `work`, so a task that finished can still report it.
     pub reporter: JoinHandle<()>,
-    /// Set by the timeout sweep before aborting `work`, so the reporter fails
-    /// the task instead of staying silent.
-    pub timed_out: Arc<AtomicBool>,
+    /// Stamped by the sweep's abort; tells the reporter to fail the task, and
+    /// anchors the escalation grace so a late sweep can't shorten it.
+    pub aborted_at: Arc<OnceLock<Instant>>,
 }
 
 /// Drops the task's entry unless a redelivery already replaced it. A cancelled task
@@ -247,10 +247,9 @@ fn timeout_action(active: &ActiveTask, timeout: Duration, grace: Duration) -> Ti
     if active.work.is_finished() || active.started_at.elapsed() <= timeout {
         return TimeoutAction::Leave;
     }
-    if active.timed_out.load(Ordering::SeqCst) && active.started_at.elapsed() > timeout + grace {
-        TimeoutAction::Report
-    } else {
-        TimeoutAction::Abort
+    match active.aborted_at.get() {
+        Some(aborted_at) if aborted_at.elapsed() > grace => TimeoutAction::Report,
+        _ => TimeoutAction::Abort,
     }
 }
 
@@ -259,33 +258,41 @@ fn timeout_action(active: &ActiveTask, timeout: Duration, grace: Duration) -> Ti
 const ABORT_GRACE: Duration = Duration::from_secs(10);
 
 /// Reports wedged tasks off the main loop: the RPCs retry for minutes, and
-/// heartbeats would keep a frozen loop looking alive. Closes the worker first
-/// so its freed capacity can't win a retry back while the wedged work still
-/// burns; tracked in `reporters_in_flight` so the drain waits.
+/// heartbeats would keep a frozen loop looking alive. Every batch awaits the
+/// shared close before failing, so a freed slot can't win a retry back while
+/// the wedged work still burns; tracked in `reporters_in_flight` so the drain
+/// waits.
 fn spawn_wedged_report(
     worker_client: &WorkerServiceClient,
     reporters_in_flight: &Arc<AtomicUsize>,
+    coordinator_closed: &Arc<tokio::sync::OnceCell<()>>,
     worker_id: &str,
-    close_worker: bool,
     wedged: Vec<(String, String)>,
 ) {
     reporters_in_flight.fetch_add(1, Ordering::SeqCst);
     let in_flight = reporters_in_flight.clone();
     let worker_client = worker_client.clone();
+    let coordinator_closed = coordinator_closed.clone();
     let worker_id = worker_id.to_string();
     tokio::spawn(async move {
         let _tracked = sp1_cluster_worker::utils::DeferGuard::new(in_flight, |c| {
             c.fetch_sub(1, Ordering::SeqCst);
         });
-        if close_worker {
-            if let Err(e) = worker_client
-                .close(CloseRequest {
-                    worker_id: worker_id.clone(),
-                })
-                .await
-            {
-                tracing::error!("Failed to close worker: {:?}", e);
-            }
+        let closed = coordinator_closed
+            .get_or_try_init(|| async {
+                worker_client
+                    .close(CloseRequest {
+                        worker_id: worker_id.clone(),
+                    })
+                    .await
+            })
+            .await;
+        if let Err(e) = closed {
+            // Report anyway: a stalled proof outranks a bounced assignment.
+            tracing::error!(
+                "Failed to close worker before failing wedged tasks: {:?}",
+                e
+            );
         }
         for (proof_id, task_id) in wedged {
             if let Err(e) = worker_client
@@ -314,6 +321,9 @@ async fn run_worker_inner(
     // key is accepted, but its reporter may still be mid-RPC. Draining on `tasks` alone
     // would exit under it and lose the completion.
     let reporters_in_flight = Arc::new(AtomicUsize::new(0));
+    // Set once the coordinator acknowledged our close. Wedged batches await it
+    // before fail_task, so a requeued task can't be assigned back here.
+    let coordinator_closed: Arc<tokio::sync::OnceCell<()>> = Arc::new(tokio::sync::OnceCell::new());
 
     // Beats stop when this future ends (return or harness kill).
     let heartbeat = HeartbeatHandle::spawn(node_config.clone(), tasks.clone(), token.clone())?;
@@ -399,11 +409,11 @@ async fn run_worker_inner(
                                         async move { worker.run_task(&task).await }
                                     });
                                     let work_abort = work.abort_handle();
-                                    let timed_out_flag = Arc::new(AtomicBool::new(false));
+                                    let aborted_at = Arc::new(OnceLock::new());
                                     reporters_in_flight.fetch_add(1, Ordering::SeqCst);
                                     let reporter = tokio::spawn({
                                         let in_flight = reporters_in_flight.clone();
-                                        let timed_out_flag = timed_out_flag.clone();
+                                        let aborted_at = aborted_at.clone();
                                         let task = task.clone();
                                         let data = data.clone();
                                         let worker_client = worker_client.clone();
@@ -419,7 +429,7 @@ async fn run_worker_inner(
                                             );
                                             let work_id = work.id();
                                             let result = work.await;
-                                            let timed_out = timed_out_flag.load(Ordering::SeqCst);
+                                            let timed_out = aborted_at.get().is_some();
                                             match report_for(&key, result, timed_out) {
                                                 Report::Complete(metadata) => {
                                                     let metadata_string = serde_json::to_string(&metadata).unwrap();
@@ -458,7 +468,7 @@ async fn run_worker_inner(
                                         started_at: Instant::now(),
                                         work: work_abort,
                                         reporter,
-                                        timed_out: timed_out_flag,
+                                        aborted_at,
                                     });
                                 }
                                 Some(server_message::Message::CancelTask(task)) => {
@@ -628,7 +638,7 @@ async fn run_worker_inner(
                             // Reporting here would race a completion from work that
                             // finished after the check. The reporter owns the report,
                             // and drops the entry once it lands.
-                            entry.value().timed_out.store(true, Ordering::SeqCst);
+                            let _ = entry.value().aborted_at.set(Instant::now());
                             entry.value().work.abort();
                         }
                         let mut wedged_reports = Vec::new();
@@ -647,14 +657,13 @@ async fn run_worker_inner(
                         if !wedged_reports.is_empty() {
                             // Draining ends in a restart — the only thing that
                             // frees wedged work.
-                            let close_worker = !closed;
                             closed = true;
                             drain_started_at.get_or_insert_with(Instant::now);
                             spawn_wedged_report(
                                 &worker_client,
                                 &reporters_in_flight,
+                                &coordinator_closed,
                                 &node_config.worker_id,
-                                close_worker,
                                 wedged_reports,
                             );
                         }
@@ -666,6 +675,8 @@ async fn run_worker_inner(
                             worker_id: node_config.worker_id.clone(),
                         }).await {
                             tracing::error!("Failed to close worker: {:?}", e);
+                        } else {
+                            let _ = coordinator_closed.set(());
                         }
                         if tasks.is_empty() && reporters_in_flight.load(Ordering::SeqCst) == 0 {
                             tracing::info!("No in-flight tasks; shutting down immediately");
@@ -729,7 +740,7 @@ mod tests {
             started_at: Instant::now(),
             work: work.abort_handle(),
             reporter: tokio::spawn(std::future::ready(())),
-            timed_out: Arc::new(AtomicBool::new(false)),
+            aborted_at: Arc::new(OnceLock::new()),
         }
     }
 
@@ -866,6 +877,29 @@ mod tests {
         ));
     }
 
+    /// The sweep can first observe a timeout long after it passed (stalled
+    /// runtime); the grace runs from the abort itself, not from the deadline.
+    #[tokio::test]
+    async fn a_late_abort_still_gets_its_full_grace() {
+        let work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        let mut task = active_task(work);
+        task.started_at = Instant::now()
+            .checked_sub(Duration::from_secs(100))
+            .unwrap();
+        task.aborted_at.set(Instant::now()).unwrap();
+
+        assert!(
+            matches!(
+                timeout_action(&task, Duration::ZERO, Duration::from_secs(10)),
+                TimeoutAction::Abort
+            ),
+            "escalating before the abort's own grace re-opens the dual-report race"
+        );
+    }
+
     /// Work that never yields cannot observe its abort; once the grace passes
     /// the sweep must report the failure itself or the proof wedges forever.
     #[tokio::test]
@@ -875,7 +909,7 @@ mod tests {
             Option<TaskMetadata>,
         )>());
         let task = active_task(work);
-        task.timed_out.store(true, Ordering::SeqCst);
+        task.aborted_at.set(Instant::now()).unwrap();
         tokio::time::sleep(Duration::from_millis(2)).await;
 
         assert!(matches!(
@@ -919,7 +953,7 @@ mod tests {
                 started_at: Instant::now(),
                 work: work_abort,
                 reporter,
-                timed_out: Arc::new(AtomicBool::new(false)),
+                aborted_at: Arc::new(OnceLock::new()),
             },
         );
 
@@ -1005,7 +1039,7 @@ mod tests {
                 started_at: Instant::now(),
                 work: work_abort,
                 reporter,
-                timed_out: Arc::new(AtomicBool::new(false)),
+                aborted_at: Arc::new(OnceLock::new()),
             },
         );
 
