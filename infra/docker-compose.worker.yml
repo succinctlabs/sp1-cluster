@@ -135,7 +135,7 @@ services:
   #     - NODE_REDIS_NODES=redis://:redispassword@${MANAGER_HOST:-host.docker.internal}:6379/0
   #     - WORKER_TYPE=CPU
   #   volumes:
-  #     - ${HOME}/.sp1/circuits:/root/.sp1/circuits
+  #     - ${HOME}/.sp1/circuits:/var/cache/sp1/circuits
   #   command: ["/bin/sh", "-c", "/node"]
   #   deploy:
   #     resources:

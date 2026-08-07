@@ -71,8 +71,10 @@ services:
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=CPU
+      - SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16
+      - SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk
     volumes:
-      - ${HOME}/.sp1/circuits:/root/.sp1/circuits
+      - circuit-cache:/var/cache/sp1/circuits
     command: ["/bin/sh", "-c", "/node"]
     shm_size: 96G
     deploy:
@@ -97,8 +99,10 @@ services:
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=ALL
+      - SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16
+      - SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk
     volumes:
-      - ${HOME}/.sp1/circuits:/root/.sp1/circuits
+      - circuit-cache:/var/cache/sp1/circuits
     command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
     shm_size: 96G
     deploy:
@@ -252,3 +256,4 @@ services:
 volumes:
   redis_data:
   postgresql_data:
+  circuit-cache:

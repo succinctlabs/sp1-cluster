@@ -105,8 +105,10 @@ services:
       - RUST_LOG=debug,tower=info,h2=info
       - OTLP_ENDPOINT=http://alloy:4317
       - PROOF_DURATIONS_CSV=/data/proof_durations.csv
+      - SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16
+      - SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk
     volumes:
-      - ${HOME}/.sp1/circuits:/root/.sp1/circuits
+      - circuit-cache:/var/cache/sp1/circuits
       - ./data:/data
     command: ["/bin/sh", "-c", "/node"]
     shm_size: 96G
@@ -124,3 +126,4 @@ services:
 volumes:
   redis_data:
   postgresql_data:
+  circuit-cache:

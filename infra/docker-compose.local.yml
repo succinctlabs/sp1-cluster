@@ -97,6 +97,8 @@ services:
       - RUST_LOG=info
       - OTLP_ENDPOINT=http://alloy:4317
       - PROOF_DURATIONS_CSV=/data/proof_durations.csv
+      - SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16
+      - SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk
       # - SP1_WORKER_USE_FIXED_PK=true
     build:
       context: ..
@@ -105,7 +107,7 @@ services:
         - private_pull_token
     command: ["/bin/sh", "-c", "/node"]
     volumes:
-      - ~/.sp1/circuits:/home/appuser/.sp1/circuits
+      - ~/.sp1/circuits:/var/cache/sp1/circuits
 
   gpu0:
     extends:
