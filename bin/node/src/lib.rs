@@ -265,20 +265,20 @@ const ABORT_GRACE: Duration = Duration::from_secs(10);
 fn spawn_wedged_report(
     worker_client: &WorkerServiceClient,
     reporters_in_flight: &Arc<AtomicUsize>,
-    coordinator_closed: &Arc<tokio::sync::OnceCell<()>>,
+    close_acked: &Arc<tokio::sync::OnceCell<()>>,
     worker_id: &str,
     wedged: Vec<(String, String)>,
 ) {
     reporters_in_flight.fetch_add(1, Ordering::SeqCst);
     let in_flight = reporters_in_flight.clone();
     let worker_client = worker_client.clone();
-    let coordinator_closed = coordinator_closed.clone();
+    let close_acked = close_acked.clone();
     let worker_id = worker_id.to_string();
     tokio::spawn(async move {
         let _tracked = sp1_cluster_worker::utils::DeferGuard::new(in_flight, |c| {
             c.fetch_sub(1, Ordering::SeqCst);
         });
-        let closed = coordinator_closed
+        let acked = close_acked
             .get_or_try_init(|| async {
                 worker_client
                     .close(CloseRequest {
@@ -287,7 +287,7 @@ fn spawn_wedged_report(
                     .await
             })
             .await;
-        if let Err(e) = closed {
+        if let Err(e) = acked {
             // Report anyway: a stalled proof outranks a bounced assignment.
             tracing::error!(
                 "Failed to close worker before failing wedged tasks: {:?}",
@@ -323,7 +323,7 @@ async fn run_worker_inner(
     let reporters_in_flight = Arc::new(AtomicUsize::new(0));
     // Set once the coordinator acknowledged our close. Wedged batches await it
     // before fail_task, so a requeued task can't be assigned back here.
-    let coordinator_closed: Arc<tokio::sync::OnceCell<()>> = Arc::new(tokio::sync::OnceCell::new());
+    let close_acked: Arc<tokio::sync::OnceCell<()>> = Arc::new(tokio::sync::OnceCell::new());
 
     // Beats stop when this future ends (return or harness kill).
     let heartbeat = HeartbeatHandle::spawn(node_config.clone(), tasks.clone(), token.clone())?;
@@ -662,7 +662,7 @@ async fn run_worker_inner(
                             spawn_wedged_report(
                                 &worker_client,
                                 &reporters_in_flight,
-                                &coordinator_closed,
+                                &close_acked,
                                 &node_config.worker_id,
                                 wedged_reports,
                             );
@@ -676,7 +676,7 @@ async fn run_worker_inner(
                         }).await {
                             tracing::error!("Failed to close worker: {:?}", e);
                         } else {
-                            let _ = coordinator_closed.set(());
+                            let _ = close_acked.set(());
                         }
                         if tasks.is_empty() && reporters_in_flight.load(Ordering::SeqCst) == 0 {
                             tracing::info!("No in-flight tasks; shutting down immediately");
