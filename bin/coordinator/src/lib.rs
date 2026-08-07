@@ -1301,8 +1301,16 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         // Handle manual proof failure.
         if manual_proof_fail {
             tracing::info!("Proof {} controller has no more retries, failing", proof_id);
-            self.fail_proof_internal(&mut state, proof_id.clone(), None, true, None)
-                .await?;
+            // The reporting pair's release belongs to this function's tail below.
+            self.fail_proof_internal(
+                &mut state,
+                proof_id.clone(),
+                None,
+                true,
+                None,
+                Some((&worker_id, &task_id)),
+            )
+            .await?;
         }
 
         // Have the policy update any state it needs to.
@@ -1481,6 +1489,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         task_id: Option<String>,
         notify_sender: bool,
         extra_data: Option<String>,
+        skip: Option<(&str, &str)>,
     ) -> Result<(), Status> {
         if state.shutting_down {
             tracing::info!(
@@ -1535,7 +1544,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             // Holder-gated on `active_tasks`, not task status: a Succeeded task can
             // still be held as a redelivered copy, and a requeued Running task's
             // stale `task.worker` must not release a hold that is already gone.
-            Self::release_remaining_assignments(state, &proof, &proof_id, None);
+            Self::release_remaining_assignments(state, &proof, &proof_id, skip);
 
             for task in proof.tasks.values() {
                 self.close_task_channel(&task.id);
@@ -1577,8 +1586,15 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire"))
             .await;
 
-        self.fail_proof_internal(&mut state, proof_id, task_id, notify_sender, extra_data)
-            .await
+        self.fail_proof_internal(
+            &mut state,
+            proof_id,
+            task_id,
+            notify_sender,
+            extra_data,
+            None,
+        )
+        .await
     }
 
     /// Send a task to a worker.
@@ -1954,7 +1970,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 .await;
             for id in proofs_to_remove {
                 if let Err(e) = self
-                    .fail_proof_internal(&mut state, id, None, false, None)
+                    .fail_proof_internal(&mut state, id, None, false, None, None)
                     .await
                 {
                     tracing::error!("Failed to fail expired proof: {}", e);
@@ -3704,6 +3720,31 @@ mod tests {
         assert_eq!(
             state.policy.release_calls, 0,
             "a hold released at preemption must not be released again"
+        );
+    }
+
+    /// A fatal controller failure tears the proof down mid-`fail_task`; the
+    /// reporting pair's release belongs to `fail_task`'s own tail, not to the
+    /// teardown sweep.
+    #[tokio::test]
+    async fn manual_proof_fail_releases_the_reporting_task_once() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            counting_proof_with_holds(&mut state, &[("t1", TaskStatus::Running, "w1")]);
+            let proof = state.proofs.get_mut("p1").unwrap();
+            proof.tasks.get_mut("t1").unwrap().data.task_type = TaskType::Controller as i32;
+        }
+
+        c.fail_task("w1".into(), "p1".into(), "t1".into(), false)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert!(!state.proofs.contains_key("p1"), "the proof must be failed");
+        assert_eq!(
+            state.policy.release_calls, 1,
+            "teardown must skip the reporting pair; fail_task's tail releases it"
         );
     }
 
