@@ -632,9 +632,12 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 task.data.proof_id,
                 P::debug_proof(&proof.extra),
             );
-            // Don't repeat notify if task is already succeeded, which is possible rarely
-            // for example when tasks are being retried.
-            let subscribers = if task.status == TaskStatus::Succeeded {
+            // A task can complete twice — a retry, or a preempted worker's reporter
+            // landing next to its redelivery's. Only the first report notifies and
+            // runs the success hooks; those record billing and scheduling history,
+            // charged once per task.
+            let already_succeeded = task.status == TaskStatus::Succeeded;
+            let subscribers = if already_succeeded {
                 None
             } else {
                 if task.status != TaskStatus::FailedFatal {
@@ -655,29 +658,52 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             let task_extra = task.extra.clone();
             let proof_extra = proof.extra.clone();
             // Drop task here so we can borrow proof as mutable again.
-            P::post_task_success_update_proof(proof, &task_extra, metadata);
-            // Drop proof here so we can borrow state as mutable again.
+            if !already_succeeded {
+                P::post_task_success_update_proof(proof, &task_extra, metadata);
+                P::post_task_success_update_state(&mut state, task_type);
+            }
 
             // Cleanup proof if there's no more active tasks. Drop it after state is released.
-            let removed = if proof.active_tasks == 0 {
+            let mut released_assignments = false;
+            let removed = if remaining_tasks == 0 {
                 tracing::info!("Proof {} has no more active tasks, removing", proof_id);
                 P::on_proof_deleted(&mut state, &proof_id);
-                Some(state.proofs.remove(&proof_id))
+                let removed = state.proofs.remove(&proof_id);
+                // A stale completion can finish a proof while a redelivered copy of
+                // its final task still runs elsewhere. With the proof gone, that
+                // worker's own report dies on NotFound, so its assignment must be
+                // released here or its slot and policy weight leak.
+                if let Some(proof) = &removed {
+                    released_assignments = Self::release_remaining_assignments(
+                        &mut state,
+                        proof,
+                        &proof_id,
+                        Some((&worker_id, &task_id)),
+                    );
+                }
+                removed
             } else {
                 None
             };
 
-            P::post_task_success_update_state(&mut state, task_type);
-
-            P::post_task_update_state(
-                &mut state,
-                proof_extra,
-                &task_id,
-                task_extra,
-                task_weight,
-                &proof_id,
-                task_type,
-            );
+            // Policy weight is charged when a worker takes the task and released when it
+            // gives it up. A completion from a worker that no longer holds it — preempted,
+            // or superseded by a redelivery — was already released by whoever took it.
+            let still_owned = state.workers.get(&worker_id).is_some_and(|w| {
+                w.active_tasks
+                    .contains(&(proof_id.clone(), task_id.clone()))
+            });
+            if still_owned {
+                P::post_task_update_state(
+                    &mut state,
+                    proof_extra,
+                    &task_id,
+                    task_extra,
+                    task_weight,
+                    &proof_id,
+                    task_type,
+                );
+            }
 
             tracing::debug!(
                 "Complete task {} for proof {}, {} tasks remaining",
@@ -686,6 +712,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 remaining_tasks
             );
             // Update worker state.
+            let mut capacity_freed = released_assignments;
             if let Some(worker) = state.workers.get_mut(&worker_id) {
                 if worker
                     .active_tasks
@@ -699,15 +726,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                         let updated = P::post_worker_empty(&mut state, worker);
                         state.workers.insert(worker_id, updated);
                     }
-
-                    // Assign tasks now that a worker is available.
-                    self.assign_tasks(state).await?;
+                    capacity_freed = true;
                 } else if task_type != TaskType::MarkerDeferredRecord {
                     // This is only an issue if it's not a marker task.
                     tracing::warn!("worker {} was not working on task {}", worker_id, task_id);
-                    drop(state);
-                } else {
-                    drop(state);
                 }
             } else {
                 // Expected under dead-worker churn (e.g. spot eviction): the worker
@@ -718,6 +740,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                     task_id,
                     worker_id
                 );
+            }
+            if capacity_freed {
+                self.assign_tasks(state).await?;
+            } else {
                 drop(state);
             }
 
@@ -729,6 +755,65 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         });
 
         Ok(())
+    }
+
+    /// Releases every assignment still held on `proof`'s tasks, except `skip` —
+    /// the (worker, task) pair the caller settles itself. Returns whether
+    /// anything was released.
+    fn release_remaining_assignments(
+        state: &mut CoordinatorState<P>,
+        proof: &Proof<P>,
+        proof_id: &str,
+        skip: Option<(&str, &str)>,
+    ) -> bool {
+        let mut released = false;
+        for task in proof.tasks.values() {
+            let Some(owner) = &task.worker else {
+                continue;
+            };
+            if Some((owner.as_str(), task.id.as_str())) == skip {
+                continue;
+            }
+            let Some(worker) = state.workers.get_mut(owner) else {
+                continue;
+            };
+            if !worker
+                .active_tasks
+                .remove(&(proof_id.to_string(), task.id.clone()))
+            {
+                continue;
+            }
+            released = true;
+            if worker
+                .channel
+                .send(Ok(ServerMessage {
+                    message: Some(server_message::Message::CancelTask(CancelTask {
+                        proof_id: proof_id.to_string(),
+                        task_id: task.id.clone(),
+                    })),
+                }))
+                .is_err()
+            {
+                tracing::error!("Failed to send CancelTask to worker {}", worker.id);
+            }
+            worker.weight = worker.weight.saturating_sub(task.data.weight);
+            if worker.active_tasks.is_empty() {
+                let id = worker.id.clone();
+                let worker = worker.clone();
+                let updated = P::post_worker_empty(state, worker);
+                state.workers.insert(id, updated);
+            }
+            P::post_task_update_state(
+                state,
+                proof.extra.clone(),
+                &task.id,
+                task.extra.clone(),
+                task.data.weight,
+                proof_id,
+                task.data.task_type(),
+            );
+        }
+        released
     }
 
     /// Total weight of the tasks this coordinator has assigned to a worker.
@@ -1086,7 +1171,8 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         }
     }
 
-    /// Mark a task as failed.
+    /// Mark a task as failed. A task already recorded as succeeded keeps its status
+    /// and only releases its worker slot.
     pub async fn fail_task(
         self: &Arc<Self>,
         worker_id: String,
@@ -1123,6 +1209,39 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             return Err(Status::not_found(format!("task {task_id} not found")));
         };
 
+        // A success already recorded is final. Delivery is at-least-once, so a second
+        // execution of a finished task can report failure afterwards — typically because
+        // it found inputs the first execution had already reclaimed.
+        if task.status == TaskStatus::Succeeded {
+            let task_weight = task.data.weight;
+            let task_type = task.data.task_type();
+            let task_extra = task.extra.clone();
+            let proof_extra = proof.extra.clone();
+            tracing::warn!("Ignoring failure for already-succeeded task {}", task_id);
+            // The task really did finish, so release it the way a completion would.
+            P::post_task_update_state(
+                &mut state,
+                proof_extra,
+                &task_id,
+                task_extra,
+                task_weight,
+                &proof_id,
+                task_type,
+            );
+            if let Some(worker) = state.workers.get_mut(&worker_id) {
+                worker
+                    .active_tasks
+                    .remove(&(proof_id.clone(), task_id.clone()));
+                worker.weight = worker.weight.saturating_sub(task_weight);
+                if worker.active_tasks.is_empty() {
+                    let worker = worker.clone();
+                    let updated = P::post_worker_empty(&mut state, worker);
+                    state.workers.insert(worker_id, updated);
+                }
+            }
+            return self.assign_tasks(state).await;
+        }
+
         // If it's a controller task and we won't retry it, we want to manually fail the proof as
         // there's no way to continue.
         let manual_proof_fail = enable_proof_fail(task.data.task_type())
@@ -1131,7 +1250,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         let status = if retryable {
             if task.retries == MAX_TASK_RETRIES {
                 tracing::error!("task {} retries exhausted", task_id);
-                if task.status != TaskStatus::Succeeded && task.status != TaskStatus::FailedFatal {
+                if task.status != TaskStatus::FailedFatal {
                     proof.active_tasks -= 1;
                 }
 
@@ -1142,7 +1261,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 TaskStatus::FailedRetryable
             }
         } else {
-            if task.status != TaskStatus::Succeeded && task.status != TaskStatus::FailedFatal {
+            if task.status != TaskStatus::FailedFatal {
                 proof.active_tasks -= 1;
             }
             TaskStatus::FailedFatal
@@ -1163,7 +1282,18 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         let removed = if !manual_proof_fail && proof.active_tasks == 0 {
             tracing::info!("Proof {} has no more active tasks, removing", proof_id);
             P::on_proof_deleted(&mut state, &proof_id);
-            Some(state.proofs.remove(&proof_id))
+            let removed = state.proofs.remove(&proof_id);
+            // Same orphan as complete_task's removal: another worker can still hold
+            // a redelivered copy of one of this proof's tasks.
+            if let Some(proof) = &removed {
+                Self::release_remaining_assignments(
+                    &mut state,
+                    proof,
+                    &proof_id,
+                    Some((&worker_id, &task_id)),
+                );
+            }
+            removed
         } else {
             None
         };
@@ -1171,8 +1301,16 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         // Handle manual proof failure.
         if manual_proof_fail {
             tracing::info!("Proof {} controller has no more retries, failing", proof_id);
-            self.fail_proof_internal(&mut state, proof_id.clone(), None, true, None)
-                .await?;
+            // The reporting pair's release belongs to this function's tail.
+            self.fail_proof_internal(
+                &mut state,
+                proof_id.clone(),
+                None,
+                true,
+                None,
+                Some((&worker_id, &task_id)),
+            )
+            .await?;
         }
 
         // Have the policy update any state it needs to.
@@ -1351,6 +1489,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         task_id: Option<String>,
         notify_sender: bool,
         extra_data: Option<String>,
+        skip: Option<(&str, &str)>,
     ) -> Result<(), Status> {
         if state.shutting_down {
             tracing::info!(
@@ -1361,26 +1500,35 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         }
         track_latency!("coordinator.fail_proof", {
             let sender = state.proofs_tx.clone();
-            // Cancel all tasks
+            // Vet the blamed task before tearing anything down: `on_proof_deleted` discards
+            // policy state that re-inserting the proof would not restore.
+            if let (Some(task_id), Some(proof)) = (task_id.as_ref(), state.proofs.get(&proof_id)) {
+                let Some(task) = proof.tasks.get(task_id) else {
+                    tracing::warn!(
+                        "Ignoring proof failure, task {} not found in proof {}",
+                        task_id,
+                        proof_id
+                    );
+                    return Err(Status::not_found(format!(
+                        "task {task_id} not found in proof {proof_id}"
+                    )));
+                };
+                // The blamed task already succeeded, so the proof must outlive the
+                // duplicate's report.
+                if task.status == TaskStatus::Succeeded {
+                    tracing::warn!(
+                        "Ignoring proof failure blamed on already-succeeded task {}",
+                        task_id
+                    );
+                    return Ok(());
+                }
+            }
             P::on_proof_deleted(state, &proof_id);
             let proof = state.proofs.remove(&proof_id);
             let Some(proof) = proof else {
                 tracing::warn!("proof {} not found", proof_id);
                 return Ok(());
             };
-            if let Some(task_id) = task_id {
-                if !proof.tasks.contains_key(&task_id) {
-                    tracing::warn!(
-                        "Ignoring proof failure, task {} not found in proof {}",
-                        task_id,
-                        proof_id
-                    );
-                    state.proofs.insert(proof_id.clone(), proof);
-                    return Err(Status::not_found(format!(
-                        "task {task_id} not found in proof {proof_id}"
-                    )));
-                }
-            }
             // Deliver a terminal TaskResult to each task's subscribers so they drain
             // via the normal completion path once the proof is gone.
             for task in proof.tasks.values() {
@@ -1393,53 +1541,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                     );
                 }
             }
-            for task in proof.tasks.values() {
-                if task.status == TaskStatus::Running {
-                    if let Some(worker_id) = &task.worker {
-                        if let Some(worker) = state.workers.get_mut(worker_id) {
-                            if worker
-                                .channel
-                                .send(Ok(ServerMessage {
-                                    message: Some(server_message::Message::CancelTask(
-                                        CancelTask {
-                                            proof_id: proof_id.clone(),
-                                            task_id: task.id.clone(),
-                                        },
-                                    )),
-                                }))
-                                .is_err()
-                            {
-                                tracing::error!(
-                                    "Failed to send CancelTask to worker {}",
-                                    worker.id
-                                );
-                            }
-                            worker
-                                .active_tasks
-                                .remove(&(proof_id.clone(), task.id.clone()));
-                            worker.weight = worker.weight.saturating_sub(task.data.weight);
-
-                            // If the worker has no more tasks, handle it.
-                            if worker.active_tasks.is_empty() {
-                                let id = worker.id.clone();
-                                let worker = worker.clone();
-                                let updated = P::post_worker_empty(state, worker);
-                                state.workers.insert(id, updated);
-                            }
-
-                            P::post_task_update_state(
-                                state,
-                                proof.extra.clone(),
-                                &task.id,
-                                task.extra.clone(),
-                                task.data.weight,
-                                &proof_id,
-                                task.data.task_type(),
-                            );
-                        }
-                    }
-                }
-            }
+            // Holder-gated on `active_tasks`, not task status: a Succeeded task can
+            // still be held as a redelivered copy, and a requeued Running task's
+            // stale `task.worker` must not release a hold that is already gone.
+            Self::release_remaining_assignments(state, &proof, &proof_id, skip);
 
             for task in proof.tasks.values() {
                 self.close_task_channel(&task.id);
@@ -1481,8 +1586,15 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             .instrument(tracing::debug_span!("acquire"))
             .await;
 
-        self.fail_proof_internal(&mut state, proof_id, task_id, notify_sender, extra_data)
-            .await
+        self.fail_proof_internal(
+            &mut state,
+            proof_id,
+            task_id,
+            notify_sender,
+            extra_data,
+            None,
+        )
+        .await
     }
 
     /// Send a task to a worker.
@@ -1858,7 +1970,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 .await;
             for id in proofs_to_remove {
                 if let Err(e) = self
-                    .fail_proof_internal(&mut state, id, None, false, None)
+                    .fail_proof_internal(&mut state, id, None, false, None, None)
                     .await
                 {
                     tracing::error!("Failed to fail expired proof: {}", e);
@@ -2379,6 +2491,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assign_tasks_skips_a_closed_worker() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", None);
+            let queued = state
+                .proofs
+                .get("p1")
+                .unwrap()
+                .tasks
+                .get("t1")
+                .unwrap()
+                .clone();
+            c.enqueue_task(&mut state, queued).await;
+            insert_live_worker(&mut state, "w1");
+            state.workers.get_mut("w1").unwrap().closed = true;
+        }
+
+        let state = c.state.clone().write_owned().await;
+        c.assign_tasks(state).await.unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            state.workers.get("w1").unwrap().active_tasks.is_empty(),
+            "a closed worker must not receive assignments"
+        );
+    }
+
+    #[tokio::test]
     async fn heartbeat_timeout_cannot_be_set_below_the_floor() {
         let c = Arc::new(coordinator());
 
@@ -2594,25 +2735,49 @@ mod tests {
         );
     }
 
-    /// Insert a live (healthy) worker with default capacity. Returns the tx side of
-    /// its message channel; the corresponding rx is dropped (not used in tests that
-    /// only care about state, not sent payloads).
-    fn insert_live_worker(
-        state: &mut CoordinatorState<DefaultPolicy>,
-        worker_id: &str,
-        worker_type: WorkerType,
-    ) {
+    fn gpu_task<P: AssignmentPolicy>(
+        id: &str,
+        proof_id: &str,
+        weight: u32,
+        status: TaskStatus,
+        worker: Option<&str>,
+    ) -> Task<P> {
+        Task {
+            id: id.into(),
+            data: TaskData {
+                proof_id: proof_id.into(),
+                task_type: TaskType::ProveShard as i32,
+                weight,
+                ..Default::default()
+            },
+            created_at: SystemTime::now(),
+            status,
+            retries: 0,
+            subscribers: HashSet::new(),
+            worker: worker.map(String::from),
+            dead_worker_requeue_count: 0,
+            extra: Default::default(),
+        }
+    }
+
+    /// GPU worker with default capacity. The rx side of its message channel is
+    /// dropped, so sends to it fail silently — fine for tests that only assert
+    /// on state, not sent payloads.
+    fn gpu_worker<P: AssignmentPolicy>(id: &str) -> Worker<P> {
         let (tx, _rx) = mpsc::unbounded_channel();
-        state.workers.insert(
-            worker_id.into(),
-            Worker::new(
-                worker_id.into(),
-                worker_type,
-                24,
-                tx,
-                WorkerIdentity::default(),
-            ),
-        );
+        Worker::new(
+            id.into(),
+            WorkerType::Gpu,
+            24,
+            tx,
+            WorkerIdentity::default(),
+        )
+    }
+
+    fn insert_live_worker(state: &mut CoordinatorState<DefaultPolicy>, worker_id: &str) {
+        state
+            .workers
+            .insert(worker_id.into(), gpu_worker(worker_id));
     }
 
     /// Like `insert_proof_with_running_task` but explicitly sets the task_type so
@@ -2631,23 +2796,36 @@ mod tests {
         proof.active_tasks = 1;
         proof.tasks.insert(
             task_id.into(),
-            Task {
-                id: task_id.into(),
-                data: TaskData {
-                    proof_id: proof_id.into(),
-                    task_type: TaskType::ProveShard as i32,
-                    ..Default::default()
-                },
-                created_at: SystemTime::now(),
-                status: TaskStatus::Running,
-                retries: 0,
-                subscribers: HashSet::new(),
-                worker: worker_id.map(String::from),
-                dead_worker_requeue_count: 0,
-                extra: Default::default(),
-            },
+            gpu_task(task_id, proof_id, 0, TaskStatus::Running, worker_id),
         );
         state.proofs.insert(proof_id.into(), proof);
+    }
+
+    /// `BalancedPolicy` is used here because `DefaultPolicy`'s weight accounting is a
+    /// no-op and would hide the double release.
+    fn balanced_proof_on_worker(
+        state: &mut CoordinatorState<policy::balanced::BalancedPolicy>,
+        owner: &str,
+    ) {
+        let mut proof = Proof::new("p1".into(), None, ());
+        // A second task keeps the proof alive past this completion.
+        proof.active_tasks = 2;
+        proof.tasks.insert(
+            "t1".into(),
+            gpu_task("t1", "p1", 8, TaskStatus::Running, Some(owner)),
+        );
+        state.proofs.insert("p1".into(), proof);
+        // What assigning the task to `owner` charged.
+        state.policy.proof_gpu_weights.insert("p1".into(), 8);
+
+        let mut worker = gpu_worker(owner);
+        worker.active_tasks.insert(("p1".into(), "t1".into()));
+        worker.weight = 8;
+        state.workers.insert(owner.into(), worker);
+
+        state
+            .workers
+            .insert("w_stale".into(), gpu_worker("w_stale"));
     }
 
     /// Regression guard: after `cleanup_dead_workers` removes a dead worker and
@@ -2661,7 +2839,7 @@ mod tests {
             let mut state = c.state.write().await;
             insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w_dead"));
             insert_dead_worker(&mut state, "w_dead", WorkerType::Gpu, &[("p1", "t1")]);
-            insert_live_worker(&mut state, "w_live", WorkerType::Gpu);
+            insert_live_worker(&mut state, "w_live");
         }
 
         c.cleanup_dead_workers().await;
@@ -2715,7 +2893,7 @@ mod tests {
             let mut state = c.state.write().await;
             insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w_dead"));
             insert_dead_worker(&mut state, "w_dead", WorkerType::Gpu, &[("p1", "t1")]);
-            insert_live_worker(&mut state, "w_live", WorkerType::Gpu);
+            insert_live_worker(&mut state, "w_live");
         }
 
         // 1. Dead-worker cleanup: w_dead removed, task re-enqueued.
@@ -2999,5 +3177,688 @@ mod tests {
             "None worker must be skipped"
         );
         assert_eq!(components.len(), 1, "only the coordinator entry remains");
+    }
+
+    /// A preempted worker's late completion must not release weight the preemption
+    /// already released, or the tenant is credited twice and over-admitted.
+    #[tokio::test]
+    async fn completion_from_a_worker_that_lost_the_task_does_not_release_weight() {
+        let c = Arc::new(Coordinator::<policy::balanced::BalancedPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            balanced_proof_on_worker(&mut state, "w_owner");
+        }
+
+        c.complete_task(
+            "w_stale".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata::default(),
+        )
+        .await
+        .unwrap();
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.policy.proof_gpu_weights.get("p1").copied(),
+            Some(8),
+            "a completion from a worker that no longer holds the task released weight twice"
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_from_the_owning_worker_releases_weight() {
+        let c = Arc::new(Coordinator::<policy::balanced::BalancedPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            balanced_proof_on_worker(&mut state, "w_owner");
+        }
+
+        c.complete_task(
+            "w_owner".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata::default(),
+        )
+        .await
+        .unwrap();
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.policy.proof_gpu_weights.get("p1").copied(),
+            None,
+            "the owning worker's completion must release the weight it charged"
+        );
+    }
+
+    /// Counts success-hook invocations; the built-in policies implement both
+    /// hooks as no-ops, so double-running them is invisible through those.
+    #[derive(Clone, Default)]
+    struct CountingPolicy {
+        success_state_calls: u32,
+        release_calls: u32,
+    }
+
+    #[async_trait::async_trait]
+    impl AssignmentPolicy for CountingPolicy {
+        type ProofState = u32;
+        type TaskState = ();
+        type WorkerState = ();
+        type ProofResultMetadata = ();
+
+        fn create_proof_state(
+            _state: &CoordinatorState<Self>,
+            _request: &proto::CreateProofRequest,
+        ) -> u32 {
+            0
+        }
+
+        fn enqueue_task(_state: &mut CoordinatorState<Self>, _task: Task<Self>) {}
+
+        fn post_task_success_update_proof(
+            proof: &mut Proof<Self>,
+            _task_extra: &(),
+            _metadata: policy::TaskMetadata,
+        ) {
+            proof.extra += 1;
+        }
+
+        fn post_task_success_update_state(
+            state: &mut CoordinatorState<Self>,
+            _task_type: TaskType,
+        ) {
+            state.policy.success_state_calls += 1;
+        }
+
+        fn post_task_update_state(
+            state: &mut CoordinatorState<Self>,
+            _proof_extra: u32,
+            _task_id: &str,
+            _task_extra: (),
+            _task_weight: u32,
+            _proof_id: &str,
+            _task_type: TaskType,
+        ) {
+            state.policy.release_calls += 1;
+        }
+
+        fn debug_proof(_proof: &u32) -> &str {
+            ""
+        }
+
+        fn post_worker_empty(
+            _state: &mut CoordinatorState<Self>,
+            worker: Worker<Self>,
+        ) -> Worker<Self> {
+            worker
+        }
+
+        async fn assign_tasks(
+            _coord: &Arc<Coordinator<Self>>,
+            state: OwnedRwLockWriteGuard<CoordinatorState<Self>>,
+        ) -> Result<(), Status> {
+            drop(state);
+            Ok(())
+        }
+
+        fn get_proof_result_metadata(_proof: &Proof<Self>) {}
+
+        fn cpu_queue_len(_state: &CoordinatorState<Self>) -> u32 {
+            0
+        }
+
+        fn gpu_queue_len(_state: &CoordinatorState<Self>) -> u32 {
+            0
+        }
+    }
+
+    /// Proof "p1" under `CountingPolicy` with the given `(id, status, worker)`
+    /// tasks, each held by its worker at weight 8; `active_tasks` counts the
+    /// non-terminal ones.
+    fn counting_proof_with_holds(
+        state: &mut CoordinatorState<CountingPolicy>,
+        tasks: &[(&str, TaskStatus, &str)],
+    ) {
+        let mut proof = Proof::new("p1".into(), None, 0);
+        proof.active_tasks = tasks
+            .iter()
+            .filter(|(_, status, _)| {
+                *status != TaskStatus::Succeeded && *status != TaskStatus::FailedFatal
+            })
+            .count() as u32;
+        for (id, status, worker_id) in tasks {
+            proof.tasks.insert(
+                (*id).into(),
+                gpu_task(id, "p1", 8, *status, Some(worker_id)),
+            );
+            let worker = state
+                .workers
+                .entry((*worker_id).into())
+                .or_insert_with(|| gpu_worker(worker_id));
+            worker.active_tasks.insert(("p1".into(), (*id).into()));
+            worker.weight += 8;
+        }
+        state.proofs.insert("p1".into(), proof);
+    }
+
+    /// A stale completion that finishes the proof leaves the redelivered copy's
+    /// worker holding a slot and policy weight nothing else releases: with the
+    /// proof gone, that worker's own report dies on NotFound before any cleanup.
+    #[tokio::test]
+    async fn stale_completion_finishing_a_proof_releases_the_redelivered_assignment() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            counting_proof_with_holds(&mut state, &[("t1", TaskStatus::Running, "w_owner")]);
+        }
+
+        c.complete_task(
+            "w_stale".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata::default(),
+        )
+        .await
+        .unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            !state.proofs.contains_key("p1"),
+            "the proof must be removed"
+        );
+        let owner = state.workers.get("w_owner").unwrap();
+        assert!(
+            owner.active_tasks.is_empty(),
+            "the redelivered assignment must be released with the proof"
+        );
+        assert_eq!(owner.weight, 0, "the worker's slot weight must be freed");
+        assert_eq!(
+            state.policy.release_calls, 1,
+            "the policy weight the redelivery charged must be released exactly once"
+        );
+    }
+
+    /// The completing worker can itself hold another already-terminal task of the
+    /// proof — a redelivery whose stale twin reported first. Finishing the proof
+    /// must release that hold too, not just other workers'.
+    #[tokio::test]
+    async fn finishing_a_proof_releases_the_completers_other_orphans() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            counting_proof_with_holds(
+                &mut state,
+                &[
+                    ("t1", TaskStatus::Running, "w1"),
+                    ("t2", TaskStatus::Succeeded, "w1"),
+                ],
+            );
+        }
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata::default(),
+        )
+        .await
+        .unwrap();
+
+        let state = c.state.read().await;
+        let worker = state.workers.get("w1").unwrap();
+        assert!(
+            worker.active_tasks.is_empty(),
+            "the orphaned hold on t2 must be released with the proof"
+        );
+        assert_eq!(worker.weight, 0, "both holds' slot weight must be freed");
+        assert_eq!(
+            state.policy.release_calls, 2,
+            "one policy release per assignment: t2's orphan and t1's own"
+        );
+    }
+
+    /// Success hooks record billing and scheduling history, charged once per
+    /// task. A preempted worker's reporter landing next to its redelivery's
+    /// report must not run them twice.
+    #[tokio::test]
+    async fn duplicate_completion_runs_the_success_hooks_once() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            let mut proof = Proof::new("p1".into(), None, 0);
+            // A second live task keeps the proof alive across both completions.
+            proof.active_tasks = 2;
+            proof.tasks.insert(
+                "t1".into(),
+                gpu_task("t1", "p1", 0, TaskStatus::Running, Some("w_owner")),
+            );
+            state.proofs.insert("p1".into(), proof);
+        }
+
+        for worker in ["w_owner", "w_stale"] {
+            c.complete_task(
+                worker.into(),
+                "p1".into(),
+                "t1".into(),
+                policy::TaskMetadata::default(),
+            )
+            .await
+            .unwrap();
+        }
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.proofs.get("p1").unwrap().extra,
+            1,
+            "proof billing metadata was recorded per report, not per task"
+        );
+        assert_eq!(
+            state.policy.success_state_calls, 1,
+            "scheduling history was recorded per report, not per task"
+        );
+    }
+
+    fn mark_task_succeeded(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        proof_id: &str,
+        task_id: &str,
+    ) {
+        state
+            .proofs
+            .get_mut(proof_id)
+            .unwrap()
+            .tasks
+            .get_mut(task_id)
+            .unwrap()
+            .status = TaskStatus::Succeeded;
+    }
+
+    fn insert_worker_holding(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        worker_id: &str,
+        proof_id: &str,
+        task_id: &str,
+    ) {
+        insert_live_worker(state, worker_id);
+        let task_weight = state.proofs[proof_id].tasks[task_id].data.weight;
+        let worker = state.workers.get_mut(worker_id).unwrap();
+        worker
+            .active_tasks
+            .insert((proof_id.into(), task_id.into()));
+        worker.weight = task_weight;
+    }
+
+    /// The path a fatal worker error actually takes: `try_unclaim_proof` sends
+    /// `FailProofRequest` naming the task. A duplicate execution of a finished task must
+    /// not take the proof down with it.
+    #[tokio::test]
+    async fn fail_proof_blamed_on_a_succeeded_task_is_ignored() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            mark_task_succeeded(&mut state, "p1", "t1");
+        }
+
+        c.fail_proof("p1".into(), Some("t1".into()), true, None)
+            .await
+            .expect("a failure blamed on finished work must be ignored, not error");
+
+        let state = c.state.read().await;
+        let proof = state
+            .proofs
+            .get("p1")
+            .expect("proof must survive a duplicate execution's failure");
+        assert_eq!(
+            proof.tasks.get("t1").unwrap().status,
+            TaskStatus::Succeeded,
+            "the recorded success must be untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_proof_blamed_on_an_unknown_task_is_rejected() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+        }
+
+        let result = c
+            .fail_proof("p1".into(), Some("nope".into()), false, None)
+            .await;
+
+        assert!(
+            matches!(result, Err(ref e) if e.code() == tonic::Code::NotFound),
+            "unknown task must be rejected, got: {result:?}"
+        );
+        let state = c.state.read().await;
+        assert!(
+            state.proofs.contains_key("p1"),
+            "proof must survive a failure naming a task it does not own"
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_proof_blamed_on_a_running_task_still_fails_the_proof() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+        }
+
+        c.fail_proof("p1".into(), Some("t1".into()), false, None)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            !state.proofs.contains_key("p1"),
+            "a genuine failure must still fail the proof"
+        );
+    }
+
+    /// An execution error unclaims the proof, then the reporter's `fail_task` lands on
+    /// a proof that is already gone.
+    #[tokio::test]
+    async fn fail_task_after_the_proof_was_unclaimed_is_rejected() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_live_worker(&mut state, "w1");
+            state
+                .workers
+                .get_mut("w1")
+                .unwrap()
+                .active_tasks
+                .insert(("p1".into(), "t1".into()));
+        }
+
+        let result = c
+            .fail_task("w1".into(), "p1".into(), "t1".into(), false)
+            .await;
+
+        assert!(
+            matches!(result, Err(ref e) if e.code() == tonic::Code::NotFound),
+            "expected NotFound for a proof already unclaimed, got: {result:?}"
+        );
+    }
+
+    /// Backstop when the unclaim RPC never landed: a fatal `fail_task` on a CoreExecute
+    /// task must fail the proof itself.
+    #[tokio::test]
+    async fn fatal_failure_of_a_core_execute_task_fails_the_proof() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            state
+                .proofs
+                .get_mut("p1")
+                .unwrap()
+                .tasks
+                .get_mut("t1")
+                .unwrap()
+                .data
+                .task_type = TaskType::CoreExecute as i32;
+            insert_worker_holding(&mut state, "w1", "p1", "t1");
+        }
+
+        c.fail_task("w1".into(), "p1".into(), "t1".into(), false)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            !state.proofs.contains_key("p1"),
+            "a fatal CoreExecute failure must fail the proof when nothing else has"
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_task_does_not_downgrade_a_succeeded_task() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            mark_task_succeeded(&mut state, "p1", "t1");
+            insert_worker_holding(&mut state, "w1", "p1", "t1");
+        }
+
+        c.fail_task("w1".into(), "p1".into(), "t1".into(), false)
+            .await
+            .expect("a late failure must be ignored, not surfaced as an error");
+
+        let state = c.state.read().await;
+        let proof = state
+            .proofs
+            .get("p1")
+            .expect("proof must survive a late failure on a finished task");
+        assert_eq!(
+            proof.tasks.get("t1").unwrap().status,
+            TaskStatus::Succeeded,
+            "recorded success was downgraded by a late failure"
+        );
+        assert_eq!(
+            proof.active_tasks, 1,
+            "ignoring the failure must not touch the proof's task accounting"
+        );
+        assert!(
+            !state
+                .workers
+                .get("w1")
+                .unwrap()
+                .active_tasks
+                .contains(&("p1".into(), "t1".into())),
+            "the finished task must still release its worker slot"
+        );
+    }
+
+    /// A fatal failure can drain the proof the same way a completion can; the
+    /// redelivered copy another worker still holds must be released here too.
+    #[tokio::test]
+    async fn failure_finishing_a_proof_releases_other_workers_holds() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            counting_proof_with_holds(
+                &mut state,
+                &[
+                    ("t1", TaskStatus::Running, "w2"),
+                    ("t2", TaskStatus::Succeeded, "w1"),
+                ],
+            );
+        }
+
+        c.fail_task("w2".into(), "p1".into(), "t1".into(), false)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            !state.proofs.contains_key("p1"),
+            "the proof must be removed"
+        );
+        let holder = state.workers.get("w1").unwrap();
+        assert!(
+            holder.active_tasks.is_empty(),
+            "the redelivered hold must be released with the proof"
+        );
+        assert_eq!(holder.weight, 0);
+        assert_eq!(
+            state.policy.release_calls, 2,
+            "one release per assignment: t1's own and t2's orphan"
+        );
+    }
+
+    /// Proof teardown releases whoever actually holds a task, whatever its
+    /// status: a Succeeded task can still be held as a redelivered copy.
+    #[tokio::test]
+    async fn failing_a_proof_releases_a_succeeded_but_held_redelivery() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            counting_proof_with_holds(
+                &mut state,
+                &[
+                    ("t1", TaskStatus::Succeeded, "w1"),
+                    ("t2", TaskStatus::Running, "w2"),
+                ],
+            );
+        }
+
+        c.fail_proof("p1".into(), None, false, None).await.unwrap();
+
+        let state = c.state.read().await;
+        for w in ["w1", "w2"] {
+            let worker = state.workers.get(w).unwrap();
+            assert!(worker.active_tasks.is_empty(), "{w} must be released");
+            assert_eq!(worker.weight, 0, "{w} slot weight must be freed");
+        }
+        assert_eq!(state.policy.release_calls, 2);
+    }
+
+    /// A requeued task keeps a stale `task.worker` until reassignment; teardown
+    /// must not release a hold that preemption already released.
+    #[tokio::test]
+    async fn failing_a_proof_ignores_a_stale_worker_reference() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            counting_proof_with_holds(&mut state, &[("t1", TaskStatus::Running, "w1")]);
+            // Preemption released the hold; the task still names w1.
+            let worker = state.workers.get_mut("w1").unwrap();
+            worker.active_tasks.clear();
+            worker.weight = 0;
+        }
+
+        c.fail_proof("p1".into(), None, false, None).await.unwrap();
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.policy.release_calls, 0,
+            "a hold released at preemption must not be released again"
+        );
+    }
+
+    /// A fatal controller failure tears the proof down mid-`fail_task`; the
+    /// reporting pair's release belongs to the tail, not the teardown sweep.
+    #[tokio::test]
+    async fn manual_proof_fail_releases_the_reporting_task_once() {
+        let c = Arc::new(Coordinator::<CountingPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            counting_proof_with_holds(&mut state, &[("t1", TaskStatus::Running, "w1")]);
+            let proof = state.proofs.get_mut("p1").unwrap();
+            proof.tasks.get_mut("t1").unwrap().data.task_type = TaskType::Controller as i32;
+        }
+
+        c.fail_task("w1".into(), "p1".into(), "t1".into(), false)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert!(!state.proofs.contains_key("p1"), "the proof must be failed");
+        assert_eq!(
+            state.policy.release_calls, 1,
+            "teardown must skip the reporting pair; fail_task's tail releases it"
+        );
+    }
+
+    /// The duplicate's own assignment charged weight that nothing else releases, since
+    /// the completion came from a worker that no longer held the task.
+    #[tokio::test]
+    async fn ignoring_a_duplicates_failure_releases_the_weight_it_charged() {
+        let c = Arc::new(Coordinator::<policy::balanced::BalancedPolicy>::new());
+        {
+            let mut state = c.state.write().await;
+            balanced_proof_on_worker(&mut state, "w_owner");
+            state
+                .proofs
+                .get_mut("p1")
+                .unwrap()
+                .tasks
+                .get_mut("t1")
+                .unwrap()
+                .status = TaskStatus::Succeeded;
+        }
+
+        c.fail_task("w_owner".into(), "p1".into(), "t1".into(), false)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.policy.proof_gpu_weights.get("p1").copied(),
+            None,
+            "the duplicate's assignment left weight charged to the proof"
+        );
+    }
+
+    #[tokio::test]
+    async fn ignored_failure_frees_the_worker_for_queued_work() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            mark_task_succeeded(&mut state, "p1", "t1");
+            insert_worker_holding(&mut state, "w1", "p1", "t1");
+
+            // A second proof waiting on the only GPU worker.
+            insert_proof_with_running_gpu_task(&mut state, "p2", "t2", None);
+            let queued = state
+                .proofs
+                .get("p2")
+                .unwrap()
+                .tasks
+                .get("t2")
+                .unwrap()
+                .clone();
+            c.enqueue_task(&mut state, queued).await;
+        }
+
+        c.fail_task("w1".into(), "p1".into(), "t1".into(), false)
+            .await
+            .unwrap();
+
+        let state = c.state.read().await;
+        assert!(
+            state
+                .workers
+                .get("w1")
+                .unwrap()
+                .active_tasks
+                .contains(&("p2".into(), "t2".into())),
+            "freeing the slot must schedule queued work, not wait for the next event"
+        );
+    }
+
+    #[tokio::test]
+    async fn retryable_failure_does_not_requeue_a_succeeded_task() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            mark_task_succeeded(&mut state, "p1", "t1");
+            insert_worker_holding(&mut state, "w1", "p1", "t1");
+        }
+
+        c.fail_task("w1".into(), "p1".into(), "t1".into(), true)
+            .await
+            .expect("a late retryable failure must be ignored");
+
+        let state = c.state.read().await;
+        let task = state.proofs.get("p1").unwrap().tasks.get("t1").unwrap();
+        assert_eq!(task.status, TaskStatus::Succeeded);
+        assert_eq!(task.retries, 0, "a succeeded task must not be retried");
+        assert!(
+            !state
+                .workers
+                .get("w1")
+                .unwrap()
+                .active_tasks
+                .contains(&("p1".into(), "t1".into())),
+            "a succeeded task must not be re-assigned"
+        );
     }
 }

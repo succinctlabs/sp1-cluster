@@ -13,14 +13,15 @@ use sp1_cluster_worker::client::WorkerServiceClient;
 use sp1_cluster_worker::config::cluster_worker_config;
 use sp1_cluster_worker::metrics::WorkerMetrics;
 use sp1_cluster_worker::SP1ClusterWorker;
-use sp1_prover::worker::WorkerClient;
+use sp1_prover::worker::{TaskMetadata, WorkerClient};
 use sp1_prover::SP1ProverComponents;
 use sp1_sdk::install::try_install_circuit_artifacts;
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 pub async fn run(
@@ -168,7 +169,146 @@ pub async fn run_gpu_worker(
     .unwrap()
 }
 
-pub(crate) type ActiveTask = (TaskData, JoinHandle<()>, Instant);
+pub(crate) struct ActiveTask {
+    pub data: TaskData,
+    pub started_at: Instant,
+    pub work: AbortHandle,
+    /// Outlives cancellation of `work`, so a task that finished can still report it.
+    pub reporter: JoinHandle<()>,
+    /// Stamped by the sweep's abort; tells the reporter to fail the task, and
+    /// anchors the escalation grace so a late sweep can't shorten it.
+    pub aborted_at: Arc<OnceLock<Instant>>,
+}
+
+/// Drops the task's entry unless a redelivery already replaced it. A cancelled task
+/// reuses its key, so the successor's entry must keep its heartbeat and timeout.
+fn drop_if_current(
+    tasks: &DashMap<(String, String), ActiveTask>,
+    key: &(String, String),
+    work_id: tokio::task::Id,
+) -> Option<((String, String), ActiveTask)> {
+    tasks.remove_if(key, |_, active| active.work.id() == work_id)
+}
+
+/// What the reporter owes the coordinator once a task's work future resolves.
+pub(crate) enum Report {
+    Complete(TaskMetadata),
+    Fail {
+        retryable: bool,
+    },
+    /// The work was aborted before it finished, so its fate is decided elsewhere.
+    /// Anything said here would race that decision.
+    Nothing,
+}
+
+pub(crate) fn report_for(
+    key: &(String, String),
+    result: Result<(proto::TaskStatus, Option<TaskMetadata>), JoinError>,
+    timed_out: bool,
+) -> Report {
+    match result {
+        Ok((proto::TaskStatus::Succeeded, Some(metadata))) => Report::Complete(metadata),
+        // Success with no metadata means an execution error, which already unclaimed the
+        // proof. There is no proof to report complete.
+        Ok((proto::TaskStatus::Succeeded, None)) => Report::Fail { retryable: false },
+        Ok((status, _)) => Report::Fail {
+            retryable: status == proto::TaskStatus::FailedRetryable,
+        },
+        // Only reached when the work truly died: a finish that beat the abort
+        // takes the arms above, so the flag never overrides a real result.
+        Err(e) if e.is_cancelled() && timed_out => {
+            tracing::error!("Task {:?} timed out and was aborted", key);
+            Report::Fail { retryable: true }
+        }
+        Err(e) if e.is_cancelled() => {
+            tracing::info!("Task {:?} cancelled before completing", key);
+            Report::Nothing
+        }
+        Err(e) => {
+            tracing::error!("Task {:?} panicked: {:?}", key, e);
+            Report::Fail { retryable: false }
+        }
+    }
+}
+
+enum TimeoutAction {
+    /// Running normally, or finished and mid-report — failing the latter would
+    /// race its own completion; the reporter drops the entry once it lands.
+    Leave,
+    /// Flag and abort; the reporter turns the abort into a failure report.
+    Abort,
+    /// The work ignored its abort — it never reached a yield point — so the
+    /// reporter is stuck on it and the sweep must report the failure itself.
+    /// The reporter's eventual duplicate is rejected by the coordinator.
+    Report,
+}
+
+fn timeout_action(active: &ActiveTask, timeout: Duration, grace: Duration) -> TimeoutAction {
+    if active.work.is_finished() || active.started_at.elapsed() <= timeout {
+        return TimeoutAction::Leave;
+    }
+    match active.aborted_at.get() {
+        Some(aborted_at) if aborted_at.elapsed() > grace => TimeoutAction::Report,
+        _ => TimeoutAction::Abort,
+    }
+}
+
+/// Two watchdog ticks: enough for an abort to land at the work's next yield
+/// point, short enough that a truly wedged proof requeues promptly.
+const ABORT_GRACE: Duration = Duration::from_secs(10);
+
+/// Reports wedged tasks off the main loop: the RPCs retry for minutes, and
+/// heartbeats would keep a frozen loop looking alive. Every batch awaits the
+/// shared close before failing, so a freed slot can't win a retry back while
+/// the wedged work still burns; tracked in `reporters_in_flight` so the drain
+/// waits.
+fn spawn_wedged_report(
+    worker_client: &WorkerServiceClient,
+    reporters_in_flight: &Arc<AtomicUsize>,
+    close_acked: &Arc<tokio::sync::OnceCell<()>>,
+    worker_id: &str,
+    wedged: Vec<(String, String)>,
+) {
+    reporters_in_flight.fetch_add(1, Ordering::SeqCst);
+    let in_flight = reporters_in_flight.clone();
+    let worker_client = worker_client.clone();
+    let close_acked = close_acked.clone();
+    let worker_id = worker_id.to_string();
+    tokio::spawn(async move {
+        let _tracked = sp1_cluster_worker::utils::DeferGuard::new(in_flight, |c| {
+            c.fetch_sub(1, Ordering::SeqCst);
+        });
+        let acked = close_acked
+            .get_or_try_init(|| async {
+                worker_client
+                    .close(CloseRequest {
+                        worker_id: worker_id.clone(),
+                    })
+                    .await
+            })
+            .await;
+        if let Err(e) = acked {
+            // Report anyway: a stalled proof outranks a bounced assignment.
+            tracing::error!(
+                "Failed to close worker before failing wedged tasks: {:?}",
+                e
+            );
+        }
+        for (proof_id, task_id) in wedged {
+            if let Err(e) = worker_client
+                .fail_task(FailTaskRequest {
+                    worker_id: worker_id.clone(),
+                    proof_id,
+                    task_id,
+                    retryable: true,
+                })
+                .await
+            {
+                tracing::error!("Failed to update task status: {:?}", e);
+            }
+        }
+    });
+}
 
 async fn run_worker_inner(
     node_config: NodeConfig,
@@ -177,6 +317,13 @@ async fn run_worker_inner(
     worker: Arc<SP1ClusterWorker<impl WorkerClient, impl ArtifactClient, impl SP1ProverComponents>>,
 ) -> eyre::Result<()> {
     let tasks: Arc<DashMap<(String, String), ActiveTask>> = Arc::new(DashMap::new());
+    // A cancelled task is dropped from `tasks` immediately so a redelivery under the same
+    // key is accepted, but its reporter may still be mid-RPC. Draining on `tasks` alone
+    // would exit under it and lose the completion.
+    let reporters_in_flight = Arc::new(AtomicUsize::new(0));
+    // Set once the coordinator acknowledged our close. Wedged batches await it
+    // before fail_task, so a requeued task can't be assigned back here.
+    let close_acked: Arc<tokio::sync::OnceCell<()>> = Arc::new(tokio::sync::OnceCell::new());
 
     // Beats stop when this future ends (return or harness kill).
     let heartbeat = HeartbeatHandle::spawn(node_config.clone(), tasks.clone(), token.clone())?;
@@ -256,8 +403,17 @@ async fn run_worker_inner(
                                     let task_type = data.task_type();
                                     let proof_id = data.proof_id.clone();
                                     let key = (proof_id, task.task_id.clone());
-                                    let handle = tokio::spawn({
+                                    let work = tokio::spawn({
                                         let worker = worker.clone();
+                                        let task = task.clone();
+                                        async move { worker.run_task(&task).await }
+                                    });
+                                    let work_abort = work.abort_handle();
+                                    let aborted_at = Arc::new(OnceLock::new());
+                                    reporters_in_flight.fetch_add(1, Ordering::SeqCst);
+                                    let reporter = tokio::spawn({
+                                        let in_flight = reporters_in_flight.clone();
+                                        let aborted_at = aborted_at.clone();
                                         let task = task.clone();
                                         let data = data.clone();
                                         let worker_client = worker_client.clone();
@@ -265,12 +421,18 @@ async fn run_worker_inner(
                                         let worker_id = node_config.worker_id.clone();
                                         let tasks = tasks.clone();
                                         async move {
-                                            let (status, metadata) = worker
-                                                .run_task(&task)
-                                                .await;
-                                            match status {
-                                                proto::TaskStatus::Succeeded => {
-                                                    let metadata_string = serde_json::to_string(&metadata.expect("successful task should have metadata")).unwrap();
+                                            let _tracked = sp1_cluster_worker::utils::DeferGuard::new(
+                                                in_flight,
+                                                |c| {
+                                                    c.fetch_sub(1, Ordering::SeqCst);
+                                                },
+                                            );
+                                            let work_id = work.id();
+                                            let result = work.await;
+                                            let timed_out = aborted_at.get().is_some();
+                                            match report_for(&key, result, timed_out) {
+                                                Report::Complete(metadata) => {
+                                                    let metadata_string = serde_json::to_string(&metadata).unwrap();
                                                     if let Err(e) = worker_client.complete_task(CompleteTaskRequest {
                                                         worker_id,
                                                         proof_id: data.proof_id.clone(),
@@ -280,9 +442,7 @@ async fn run_worker_inner(
                                                         tracing::error!("Failed to complete task: {:?}", e);
                                                     }
                                                 }
-                                                _ => {
-                                                    let retryable = status
-                                                        == sp1_cluster_common::proto::TaskStatus::FailedRetryable;
+                                                Report::Fail { retryable } => {
                                                     if let Err(e) = worker_client.fail_task(FailTaskRequest {
                                                         worker_id,
                                                         proof_id: data.proof_id.clone(),
@@ -292,25 +452,31 @@ async fn run_worker_inner(
                                                         tracing::error!("Failed to fail task: {:?}", e);
                                                     }
                                                 }
+                                                Report::Nothing => return,
                                             }
-                                            let removed = tasks.remove(&key);
+                                            let removed = drop_if_current(&tasks, &key, work_id);
                                             tracing::info!(
                                                 "Completed task {:?} {:?} after {:?}",
                                                 task_type,
                                                 key,
-                                                removed.map(|r| r.1 .2.elapsed())
+                                                removed.map(|r| r.1.started_at.elapsed())
                                             );
                                         }
                                     });
-                                    tasks.insert(key, (task.data.unwrap().clone(), handle, Instant::now()));
+                                    tasks.insert(key, ActiveTask {
+                                        data: task.data.unwrap().clone(),
+                                        started_at: Instant::now(),
+                                        work: work_abort,
+                                        reporter,
+                                        aborted_at,
+                                    });
                                 }
                                 Some(server_message::Message::CancelTask(task)) => {
                                     if let Some(entry) =
                                         tasks.get(&(task.proof_id.clone(), task.task_id.clone()))
                                     {
-                                        let (_, handle, _) = entry.value();
                                         tracing::info!("Aborting task {} {}", task.proof_id, task.task_id);
-                                        handle.abort();
+                                        entry.value().work.abort();
                                         drop(entry);
                                         tasks.remove(&(task.proof_id, task.task_id.clone()));
                                     }
@@ -365,13 +531,17 @@ async fn run_worker_inner(
                         }
                         last_tick = Instant::now();
                         // If the worker is closed and there's no tasks, break out of the loop.
-                        if closed && tasks.is_empty() {
+                        if closed && tasks.is_empty() && reporters_in_flight.load(Ordering::SeqCst) == 0 {
                             tracing::info!("Worker is closed and has no tasks, breaking out of loop");
                             break;
                         }
                         if let Some(started) = drain_started_at {
                             let elapsed = started.elapsed();
-                            let in_flight = tasks.len();
+                            // Every undelivered outcome has exactly one live reporter;
+                            // map entries are a subset (a cancelled task leaves the map
+                            // while its reporter lives on), so adding them would count
+                            // running tasks twice.
+                            let in_flight = reporters_in_flight.load(Ordering::SeqCst);
                             if elapsed > node_config.drain_timeout {
                                 let stuck: Vec<_> = tasks.iter().map(|e| e.key().clone()).collect();
                                 tracing::warn!(
@@ -424,13 +594,20 @@ async fn run_worker_inner(
                         // Handle panicked tasks
                         let mut panicked_tasks = HashSet::new();
                         let mut timed_out_tasks = HashSet::new();
+                        let mut wedged_tasks = HashSet::new();
                         for entry in tasks.iter_mut() {
-                            // The threads should be removing from tasks when they complete, so
-                            // if it's reached this point, it must be because it panicked.
-                            if entry.value().1.is_finished() {
+                            if entry.value().reporter.is_finished() {
                                 panicked_tasks.insert(entry.key().clone());
-                            } else if entry.value().2.elapsed() > node_config.task_timeout {
-                                timed_out_tasks.insert(entry.key().clone());
+                            } else {
+                                match timeout_action(entry.value(), node_config.task_timeout, ABORT_GRACE) {
+                                    TimeoutAction::Leave => {}
+                                    TimeoutAction::Abort => {
+                                        timed_out_tasks.insert(entry.key().clone());
+                                    }
+                                    TimeoutAction::Report => {
+                                        wedged_tasks.insert(entry.key().clone());
+                                    }
+                                }
                             }
                         }
                         for task_id in panicked_tasks {
@@ -438,7 +615,7 @@ async fn run_worker_inner(
                                 tracing::warn!("Task {:?} was panicked but is not in tasks anymore", task_id);
                                 continue;
                             };
-                            if let Err(e) = task.1.await {
+                            if let Err(e) = task.reporter.await {
                                 tracing::error!("Task {:?} panicked: {:?}", task_id, e);
                                 if let Err(e) = worker_client.fail_task(FailTaskRequest {
                                     worker_id: node_config.worker_id.clone(),
@@ -453,20 +630,42 @@ async fn run_worker_inner(
                             }
                         }
                         for task_id in timed_out_tasks {
-                            let Some((_, task)) = tasks.remove(&task_id) else {
+                            let Some(entry) = tasks.get(&task_id) else {
                                 tracing::warn!("Task {:?} timed out but is not in tasks anymore", task_id);
                                 continue;
                             };
                             tracing::error!("Task {:?} timed out after {:?}", task_id, node_config.task_timeout);
-                            task.1.abort();
-                            if let Err(e) = worker_client.fail_task(FailTaskRequest {
-                                worker_id: node_config.worker_id.clone(),
-                                proof_id: task_id.0,
-                                task_id: task_id.1,
-                                retryable: true,
-                            }).await {
-                                tracing::error!("Failed to update task status: {:?}", e);
-                            }
+                            // Reporting here would race a completion from work that
+                            // finished after the check. The reporter owns the report,
+                            // and drops the entry once it lands.
+                            let _ = entry.value().aborted_at.set(Instant::now());
+                            entry.value().work.abort();
+                        }
+                        let mut wedged_reports = Vec::new();
+                        for task_id in wedged_tasks {
+                            let Some((_, task)) = tasks.remove(&task_id) else {
+                                continue;
+                            };
+                            tracing::error!(
+                                "Task {:?} ignored its abort for {:?}; reporting failure directly",
+                                task_id,
+                                ABORT_GRACE,
+                            );
+                            task.work.abort();
+                            wedged_reports.push(task_id);
+                        }
+                        if !wedged_reports.is_empty() {
+                            // Draining ends in a restart — the only thing that
+                            // frees wedged work.
+                            closed = true;
+                            drain_started_at.get_or_insert_with(Instant::now);
+                            spawn_wedged_report(
+                                &worker_client,
+                                &reporters_in_flight,
+                                &close_acked,
+                                &node_config.worker_id,
+                                wedged_reports,
+                            );
                         }
                     }
                     _ = token.cancelled(), if !closed => {
@@ -476,8 +675,10 @@ async fn run_worker_inner(
                             worker_id: node_config.worker_id.clone(),
                         }).await {
                             tracing::error!("Failed to close worker: {:?}", e);
+                        } else {
+                            let _ = close_acked.set(());
                         }
-                        if tasks.is_empty() {
+                        if tasks.is_empty() && reporters_in_flight.load(Ordering::SeqCst) == 0 {
                             tracing::info!("No in-flight tasks; shutting down immediately");
                             break;
                         } else {
@@ -517,4 +718,345 @@ async fn run_worker_inner(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key() -> (String, String) {
+        ("p1".to_string(), "t1".to_string())
+    }
+
+    async fn join_result(
+        f: impl std::future::Future<Output = (proto::TaskStatus, Option<TaskMetadata>)> + Send + 'static,
+    ) -> Result<(proto::TaskStatus, Option<TaskMetadata>), JoinError> {
+        tokio::spawn(f).await
+    }
+
+    fn active_task(work: JoinHandle<(proto::TaskStatus, Option<TaskMetadata>)>) -> ActiveTask {
+        ActiveTask {
+            data: TaskData::default(),
+            started_at: Instant::now(),
+            work: work.abort_handle(),
+            reporter: tokio::spawn(std::future::ready(())),
+            aborted_at: Arc::new(OnceLock::new()),
+        }
+    }
+
+    #[tokio::test]
+    async fn success_is_reported() {
+        let result = join_result(async {
+            (
+                proto::TaskStatus::Succeeded,
+                Some(TaskMetadata { gpu_ms: Some(7) }),
+            )
+        })
+        .await;
+
+        match report_for(&key(), result, false) {
+            Report::Complete(metadata) => assert_eq!(metadata.gpu_ms, Some(7)),
+            _ => panic!("a succeeded task must be reported complete"),
+        }
+    }
+
+    #[tokio::test]
+    async fn failure_carries_its_retryability() {
+        let retryable = join_result(async { (proto::TaskStatus::FailedRetryable, None) }).await;
+        let fatal = join_result(async { (proto::TaskStatus::FailedFatal, None) }).await;
+
+        assert!(matches!(
+            report_for(&key(), retryable, false),
+            Report::Fail { retryable: true }
+        ));
+        assert!(matches!(
+            report_for(&key(), fatal, false),
+            Report::Fail { retryable: false }
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancellation_reports_nothing() {
+        let work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        work.abort();
+
+        assert!(matches!(
+            report_for(&key(), work.await, false),
+            Report::Nothing
+        ));
+    }
+
+    #[tokio::test]
+    async fn timeout_abort_fails_the_task_retryably() {
+        let work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        work.abort();
+
+        assert!(matches!(
+            report_for(&key(), work.await, true),
+            Report::Fail { retryable: true }
+        ));
+    }
+
+    /// Work can finish between the sweep's check and its abort; the flag must
+    /// not turn that success into a failure.
+    #[tokio::test]
+    async fn a_timeout_that_lost_the_race_to_finished_work_reports_success() {
+        let result = join_result(async {
+            (
+                proto::TaskStatus::Succeeded,
+                Some(TaskMetadata { gpu_ms: Some(7) }),
+            )
+        })
+        .await;
+
+        assert!(matches!(
+            report_for(&key(), result, true),
+            Report::Complete(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn success_without_metadata_fails_fatally() {
+        let result = join_result(async { (proto::TaskStatus::Succeeded, None) }).await;
+
+        assert!(matches!(
+            report_for(&key(), result, false),
+            Report::Fail { retryable: false }
+        ));
+    }
+
+    #[tokio::test]
+    async fn panic_fails_the_task_fatally() {
+        let result = join_result(async { panic!("boom") }).await;
+
+        assert!(matches!(
+            report_for(&key(), result, false),
+            Report::Fail { retryable: false }
+        ));
+    }
+
+    #[tokio::test]
+    async fn finished_work_mid_report_is_left_alone() {
+        let work = tokio::spawn(std::future::ready((proto::TaskStatus::Succeeded, None)));
+        let task = active_task(work);
+        while !task.work.is_finished() {
+            tokio::task::yield_now().await;
+        }
+
+        assert!(
+            matches!(
+                timeout_action(&task, Duration::ZERO, Duration::ZERO),
+                TimeoutAction::Leave
+            ),
+            "failing a finished task races its own completion report"
+        );
+    }
+
+    #[tokio::test]
+    async fn stuck_work_is_aborted_only_past_the_timeout() {
+        let work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        let task = active_task(work);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+
+        assert!(matches!(
+            timeout_action(&task, Duration::ZERO, Duration::from_secs(3600)),
+            TimeoutAction::Abort
+        ));
+        assert!(matches!(
+            timeout_action(&task, Duration::from_secs(3600), Duration::ZERO),
+            TimeoutAction::Leave
+        ));
+    }
+
+    /// The sweep can first observe a timeout long after it passed (stalled
+    /// runtime); the grace runs from the abort itself, not from the deadline.
+    #[tokio::test]
+    async fn a_late_abort_still_gets_its_full_grace() {
+        let work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        let mut task = active_task(work);
+        task.started_at = Instant::now()
+            .checked_sub(Duration::from_secs(100))
+            .unwrap();
+        task.aborted_at.set(Instant::now()).unwrap();
+
+        assert!(
+            matches!(
+                timeout_action(&task, Duration::ZERO, Duration::from_secs(10)),
+                TimeoutAction::Abort
+            ),
+            "escalating before the abort's own grace re-opens the dual-report race"
+        );
+    }
+
+    /// Work that never yields cannot observe its abort; once the grace passes
+    /// the sweep must report the failure itself or the proof wedges forever.
+    #[tokio::test]
+    async fn work_that_ignored_its_abort_is_reported_after_the_grace() {
+        let work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        let task = active_task(work);
+        task.aborted_at.set(Instant::now()).unwrap();
+        tokio::time::sleep(Duration::from_millis(2)).await;
+
+        assert!(matches!(
+            timeout_action(&task, Duration::ZERO, Duration::ZERO),
+            TimeoutAction::Report
+        ));
+        // Still inside the grace: keep waiting for the abort to land.
+        assert!(matches!(
+            timeout_action(&task, Duration::ZERO, Duration::from_secs(3600)),
+            TimeoutAction::Abort
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_task_keeps_the_drain_waiting_on_its_reporter() {
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let tasks: DashMap<(String, String), ActiveTask> = DashMap::new();
+        let key = key();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+        in_flight.fetch_add(1, Ordering::SeqCst);
+        let work = tokio::spawn(std::future::ready((
+            proto::TaskStatus::Succeeded,
+            Some(TaskMetadata { gpu_ms: Some(1) }),
+        )));
+        let work_abort = work.abort_handle();
+        let reporter = tokio::spawn({
+            let in_flight = in_flight.clone();
+            async move {
+                let _tracked = sp1_cluster_worker::utils::DeferGuard::new(in_flight, |c| {
+                    c.fetch_sub(1, Ordering::SeqCst);
+                });
+                let _ = work.await;
+                release_rx.await.unwrap();
+            }
+        });
+        tasks.insert(
+            key.clone(),
+            ActiveTask {
+                data: TaskData::default(),
+                started_at: Instant::now(),
+                work: work_abort,
+                reporter,
+                aborted_at: Arc::new(OnceLock::new()),
+            },
+        );
+
+        // The CancelTask arm drops the entry so a redelivery is accepted.
+        tasks.remove(&key);
+
+        assert!(tasks.is_empty());
+        assert!(
+            in_flight.load(Ordering::SeqCst) > 0,
+            "drain would exit while the reporter is still delivering"
+        );
+
+        release_tx.send(()).unwrap();
+        while in_flight.load(Ordering::SeqCst) > 0 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// A stale reporter finishing after its task was cancelled and redelivered must not
+    /// evict the successor, which would strand it with no heartbeat and no timeout.
+    #[tokio::test]
+    async fn a_stale_reporter_leaves_the_successor_entry_alone() {
+        let tasks: DashMap<(String, String), ActiveTask> = DashMap::new();
+        let key = key();
+
+        let stale_work = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        let stale_id = stale_work.id();
+        let successor = tokio::spawn(std::future::pending::<(
+            proto::TaskStatus,
+            Option<TaskMetadata>,
+        )>());
+        let successor_id = successor.id();
+        tasks.insert(key.clone(), active_task(successor));
+
+        assert!(
+            drop_if_current(&tasks, &key, stale_id).is_none(),
+            "the stale reporter evicted its successor"
+        );
+        assert!(tasks.contains_key(&key));
+
+        assert!(
+            drop_if_current(&tasks, &key, successor_id).is_some(),
+            "the owning reporter must drop its own entry"
+        );
+        assert!(tasks.is_empty());
+        stale_work.abort();
+    }
+
+    /// `CancelTask` must abort the work, never the reporter. Otherwise a finished
+    /// task goes unreported and the coordinator requeues work that is done.
+    #[tokio::test]
+    async fn cancelling_after_the_work_finished_still_reports_it() {
+        let tasks: DashMap<(String, String), ActiveTask> = DashMap::new();
+        let key = key();
+        let (reported_tx, reported_rx) = tokio::sync::oneshot::channel();
+        let (ran_tx, ran_rx) = tokio::sync::oneshot::channel();
+
+        let work = tokio::spawn(async move {
+            ran_tx.send(()).unwrap();
+            (
+                proto::TaskStatus::Succeeded,
+                Some(TaskMetadata { gpu_ms: Some(1) }),
+            )
+        });
+        let work_abort = work.abort_handle();
+        let reporter = tokio::spawn({
+            let key = key.clone();
+            async move {
+                let reported = matches!(report_for(&key, work.await, false), Report::Complete(_));
+                // Stands in for the complete_task RPC: the reporter must survive an
+                // abort while it runs.
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                reported_tx.send(reported).unwrap();
+            }
+        });
+        tasks.insert(
+            key.clone(),
+            ActiveTask {
+                data: TaskData::default(),
+                started_at: Instant::now(),
+                work: work_abort,
+                reporter,
+                aborted_at: Arc::new(OnceLock::new()),
+            },
+        );
+
+        ran_rx.await.unwrap();
+        tokio::task::yield_now().await;
+
+        // The CancelTask arm.
+        if let Some(entry) = tasks.get(&key) {
+            entry.value().work.abort();
+            drop(entry);
+            tasks.remove(&key);
+        }
+
+        assert_eq!(
+            reported_rx.await,
+            Ok(true),
+            "the completion was swallowed by the cancel"
+        );
+    }
 }
