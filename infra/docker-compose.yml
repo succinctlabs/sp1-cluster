@@ -60,7 +60,7 @@ services:
   # Docker creates the circuit-cache volume owned by root. Workers run as UID 1001,
   # so give them the volume before any of them start.
   circuit-cache-init:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.6.0
+    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.0
     user: "0:0"
     entrypoint: ["/bin/sh", "-c", "chown -R 1001:1001 /var/cache/sp1/circuits"]
     volumes:
