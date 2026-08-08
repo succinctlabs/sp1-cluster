@@ -133,9 +133,12 @@ COPY --from=build /fulfiller /fulfiller
 COPY --from=build /network-gateway /network-gateway
 COPY --from=build /node /node
 
-# Create .sp1 directories with correct ownership for volume mounts
-RUN mkdir -p /home/appuser/.sp1/circuits && \
-    chown -R appuser:appgroup /home/appuser/.sp1
+# Circuit artifact cache. A volume mounted anywhere else is dead: the worker then
+# re-downloads gigabytes of groth16/plonk artifacts on every container start.
+ENV SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16 \
+    SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk
+RUN mkdir -p "$SP1_GROTH16_CIRCUIT_PATH" "$SP1_PLONK_CIRCUIT_PATH" && \
+    chown -R appuser:appgroup /var/cache/sp1
 
 # Set ownership to the non-root user and ensure the binary is executable
 RUN chown appuser:appgroup /api && \

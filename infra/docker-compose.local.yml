@@ -77,6 +77,14 @@ services:
         - private_pull_token
     command: ["/bin/sh", "-c", "/coordinator"]
 
+  # Docker gives a fresh volume root ownership. The worker runs as UID 1001, so hand
+  # it the volume first.
+  circuit-cache-init:
+    image: busybox:stable
+    entrypoint: ["/bin/sh", "-c", "chown -R 1001:1001 /var/cache/sp1/circuits"]
+    volumes:
+      - circuit-cache:/var/cache/sp1/circuits
+
   cpu-node:
     extends:
       file: docker-compose.yml
@@ -97,6 +105,8 @@ services:
       - RUST_LOG=info
       - OTLP_ENDPOINT=http://alloy:4317
       - PROOF_DURATIONS_CSV=/data/proof_durations.csv
+      - SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16
+      - SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk
       # - SP1_WORKER_USE_FIXED_PK=true
     build:
       context: ..
@@ -105,7 +115,7 @@ services:
         - private_pull_token
     command: ["/bin/sh", "-c", "/node"]
     volumes:
-      - ~/.sp1/circuits:/home/appuser/.sp1/circuits
+      - circuit-cache:/var/cache/sp1/circuits
 
   gpu0:
     extends:
@@ -213,6 +223,7 @@ services:
 volumes:
   redis_data:
   postgresql_data:
+  circuit-cache:
 
 secrets:
   private_pull_token:

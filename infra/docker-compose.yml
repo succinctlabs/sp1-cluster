@@ -57,6 +57,15 @@ services:
     depends_on:
       - api
 
+  # Docker creates the circuit-cache volume owned by root. Workers run as UID 1001,
+  # so give them the volume before any of them start.
+  circuit-cache-init:
+    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.6.0
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c", "chown -R 1001:1001 /var/cache/sp1/circuits"]
+    volumes:
+      - circuit-cache:/var/cache/sp1/circuits
+
   # CPU Node
   cpu-node:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.6.0
@@ -71,8 +80,10 @@ services:
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=CPU
+      - SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16
+      - SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk
     volumes:
-      - ${HOME}/.sp1/circuits:/root/.sp1/circuits
+      - circuit-cache:/var/cache/sp1/circuits
     command: ["/bin/sh", "-c", "/node"]
     shm_size: 96G
     deploy:
@@ -84,8 +95,12 @@ services:
           cpus: "4"
           memory: 96G
     depends_on:
-      - coordinator
-      - redis
+      coordinator:
+        condition: service_started
+      redis:
+        condition: service_started
+      circuit-cache-init:
+        condition: service_completed_successfully
 
   # CPU Node
   mixed:
@@ -97,8 +112,10 @@ services:
       - NODE_ARTIFACT_STORE=redis
       - NODE_REDIS_NODES=redis://:redispassword@redis:6379/0
       - WORKER_TYPE=ALL
+      - SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16
+      - SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk
     volumes:
-      - ${HOME}/.sp1/circuits:/root/.sp1/circuits
+      - circuit-cache:/var/cache/sp1/circuits
     command: ["/bin/sh", "-c", "/app/sp1-cluster-node"]
     shm_size: 96G
     deploy:
@@ -110,8 +127,12 @@ services:
           cpus: "4"
           memory: 96G
     depends_on:
-      - coordinator
-      - redis
+      coordinator:
+        condition: service_started
+      redis:
+        condition: service_started
+      circuit-cache-init:
+        condition: service_completed_successfully
 
   # GPU Node
   gpu0:
@@ -252,3 +273,4 @@ services:
 volumes:
   redis_data:
   postgresql_data:
+  circuit-cache:

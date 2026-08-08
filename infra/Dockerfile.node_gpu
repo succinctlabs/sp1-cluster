@@ -134,6 +134,13 @@ RUN groupadd --gid 1001 appgroup && \
 # Copy the built application binaries from the build stage
 COPY --from=build /sp1-cluster-node /app/sp1-cluster-node
 
+# Circuit artifact cache. Only WORKER_TYPE=ALL reads it, because the wrap step
+# runs here.
+ENV SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16 \
+  SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk
+RUN mkdir -p "$SP1_GROTH16_CIRCUIT_PATH" "$SP1_PLONK_CIRCUIT_PATH" && \
+  chown -R appuser:appgroup /var/cache/sp1
+
 # Set ownership to the non-root user and ensure the binary is executable
 RUN chown appuser:appgroup /app/sp1-cluster-node && \
   chmod +x /app/sp1-cluster-node

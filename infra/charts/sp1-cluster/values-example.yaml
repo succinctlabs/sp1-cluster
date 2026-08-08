@@ -55,11 +55,13 @@ cpu-node:
         sizeLimit: 96Gi
   volumeMounts:
     - name: sp1-circuits
-      mountPath: /root/.sp1/circuits
+      mountPath: /var/cache/sp1/circuits
     - name: dshm
       mountPath: /dev/shm
   extraEnv:
     NODE_COORDINATOR_RPC: http://coordinator-grpc:50051
+    SP1_GROTH16_CIRCUIT_PATH: /var/cache/sp1/circuits/groth16
+    SP1_PLONK_CIRCUIT_PATH: /var/cache/sp1/circuits/plonk
     # WORKER_MAX_WEIGHT_OVERRIDE is auto-detected from the pod's cgroup
     # memory limit; only set it if the auto-detect picks the wrong value.
     NODE_ARTIFACT_STORE: redis

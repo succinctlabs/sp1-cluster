@@ -121,6 +121,15 @@ services:
   #   extends:
   #     service: gpu0
 
+  # # Docker creates the circuit-cache volume owned by root. The worker runs as UID
+  # # 1001, so give it the volume first.
+  # circuit-cache-init:
+  #   image: ghcr.io/succinctlabs/sp1-cluster:latest
+  #   user: "0:0"
+  #   entrypoint: ["/bin/sh", "-c", "chown -R 1001:1001 /var/cache/sp1/circuits"]
+  #   volumes:
+  #     - circuit-cache:/var/cache/sp1/circuits
+
   # # CPU Node — uncomment to run CPU workers on this machine
   # # For performance tuning (splicing workers, buffer sizes), see:
   # #   https://github.com/succinctlabs/sp1/blob/main/crates/prover/src/worker/config.rs
@@ -134,8 +143,10 @@ services:
   #     - NODE_ARTIFACT_STORE=redis
   #     - NODE_REDIS_NODES=redis://:redispassword@${MANAGER_HOST:-host.docker.internal}:6379/0
   #     - WORKER_TYPE=CPU
+  #     - SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16
+  #     - SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk
   #   volumes:
-  #     - ${HOME}/.sp1/circuits:/root/.sp1/circuits
+  #     - circuit-cache:/var/cache/sp1/circuits
   #   command: ["/bin/sh", "-c", "/node"]
   #   deploy:
   #     resources:
@@ -144,7 +155,11 @@ services:
   #       reservations:
   #         memory: 96G
   #   depends_on:
-  #     - alloy
+  #     alloy:
+  #       condition: service_started
+  #     circuit-cache-init:
+  #       condition: service_completed_successfully
 
 volumes:
   redis_data:
+  circuit-cache:
