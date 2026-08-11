@@ -8282,6 +8282,7 @@ dependencies = [
  "dashmap",
  "dotenv",
  "eyre",
+ "futures",
  "hex",
  "http 1.4.0",
  "jemallocator",

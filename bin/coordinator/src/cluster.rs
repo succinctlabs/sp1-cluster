@@ -3,11 +3,13 @@ use std::{collections::HashSet, sync::Arc, time::SystemTime};
 use crate::metrics::CoordinatorMetrics;
 use crate::{AssignmentPolicy, Coordinator, ProofResult};
 use dashmap::{DashMap, DashSet};
+use futures::StreamExt;
 use hex;
 use sp1_cluster_common::{
     client::ClusterServiceClient,
     proto::{
-        CreateProofRequest, ProofRequestListRequest, ProofRequestStatus, ProofRequestUpdateRequest,
+        self, CreateProofRequest, ProofRequestGetRequest, ProofRequestListRequest,
+        ProofRequestStatus, ProofRequestUpdateRequest,
     },
 };
 use sp1_prover::worker::ControllerInputMetadata;
@@ -161,6 +163,70 @@ pub fn spawn_manifest_push_task<P: AssignmentPolicy>(
     })
 }
 
+/// True when the row still matches the claimer's Pending listing filter.
+/// Then the row is alive and paging churn explains its absence from the list.
+fn still_pending(row: &proto::ProofRequest, now: u64) -> bool {
+    row.proof_status == ProofRequestStatus::Pending as i32 && !row.handled && row.deadline >= now
+}
+
+/// How many missing-proof confirms run at once.
+const CONFIRM_FAN_OUT: usize = 8;
+
+/// Fail tracked Pending proofs whose DB row left the Pending filter.
+///
+/// A tracked proof can be absent from `seen` for two reasons: its row changed
+/// state in the DB, or offset paging skipped it this poll. Read the row itself
+/// to tell them apart before failing anything.
+async fn fail_missing_proofs<P: AssignmentPolicy>(
+    api_client: &Arc<ClusterServiceClient>,
+    coordinator: &Arc<Coordinator<P>>,
+    task_map: &DashMap<String, TaskState>,
+    seen: &HashSet<String>,
+) {
+    let missing: Vec<String> = task_map
+        .iter()
+        .filter(|e| matches!(e.value(), TaskState::Pending) && !seen.contains(e.key()))
+        .map(|e| e.key().clone())
+        .collect();
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // Bounded concurrency: each confirm is an RPC with its own retry budget,
+    // and a serial chain would stall the claim poll under heavy churn.
+    futures::stream::iter(missing)
+        .for_each_concurrent(CONFIRM_FAN_OUT, |id| async move {
+            match api_client
+                .get_proof_request(ProofRequestGetRequest {
+                    proof_id: id.clone(),
+                })
+                .await
+            {
+                Ok(Some(row)) if still_pending(&row, now) => {}
+                Ok(_) => {
+                    // The proof can complete during the row read and store a
+                    // Terminal write that still has to land. Remove only a
+                    // Pending entry.
+                    if task_map
+                        .remove_if(&id, |_, v| matches!(v, TaskState::Pending))
+                        .is_some()
+                    {
+                        tracing::warn!("Running proof {} is no longer pending in cluster DB", id);
+                        if let Err(e) = coordinator.fail_proof(id.clone(), None, false, None).await
+                        {
+                            tracing::error!("Failed to fail expired proof: {:?}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Keep the proof; the next poll re-checks.
+                    tracing::error!("Could not confirm missing proof {}: {:?}", id, e);
+                }
+            }
+        })
+        .await;
+}
+
 /// Spawn a task to claim proofs from the cluster API. Stops when `token` fires.
 pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
     api_client: Arc<ClusterServiceClient>,
@@ -175,7 +241,7 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
             let reissue_inflight: Arc<DashSet<String>> = Arc::new(DashSet::new());
             loop {
                 match api_client
-                    .get_proof_requests(ProofRequestListRequest {
+                    .get_all_proof_requests(ProofRequestListRequest {
                         proof_status: vec![ProofRequestStatus::Pending.into()],
                         handled: Some(false),
                         minimum_deadline: Some(
@@ -184,7 +250,6 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                                 .unwrap()
                                 .as_secs(),
                         ),
-                        limit: Some(1000),
                         ..Default::default()
                     })
                     .await
@@ -264,27 +329,7 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
                                 }
                             }
                         }
-                        // Fail a Pending proof that vanished from the DB list. Keep every Terminal
-                        // entry (it may just be on a later page) — removed only when its write lands.
-                        let mut proofs_to_fail = vec![];
-                        task_map.retain(|id, state| match state {
-                            TaskState::Pending if !seen_set.contains(id) => {
-                                tracing::warn!(
-                                    "Running proof {} is no longer in cluster DB list",
-                                    id
-                                );
-                                proofs_to_fail.push(id.clone());
-                                false
-                            }
-                            _ => true,
-                        });
-                        for id in proofs_to_fail {
-                            if let Err(e) =
-                                coordinator.fail_proof(id.clone(), None, false, None).await
-                            {
-                                tracing::error!("Failed to fail expired proof: {:?}", e);
-                            }
-                        }
+                        fail_missing_proofs(&api_client, &coordinator, &task_map, &seen_set).await;
 
                         // Sweep all unconfirmed terminal writes (not just this page), so a lost write
                         // beyond the 1000-row page still recovers.
@@ -316,4 +361,39 @@ pub fn spawn_proof_claimer_task<P: AssignmentPolicy>(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending_row(now: u64) -> proto::ProofRequest {
+        proto::ProofRequest {
+            proof_status: ProofRequestStatus::Pending as i32,
+            handled: false,
+            deadline: now + 3600,
+            ..Default::default()
+        }
+    }
+
+    /// A row still matching the listing filter was only skipped by paging;
+    /// tearing it down would kill a live proof.
+    #[test]
+    fn a_still_pending_row_is_a_paging_skip() {
+        assert!(still_pending(&pending_row(1000), 1000));
+    }
+
+    #[test]
+    fn every_exit_from_the_filter_is_detected() {
+        let mut completed = pending_row(1000);
+        completed.proof_status = ProofRequestStatus::Completed as i32;
+        assert!(!still_pending(&completed, 1000));
+
+        let mut handled = pending_row(1000);
+        handled.handled = true;
+        assert!(!still_pending(&handled, 1000));
+
+        let expired = pending_row(1000);
+        assert!(!still_pending(&expired, expired.deadline + 1));
+    }
 }
