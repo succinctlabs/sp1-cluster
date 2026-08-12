@@ -1,7 +1,15 @@
+# Docker's json-file driver never rotates by default.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "500m"
+    max-file: "5"
+
 services:
   # Redis service
   redis:
     image: bitnamisecure/redis:latest
+    logging: *default-logging
     environment:
       - REDIS_PASSWORD=redispassword
       - REDIS_AOF_ENABLED=no
@@ -21,6 +29,7 @@ services:
   # PostgreSQL database
   postgresql:
     image: bitnamisecure/postgresql:latest
+    logging: *default-logging
     environment:
       - POSTGRES_PASSWORD=postgrespassword
       - POSTGRES_USER=postgres
@@ -33,6 +42,7 @@ services:
   # API Service
   api:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    logging: *default-logging
     environment:
       - API_GRPC_ADDR=0.0.0.0:50051
       - API_HTTP_ADDR=0.0.0.0:3000
@@ -46,6 +56,7 @@ services:
   # Coordinator Service
   coordinator:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    logging: *default-logging
     environment:
       - COORDINATOR_CLUSTER_RPC=http://api:50051
       - COORDINATOR_METRICS_ADDR=0.0.0.0:9090
@@ -61,6 +72,7 @@ services:
   # so give them the volume before any of them start.
   circuit-cache-init:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    logging: *default-logging
     user: "0:0"
     entrypoint: ["/bin/sh", "-c", "chown -R 1001:1001 /var/cache/sp1/circuits"]
     volumes:
@@ -69,6 +81,7 @@ services:
   # CPU Node
   cpu-node:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    logging: *default-logging
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       # Concurrency budget: GiB of RAM dedicated to THIS worker, not the host total.
@@ -105,6 +118,7 @@ services:
   # CPU Node
   mixed:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    logging: *default-logging
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       # See cpu-node: GiB dedicated to this worker, at most the 96G limit below.
@@ -137,6 +151,7 @@ services:
   # GPU Node
   gpu0:
     image: ghcr.io/succinctlabs/sp1-cluster:node-gpu-v2.7.1
+    logging: *default-logging
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
       # Must be <= container memory in GiB (see deploy.resources.limits.memory below).
@@ -205,6 +220,7 @@ services:
   # DOMAIN: set to SPN_MAINNET_V1_DOMAIN for mainnet, defaults to SPN_SEPOLIA_V1_DOMAIN
   fulfiller:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    logging: *default-logging
     environment:
       - FULFILLER_CLUSTER_RPC=http://api:50051
       - FULFILLER_LOG_FORMAT=Pretty
@@ -227,6 +243,7 @@ services:
   # remote SDK callers, override it to your public hostname.
   network-gateway:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    logging: *default-logging
     profiles: ["gateway"]
     environment:
       - GATEWAY_GRPC_ADDR=0.0.0.0:50061
@@ -248,6 +265,7 @@ services:
   # Bidder Service
   bidder:
     image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    logging: *default-logging
     environment:
       - BIDDER_LOG_FORMAT=Pretty
       - BIDDER_VERSION=sp1-v6.1.0
