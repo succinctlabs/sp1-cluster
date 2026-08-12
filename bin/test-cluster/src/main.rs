@@ -15,6 +15,7 @@ enum Cmd {
     Run(String),
     Suite(Tier),
     List,
+    CoordinatorChild,
 }
 
 fn parse_args(args: &[String]) -> Result<Cmd, String> {
@@ -27,6 +28,7 @@ fn parse_args(args: &[String]) -> Result<Cmd, String> {
             other => Err(format!("unknown tier {other:?} (smoke|full)")),
         },
         [cmd] if cmd == "list" => Ok(Cmd::List),
+        [cmd] if cmd == "__coordinator-child" => Ok(Cmd::CoordinatorChild),
         other => Err(format!(
             "usage: sp1-test-cluster [run <scenario> | suite <smoke|full> | list], got {other:?}"
         )),
@@ -42,10 +44,18 @@ async fn main() -> anyhow::Result<()> {
         )
     }
 
-    sp1_cluster_common::logger::init(opentelemetry_sdk::Resource::empty());
-
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = parse_args(&args).map_err(|e| anyhow::anyhow!(e))?;
+
+    if matches!(cmd, Cmd::CoordinatorChild) {
+        return sp1_cluster_coordinator::server::run_coordinator_server::<
+            sp1_cluster_coordinator::policy::balanced::BalancedPolicy,
+        >()
+        .await
+        .map_err(|e| anyhow::anyhow!(e.to_string()));
+    }
+
+    sp1_cluster_common::logger::init(opentelemetry_sdk::Resource::empty());
 
     match cmd {
         Cmd::List => {
@@ -77,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Cmd::CoordinatorChild => unreachable!("handled before test-cluster logger initialization"),
     }
 }
 
@@ -102,6 +113,10 @@ mod tests {
             Ok(Cmd::Suite(Tier::Full))
         ));
         assert!(matches!(parse_args(&s(&["list"])), Ok(Cmd::List)));
+        assert!(matches!(
+            parse_args(&s(&["__coordinator-child"])),
+            Ok(Cmd::CoordinatorChild)
+        ));
         assert!(matches!(parse_args(&s(&[])), Ok(Cmd::Suite(Tier::Smoke))));
         assert!(parse_args(&s(&["bogus"])).is_err());
         assert!(parse_args(&s(&["suite", "bogus"])).is_err());
