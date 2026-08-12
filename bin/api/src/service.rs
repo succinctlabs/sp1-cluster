@@ -288,12 +288,12 @@ impl ClusterService for ClusterServiceImpl {
             "SELECT * FROM proof_requests WHERE id = $1",
             req.proof_id
         )
-        .fetch_one(&*self.db_pool)
+        .fetch_optional(&*self.db_pool)
         .await
         .map_err(|e| Status::internal(format!("Failed to get proof request: {e}")))?;
 
         let response = ProofRequestGetResponse {
-            proof_request: Some(proof_request.into_proto()),
+            proof_request: proof_request.map(|r| r.into_proto()),
         };
 
         Ok(Response::new(response))
@@ -340,10 +340,16 @@ impl ClusterService for ClusterServiceImpl {
                 .push_bind(scheduled_by.clone());
         }
 
+        // Give LIMIT a defined order. Without one, Postgres returns an
+        // arbitrary heap subset and a row past the limit can stay invisible
+        // to every poll. The id column breaks created_at ties.
+        query.push(" ORDER BY created_at ASC, id ASC");
+
         let limit = req.limit.unwrap_or(10).min(1000);
         query.push(" LIMIT ").push_bind(limit as i32);
 
-        let offset = req.offset.unwrap_or(0);
+        // Clamp: the bind is i32, and a u32 above i32::MAX would wrap negative.
+        let offset = req.offset.unwrap_or(0).min(i32::MAX as u32);
         query.push(" OFFSET ").push_bind(offset as i32);
 
         let proof_requests = query

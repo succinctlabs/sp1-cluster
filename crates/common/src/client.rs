@@ -131,6 +131,27 @@ impl ClusterServiceClient {
         Ok(result.proof_requests)
     }
 
+    /// Fetches all rows that match the filters in `request`. The server caps
+    /// one call at 1000 rows, so this walks `offset` page by page. It ignores
+    /// any `limit` or `offset` set on `request`.
+    ///
+    /// Rows that change state during the walk shift page boundaries. This
+    /// function removes the resulting duplicates. It can also miss a row
+    /// for one call, so treat absence as transient.
+    pub async fn get_all_proof_requests(
+        &self,
+        request: ProofRequestListRequest,
+    ) -> Result<Vec<proto::ProofRequest>> {
+        let rows = drain_pages(PROOF_REQUEST_PAGE_SIZE, |offset| {
+            let mut request = request.clone();
+            request.limit = Some(PROOF_REQUEST_PAGE_SIZE);
+            request.offset = Some(offset);
+            self.get_proof_requests(request)
+        })
+        .await?;
+        Ok(dedup_by_id(rows))
+    }
+
     pub async fn update_proof_request(&self, request: ProofRequestUpdateRequest) -> Result<()> {
         self.retry_call(|| {
             let mut client = self.rpc.clone();
@@ -185,5 +206,139 @@ impl ClusterServiceClient {
             async move { client.get_cluster_component_info(()).await }
         })
         .await
+    }
+}
+
+/// Matches the server-side cap on `limit`, so each fetch is one full page.
+const PROOF_REQUEST_PAGE_SIZE: u32 = 1000;
+
+/// Stops a runaway walk, for example against a server that ignores `offset`,
+/// and bounds memory at 100k rows. A healthy live set is far smaller.
+const MAX_PAGES: u32 = 100;
+
+const PAGE_WARN_THRESHOLD: u32 = 10;
+
+/// Collects pages from `fetch(offset)` until a short page marks the end.
+/// At the page cap it logs an error and returns the rows it has, so callers
+/// keep partial progress. Rows past the cap stay invisible until the match
+/// set shrinks, so treat absence as transient.
+async fn drain_pages<T, F, Fut>(page_size: u32, fetch: F) -> Result<Vec<T>>
+where
+    F: Fn(u32) -> Fut,
+    Fut: Future<Output = Result<Vec<T>>>,
+{
+    let mut all = Vec::new();
+    for page_idx in 0..MAX_PAGES {
+        let page = fetch(page_idx * page_size).await?;
+        let full_page = page.len() as u32 == page_size;
+        all.extend(page);
+        if !full_page {
+            return Ok(all);
+        }
+        if page_idx + 1 == PAGE_WARN_THRESHOLD {
+            tracing::warn!(
+                "proof request listing past {PAGE_WARN_THRESHOLD} pages of {page_size}; \
+                 match set is abnormally large"
+            );
+        }
+    }
+    tracing::error!(
+        "proof request listing exceeded {MAX_PAGES} pages of {page_size}; \
+         returning a partial set (is the server ignoring offset?)"
+    );
+    Ok(all)
+}
+
+/// Drops rows already seen and keeps the first occurrence. Pages are separate
+/// DB reads, so a row that changes state during the walk can appear twice.
+fn dedup_by_id(rows: Vec<proto::ProofRequest>) -> Vec<proto::ProofRequest> {
+    let mut seen = std::collections::HashSet::new();
+    rows.into_iter()
+        .filter(|row| seen.insert(row.id.clone()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type RecordedOffsets = std::sync::Arc<std::sync::Mutex<Vec<u32>>>;
+
+    /// `fetch` serving `total` distinct items in pages, plus the offsets it was asked for.
+    fn counting_fetch(
+        total: u32,
+    ) -> (
+        impl Fn(u32) -> std::future::Ready<Result<Vec<u32>>>,
+        RecordedOffsets,
+    ) {
+        let offsets = RecordedOffsets::default();
+        let recorder = offsets.clone();
+        let fetch = move |offset| {
+            recorder.lock().unwrap().push(offset);
+            let end = (offset + PROOF_REQUEST_PAGE_SIZE).min(total);
+            std::future::ready(Ok((offset..end).collect()))
+        };
+        (fetch, offsets)
+    }
+
+    #[tokio::test]
+    async fn drains_across_pages_without_loss_or_duplication() {
+        // 2.5 pages: the regression shape — rows past the first page must still arrive.
+        let total = PROOF_REQUEST_PAGE_SIZE * 2 + 500;
+        let (fetch, offsets) = counting_fetch(total);
+
+        let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, fetch).await.unwrap();
+
+        assert_eq!(all, (0..total).collect::<Vec<_>>());
+        assert_eq!(*offsets.lock().unwrap(), vec![0, 1000, 2000]);
+    }
+
+    #[tokio::test]
+    async fn an_exact_page_boundary_costs_one_empty_confirmation_fetch() {
+        let (fetch, offsets) = counting_fetch(PROOF_REQUEST_PAGE_SIZE);
+
+        let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, fetch).await.unwrap();
+
+        assert_eq!(all.len(), PROOF_REQUEST_PAGE_SIZE as usize);
+        assert_eq!(*offsets.lock().unwrap(), vec![0, 1000]);
+    }
+
+    #[tokio::test]
+    async fn hitting_the_page_cap_returns_a_partial_set() {
+        // Always a full page regardless of offset.
+        let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, |_offset| {
+            std::future::ready(Ok(vec![0u32; PROOF_REQUEST_PAGE_SIZE as usize]))
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(all.len(), (MAX_PAGES * PROOF_REQUEST_PAGE_SIZE) as usize);
+    }
+
+    /// Filtered-churn shape: a row completing mid-fetch re-serves the boundary
+    /// row on the next page; the duplicate must not reach consumers that act
+    /// once per id (e.g. network submission).
+    #[test]
+    fn duplicate_rows_across_page_boundaries_collapse() {
+        let row = |id: &str| proto::ProofRequest {
+            id: id.into(),
+            ..Default::default()
+        };
+
+        let deduped = dedup_by_id(vec![row("a"), row("b"), row("b"), row("c")]);
+
+        let ids: Vec<_> = deduped.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn a_page_fetch_error_propagates() {
+        let err = drain_pages(PROOF_REQUEST_PAGE_SIZE, |_offset| {
+            std::future::ready(Err::<Vec<u32>, _>(eyre::eyre!("boom")))
+        })
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "boom");
     }
 }

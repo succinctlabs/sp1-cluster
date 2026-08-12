@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  artifact-redis:
-    name: Artifact integration (Redis)
+  integration:
+    name: Integration (Redis + Postgres)
     runs-on:
       [
         "runs-on",
@@ -21,6 +21,10 @@ jobs:
     env:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       REDIS_URL: redis://localhost:6379
+      # Compile against the committed .sqlx cache; DATABASE_URL is for the
+      # tests at runtime — the service DB has no schema until they migrate it.
+      SQLX_OFFLINE: "true"
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
     services:
       redis:
         image: redis:7-alpine
@@ -28,6 +32,17 @@ jobs:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 5
@@ -85,6 +100,18 @@ jobs:
           args: >-
             --release
             -p sp1-cluster-artifact
+            --tests
+            --
+            --ignored
+            --test-threads=1
+
+      - name: Run API integration tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: >-
+            --release
+            -p sp1-cluster-api
             --tests
             --
             --ignored

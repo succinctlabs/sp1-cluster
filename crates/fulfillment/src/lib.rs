@@ -2,7 +2,7 @@ use crate::metrics::FulfillerMetrics;
 use crate::network::{FulfillmentNetwork, NetworkRequest};
 use alloy_primitives::{Address, B256};
 use anyhow::{anyhow, Result};
-use futures::{future::join_all, TryFutureExt};
+use futures::{future::join_all, StreamExt, TryFutureExt};
 use sp1_cluster_artifact::{ArtifactClient, ArtifactType, CompressedUpload};
 use sp1_cluster_common::{
     client::ClusterServiceClient,
@@ -26,8 +26,12 @@ pub mod network;
 pub mod prover_info;
 pub mod run;
 
-/// The maximum number of requests to handle in a single refresh loop.
+/// Page size for schedulable-request fetches from the network.
 const REQUEST_LIMIT: u32 = 1000;
+
+/// How many submit or fail calls run at once. The paged listing has no
+/// bound, so per-row work needs one.
+const REQUEST_FAN_OUT: usize = 64;
 /// The error strings that should trigger a VERIFICATION_KEY_MISMATCH error.
 const VK_MISMATCH_STRINGS: &[&str] = &[
     "InvalidPowWitness",
@@ -332,9 +336,8 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         // Get all submitable requests from the cluster.
         let requests = self
             .cluster
-            .get_proof_requests(ProofRequestListRequest {
+            .get_all_proof_requests(ProofRequestListRequest {
                 proof_status: vec![ProofRequestStatus::Completed.into()],
-                limit: Some(REQUEST_LIMIT),
                 minimum_deadline: Some(time_now()),
                 handled: Some(false),
                 scheduled_by: self.name.clone(),
@@ -355,7 +358,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         let submission_tasks = requests.into_iter().map(|request| {
             let self_clone = self.clone();
             let request_id = request.id.clone();
-            tokio::spawn(async move {
+            let work = async move {
                 match self_clone.submit_request(request).await {
                     Ok(_) => {
                         info!("submitted request 0x{}", request_id);
@@ -400,10 +403,19 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                         }
                     }
                 }
-            })
+            };
+            // Spawn inside the buffered future: buffer_unordered bounds how
+            // many start, the JoinHandle keeps a panic in one request from
+            // unwinding into the fulfiller loop.
+            async move {
+                let _ = tokio::spawn(work).await;
+            }
         });
 
-        join_all(submission_tasks).await;
+        futures::stream::iter(submission_tasks)
+            .buffer_unordered(REQUEST_FAN_OUT)
+            .collect::<Vec<_>>()
+            .await;
 
         Ok(())
     }
@@ -472,9 +484,8 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         // Get all failed requests from the cluster.
         let requests = self
             .cluster
-            .get_proof_requests(ProofRequestListRequest {
+            .get_all_proof_requests(ProofRequestListRequest {
                 proof_status: vec![ProofRequestStatus::Failed.into()],
-                limit: Some(REQUEST_LIMIT),
                 minimum_deadline: Some(time_now()),
                 handled: Some(false),
                 scheduled_by: self.name.clone(),
@@ -492,7 +503,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 
         let failure_tasks = requests.into_iter().map(|request| {
             let self_clone = self.clone();
-            tokio::spawn(async move {
+            let work = async move {
                 let request_id = request.id.clone();
                 match self_clone.fail_request(request).await {
                     Ok(_) => {
@@ -505,10 +516,17 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                         self_clone.metrics.request_fail_failures.increment(1);
                     }
                 }
-            })
+            };
+            // See submit_requests: spawn for panic isolation, buffer for bound.
+            async move {
+                let _ = tokio::spawn(work).await;
+            }
         });
 
-        join_all(failure_tasks).await;
+        futures::stream::iter(failure_tasks)
+            .buffer_unordered(REQUEST_FAN_OUT)
+            .collect::<Vec<_>>()
+            .await;
 
         Ok(())
     }
@@ -571,9 +589,8 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         let in_flight: HashSet<String> =
             if requests.iter().any(|(_, kind)| kind.gated_on_in_flight()) {
                 self.cluster
-                    .get_proof_requests(ProofRequestListRequest {
+                    .get_all_proof_requests(ProofRequestListRequest {
                         proof_status: vec![ProofRequestStatus::Pending.into()],
-                        limit: Some(REQUEST_LIMIT),
                         minimum_deadline: Some(time_now()),
                         ..Default::default()
                     })
@@ -765,8 +782,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         // Get all requested requests from the cluster.
         let cluster_requests_resp = self
             .cluster
-            .get_proof_requests(ProofRequestListRequest {
-                limit: Some(REQUEST_LIMIT),
+            .get_all_proof_requests(ProofRequestListRequest {
                 minimum_deadline: Some(time_now()),
                 ..Default::default()
             })
@@ -922,8 +938,9 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 /// Outcome of scheduling one request in the cluster.
 enum ScheduleOutcome {
     Created,
-    /// The row already existed — the create raced the LIMIT-1000 dedup list.
-    /// The request is being handled; nothing was scheduled by this attempt.
+    /// The insert hit an existing row: the request entered the cluster DB
+    /// after this cycle listed it. It is already scheduled, so this attempt
+    /// changed nothing.
     AlreadyInCluster,
 }
 
