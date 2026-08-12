@@ -5,8 +5,9 @@
 //!
 //!     cargo test --release -p sp1-cluster-api --tests -- --ignored --test-threads=1
 //!
-//! Requires Postgres at `DATABASE_URL` (schema is migrated and the
-//! `proof_requests` table truncated on each run).
+//! Requires a Postgres server at `DATABASE_URL`. Each test runs in its own
+//! throwaway database created by `#[sqlx::test]`, so existing data is never
+//! touched.
 
 use sp1_cluster_api::ClusterServiceImpl;
 use sp1_cluster_common::proto::{
@@ -16,23 +17,11 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use tonic::Request;
 
-fn database_url() -> String {
-    std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/postgres".into())
-}
-
 const PAGE: u32 = 1000;
 /// Enough rows that a single page can't hold them.
 const SEEDED: u32 = PAGE + 200;
 
-async fn service_with_seeded_rows() -> ClusterServiceImpl {
-    let pool = PgPool::connect(&database_url()).await.unwrap();
-    sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
-    sqlx::query("TRUNCATE proof_requests")
-        .execute(&pool)
-        .await
-        .unwrap();
-
+async fn service_with_seeded_rows(pool: PgPool) -> ClusterServiceImpl {
     let service = ClusterServiceImpl::new(Arc::new(pool));
     let deadline = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -74,10 +63,10 @@ async fn list(service: &ClusterServiceImpl, offset: u32) -> Vec<String> {
 /// The failure mode behind stuck-at-assigned: with more matching rows than the
 /// limit, the newest row must still be reachable — on a later page, at a
 /// stable position.
-#[tokio::test]
+#[sqlx::test(migrations = "../../migrations")]
 #[ignore = "requires Postgres at DATABASE_URL"]
-async fn rows_past_the_limit_are_reachable_via_offset() {
-    let service = service_with_seeded_rows().await;
+async fn rows_past_the_limit_are_reachable_via_offset(pool: PgPool) {
+    let service = service_with_seeded_rows(pool).await;
     let newest = format!("req_{:06}", SEEDED - 1);
 
     let first = list(&service, 0).await;
@@ -98,13 +87,12 @@ async fn rows_past_the_limit_are_reachable_via_offset() {
 /// Pages must not shuffle under row churn. An UPDATE relocates the heap tuple,
 /// so without ORDER BY the updated row jumps to the last page and another row
 /// silently drops out of view.
-#[tokio::test]
+#[sqlx::test(migrations = "../../migrations")]
 #[ignore = "requires Postgres at DATABASE_URL"]
-async fn page_membership_survives_row_updates() {
-    let service = service_with_seeded_rows().await;
+async fn page_membership_survives_row_updates(pool: PgPool) {
+    let service = service_with_seeded_rows(pool.clone()).await;
     let before = list(&service, 0).await;
 
-    let pool = PgPool::connect(&database_url()).await.unwrap();
     sqlx::query("UPDATE proof_requests SET updated_at = now() WHERE id = $1")
         .bind(&before[0])
         .execute(&pool)
