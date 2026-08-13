@@ -29,8 +29,8 @@ async fn run() -> anyhow::Result<()> {
 
     let proof_id = request_only(
         &cluster.gateway_rpc_url(),
-        programs::RSP_ELF.clone(),
-        programs::RSP_STDIN.clone(),
+        programs::FIBONACCI_ELF.clone(),
+        programs::FIBONACCI_STDIN.clone(),
         SP1ProofMode::Compressed,
     )
     .await?;
