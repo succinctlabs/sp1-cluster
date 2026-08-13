@@ -160,6 +160,58 @@ impl Default for MessageChannelState {
     }
 }
 
+impl MessageChannelState {
+    /// Buffers the payload and sends it to each live subscriber.
+    /// Removes dead subscribers. Drops the payload if the channel is closed.
+    fn push(&self, task_id: &str, payload: Vec<u8>) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.closed {
+            tracing::warn!(
+                "Dropping message for already-closed task channel {}",
+                task_id
+            );
+            return;
+        }
+        inner.buffer.push(payload.clone());
+        let msg = Ok(MessageStreamResponse {
+            message: Some(proto::message_stream_response::Message::Payload(payload)),
+        });
+        inner.subscribers.retain(|tx| tx.send(msg.clone()).is_ok());
+    }
+
+    /// Attaches a subscriber and replays the buffer from `start_offset`.
+    /// If the channel is closed, sends EndOfStream after the replay.
+    fn attach_subscriber(
+        &self,
+        start_offset: usize,
+    ) -> mpsc::UnboundedReceiver<Result<MessageStreamResponse, Status>> {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = mpsc::unbounded_channel();
+        for payload in inner.buffer.iter().skip(start_offset) {
+            let msg = Ok(MessageStreamResponse {
+                message: Some(proto::message_stream_response::Message::Payload(
+                    payload.clone(),
+                )),
+            });
+            let _ = tx.send(msg);
+        }
+        if inner.closed {
+            let _ = tx.send(Ok(end_of_stream_response()));
+        } else {
+            inner.subscribers.push(tx);
+        }
+        rx
+    }
+}
+
+fn end_of_stream_response() -> MessageStreamResponse {
+    MessageStreamResponse {
+        message: Some(proto::message_stream_response::Message::EndOfStream(
+            proto::EndOfStream {},
+        )),
+    }
+}
+
 /// The task coordinator.
 pub struct Coordinator<P: AssignmentPolicy> {
     /// Current state which can be accessed concurrently.
@@ -1980,23 +2032,57 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         }
     }
 
-    /// Send a message on a task channel, lazily creating the channel entry if needed.
-    /// Buffers the payload so late or reconnecting subscribers can replay it.
-    pub fn send_task_message(&self, task_id: &str, payload: Vec<u8>) {
-        let state = self.task_channels.entry(task_id.to_string()).or_default();
-        let mut inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.closed {
-            tracing::warn!(
-                "Dropping message for already-closed task channel {}",
-                task_id
-            );
+    /// True if more messages can arrive on this task's channel. The task must
+    /// exist in a proof and must not be final. A retrying task is not final:
+    /// its next run can recreate an entry under the same task id.
+    fn task_can_still_send(state: &CoordinatorState<P>, task_id: &str) -> bool {
+        state.proofs.values().any(|proof| {
+            proof.tasks.get(task_id).is_some_and(|task| {
+                !matches!(task.status, TaskStatus::Succeeded | TaskStatus::FailedFatal)
+            })
+        })
+    }
+
+    /// Sends a message on a task's channel. Creates the entry if the task is
+    /// live. Buffers the payload so late subscribers can replay it. Drops
+    /// messages for finished or unknown tasks: their entry would stay open
+    /// forever, and its subscribers would never get EndOfStream.
+    pub async fn send_task_message(&self, task_id: &str, payload: Vec<u8>) {
+        if let Some(state) = self.task_channels.get(task_id) {
+            state.push(task_id, payload);
             return;
         }
-        inner.buffer.push(payload.clone());
-        let msg = Ok(MessageStreamResponse {
-            message: Some(proto::message_stream_response::Message::Payload(payload)),
-        });
-        inner.subscribers.retain(|tx| tx.send(msg.clone()).is_ok());
+        // Tasks finalize and close their channel under the state write lock.
+        // Holding the read lock across the insert stops a task from finishing
+        // between the liveness check and the insert.
+        let state = self.state.read().await;
+        // A concurrent call can create the entry during the lock wait.
+        // Re-check and use it.
+        if let Some(chan) = self.task_channels.get(task_id) {
+            chan.push(task_id, payload);
+        } else if Self::task_can_still_send(&state, task_id) {
+            self.open_channel(&state, task_id).push(task_id, payload);
+        } else if state
+            .proofs
+            .values()
+            .any(|proof| proof.tasks.contains_key(task_id))
+        {
+            tracing::warn!("Dropping message for finished task {}", task_id);
+        } else {
+            // Stragglers from a removed proof are expected during teardown.
+            tracing::debug!("Dropping message for unknown task {}", task_id);
+        }
+    }
+
+    /// Creates or gets a task's channel entry. Takes the state guard the
+    /// caller holds. While the guard is held, the task cannot finalize and
+    /// leave behind an open channel that never ends.
+    fn open_channel(
+        &self,
+        _state: &CoordinatorState<P>,
+        task_id: &str,
+    ) -> dashmap::mapref::one::RefMut<'_, String, MessageChannelState> {
+        self.task_channels.entry(task_id.to_string()).or_default()
     }
 
     /// Close a task's message channel, sending end_of_stream to all current subscribers.
@@ -2009,45 +2095,47 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             }
             inner.closed = true;
             inner.closed_at = Some(std::time::Instant::now());
-            let eos = Ok(MessageStreamResponse {
-                message: Some(proto::message_stream_response::Message::EndOfStream(
-                    proto::EndOfStream {},
-                )),
-            });
+            let eos = Ok(end_of_stream_response());
             for tx in inner.subscribers.drain(..) {
                 tx.send(eos.clone()).ok();
             }
         }
     }
 
-    /// Subscribe to a task's message channel, returning the receiver end.
-    /// Replays buffered messages starting from `start_offset`. If the channel
-    /// is already closed, sends the buffer followed by EndOfStream immediately.
-    pub fn subscribe_task_channel(
+    /// Subscribes to a task's message channel and returns the receiver end.
+    /// Replays buffered messages from `start_offset`. If the channel is
+    /// closed, sends the buffer and then EndOfStream. If the task is finished
+    /// or unknown and has no entry, sends only EndOfStream. That case is a
+    /// subscriber that reconnects after the GC removed the closed entry. The
+    /// buffer is gone, and a fresh open channel would never end.
+    pub async fn subscribe_task_channel(
         &self,
         task_id: &str,
         start_offset: usize,
     ) -> mpsc::UnboundedReceiver<Result<MessageStreamResponse, Status>> {
-        let state = self.task_channels.entry(task_id.to_string()).or_default();
-        let mut inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(state) = self.task_channels.get(task_id) {
+            return state.attach_subscriber(start_offset);
+        }
+        // See send_task_message: the read lock makes the liveness check and
+        // the insert atomic against task finalization.
+        let state = self.state.read().await;
+        // A sender can create the entry during the lock wait, and the task
+        // can then finish. Re-check so the subscriber gets the buffered
+        // replay, not a bare EndOfStream.
+        if let Some(chan) = self.task_channels.get(task_id) {
+            return chan.attach_subscriber(start_offset);
+        }
+        if Self::task_can_still_send(&state, task_id) {
+            return self
+                .open_channel(&state, task_id)
+                .attach_subscriber(start_offset);
+        }
+        tracing::warn!(
+            "Ending stream for finished or unknown task {}, subscriber reconnected after channel GC",
+            task_id
+        );
         let (tx, rx) = mpsc::unbounded_channel();
-        for payload in inner.buffer.iter().skip(start_offset) {
-            let msg = Ok(MessageStreamResponse {
-                message: Some(proto::message_stream_response::Message::Payload(
-                    payload.clone(),
-                )),
-            });
-            let _ = tx.send(msg);
-        }
-        if inner.closed {
-            let _ = tx.send(Ok(MessageStreamResponse {
-                message: Some(proto::message_stream_response::Message::EndOfStream(
-                    proto::EndOfStream {},
-                )),
-            }));
-        } else {
-            inner.subscribers.push(tx);
-        }
+        let _ = tx.send(Ok(end_of_stream_response()));
         rx
     }
 
@@ -2114,6 +2202,37 @@ mod tests {
         Coordinator::new()
     }
 
+    // Channel entries are created only for live tasks. Most channel tests
+    // must register a live task first.
+    async fn register_running_task(c: &Coordinator<DefaultPolicy>, task_id: &str) {
+        let mut state = c.state.write().await;
+        insert_proof_with_running_task(&mut state, "p1", task_id, None);
+    }
+
+    // Backdates a closed channel past the 60s stale threshold. The next
+    // cleanup_stale_task_channels call then removes it.
+    fn backdate_channel_close(c: &Coordinator<DefaultPolicy>, task_id: &str) {
+        c.task_channels
+            .get(task_id)
+            .unwrap()
+            .inner
+            .lock()
+            .unwrap()
+            .closed_at = Some(std::time::Instant::now() - Duration::from_secs(61));
+    }
+
+    async fn set_task_status(c: &Coordinator<DefaultPolicy>, task_id: &str, status: TaskStatus) {
+        let mut state = c.state.write().await;
+        state
+            .proofs
+            .get_mut("p1")
+            .unwrap()
+            .tasks
+            .get_mut(task_id)
+            .unwrap()
+            .status = status;
+    }
+
     fn extract_payload(msg: Result<MessageStreamResponse, Status>) -> Option<Vec<u8>> {
         match msg.ok()?.message? {
             proto::message_stream_response::Message::Payload(data) => Some(data),
@@ -2128,28 +2247,30 @@ mod tests {
         )
     }
 
-    #[test]
-    fn subscribe_then_send() {
+    #[tokio::test]
+    async fn subscribe_then_send() {
         let c = coordinator();
-        let mut rx = c.subscribe_task_channel("t1", 0);
+        register_running_task(&c, "t1").await;
+        let mut rx = c.subscribe_task_channel("t1", 0).await;
 
-        c.send_task_message("t1", vec![1, 2, 3]);
-        c.send_task_message("t1", vec![4, 5]);
+        c.send_task_message("t1", vec![1, 2, 3]).await;
+        c.send_task_message("t1", vec![4, 5]).await;
 
         assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![1, 2, 3]));
         assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![4, 5]));
         assert!(rx.try_recv().is_err());
     }
 
-    #[test]
-    fn send_then_subscribe_replays_buffer() {
+    #[tokio::test]
+    async fn send_then_subscribe_replays_buffer() {
         let c = coordinator();
+        register_running_task(&c, "t1").await;
 
-        c.send_task_message("t1", vec![10]);
-        c.send_task_message("t1", vec![20]);
-        c.send_task_message("t1", vec![30]);
+        c.send_task_message("t1", vec![10]).await;
+        c.send_task_message("t1", vec![20]).await;
+        c.send_task_message("t1", vec![30]).await;
 
-        let mut rx = c.subscribe_task_channel("t1", 0);
+        let mut rx = c.subscribe_task_channel("t1", 0).await;
 
         assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![10]));
         assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![20]));
@@ -2157,12 +2278,13 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    #[test]
-    fn close_sends_eos_to_active_subscriber() {
+    #[tokio::test]
+    async fn close_sends_eos_to_active_subscriber() {
         let c = coordinator();
-        let mut rx = c.subscribe_task_channel("t1", 0);
+        register_running_task(&c, "t1").await;
+        let mut rx = c.subscribe_task_channel("t1", 0).await;
 
-        c.send_task_message("t1", vec![1]);
+        c.send_task_message("t1", vec![1]).await;
         c.close_task_channel("t1");
 
         assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![1]));
@@ -2170,48 +2292,124 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    #[test]
-    fn subscribe_after_close_gets_buffer_and_eos() {
+    #[tokio::test]
+    async fn subscribe_after_close_gets_buffer_and_eos() {
         let c = coordinator();
+        register_running_task(&c, "t1").await;
 
-        c.send_task_message("t1", vec![1]);
-        c.send_task_message("t1", vec![2]);
+        c.send_task_message("t1", vec![1]).await;
+        c.send_task_message("t1", vec![2]).await;
         c.close_task_channel("t1");
 
-        let mut rx = c.subscribe_task_channel("t1", 0);
+        let mut rx = c.subscribe_task_channel("t1", 0).await;
 
         assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![1]));
         assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![2]));
         assert!(is_end_of_stream(&rx.try_recv().unwrap()));
     }
 
-    #[test]
-    fn subscribe_to_unknown_task_creates_empty_channel() {
+    #[tokio::test]
+    async fn subscribe_before_first_send_creates_empty_channel() {
         let c = coordinator();
-        let mut rx = c.subscribe_task_channel("nonexistent", 0);
+        register_running_task(&c, "t1").await;
+        let mut rx = c.subscribe_task_channel("t1", 0).await;
 
         // Channel is open but empty.
         assert!(rx.try_recv().is_err());
         assert_eq!(c.task_channels.len(), 1);
     }
 
-    #[test]
-    fn send_after_close_is_ignored() {
+    #[tokio::test]
+    async fn subscribe_to_unknown_task_ends_immediately() {
         let c = coordinator();
-        let mut rx = c.subscribe_task_channel("t1", 0);
+        let mut rx = c.subscribe_task_channel("nonexistent", 0).await;
+
+        assert!(is_end_of_stream(&rx.try_recv().unwrap()));
+        assert!(c.task_channels.is_empty());
+    }
+
+    // A subscriber that reconnects after the GC removed a finished task's
+    // entry must get EndOfStream. A fresh open channel would never end, and
+    // its reader would wait forever.
+    #[tokio::test]
+    async fn resubscribe_after_gc_ends_the_stream() {
+        let c = coordinator();
+        register_running_task(&c, "t1").await;
+
+        // The subscriber receives the first payload. Then its stream breaks.
+        let mut rx = c.subscribe_task_channel("t1", 0).await;
+        c.send_task_message("t1", vec![1]).await;
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![1]));
+        drop(rx);
+
+        // The task finishes and its channel closes while the subscriber is away.
+        c.send_task_message("t1", vec![2]).await;
+        set_task_status(&c, "t1", TaskStatus::Succeeded).await;
+        c.close_task_channel("t1");
+
+        backdate_channel_close(&c, "t1");
+        c.cleanup_stale_task_channels();
+        assert!(c.task_channels.get("t1").is_none());
+
+        // The reconnect resumes after the one payload it already got.
+        // Payload 2 is gone with the removed entry. The stream must end,
+        // not hang open.
+        let mut rx = c.subscribe_task_channel("t1", 1).await;
+        assert!(is_end_of_stream(&rx.try_recv().unwrap()));
+        assert!(c.task_channels.get("t1").is_none());
+    }
+
+    // A retryable failure also closes the channel. The task's next run sends
+    // on the same task id. After the GC, the entry must come back open.
+    #[tokio::test]
+    async fn resubscribe_after_gc_for_a_retrying_task_reopens_the_channel() {
+        let c = coordinator();
+        register_running_task(&c, "t1").await;
+
+        c.send_task_message("t1", vec![1]).await;
+        set_task_status(&c, "t1", TaskStatus::FailedRetryable).await;
+        c.close_task_channel("t1");
+
+        backdate_channel_close(&c, "t1");
+        c.cleanup_stale_task_channels();
+
+        let mut rx = c.subscribe_task_channel("t1", 0).await;
+        assert!(rx.try_recv().is_err());
+
+        c.send_task_message("t1", vec![2]).await;
+        assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![2]));
+    }
+
+    #[tokio::test]
+    async fn send_to_finished_task_does_not_recreate_the_channel() {
+        let c = coordinator();
+        register_running_task(&c, "t1").await;
+        set_task_status(&c, "t1", TaskStatus::Succeeded).await;
+
+        c.send_task_message("t1", vec![1]).await;
+
+        assert!(c.task_channels.is_empty());
+    }
+
+    #[tokio::test]
+    async fn send_after_close_is_ignored() {
+        let c = coordinator();
+        register_running_task(&c, "t1").await;
+        let mut rx = c.subscribe_task_channel("t1", 0).await;
 
         c.close_task_channel("t1");
-        c.send_task_message("t1", vec![99]);
+        c.send_task_message("t1", vec![99]).await;
 
         assert!(is_end_of_stream(&rx.try_recv().unwrap()));
         // No payload after EOS — the send was discarded.
         assert!(rx.try_recv().is_err());
     }
 
-    #[test]
-    fn double_close_is_idempotent() {
+    #[tokio::test]
+    async fn double_close_is_idempotent() {
         let c = coordinator();
-        let mut rx = c.subscribe_task_channel("t1", 0);
+        register_running_task(&c, "t1").await;
+        let mut rx = c.subscribe_task_channel("t1", 0).await;
 
         c.close_task_channel("t1");
         c.close_task_channel("t1");
@@ -2221,14 +2419,15 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    #[test]
-    fn dead_subscriber_is_pruned_on_send() {
+    #[tokio::test]
+    async fn dead_subscriber_is_pruned_on_send() {
         let c = coordinator();
-        let rx = c.subscribe_task_channel("t1", 0);
+        register_running_task(&c, "t1").await;
+        let rx = c.subscribe_task_channel("t1", 0).await;
         drop(rx);
 
         // Sending should not panic; it prunes the dead subscriber.
-        c.send_task_message("t1", vec![1]);
+        c.send_task_message("t1", vec![1]).await;
 
         let inner = c.task_channels.get("t1").unwrap();
         let inner = inner.inner.lock().unwrap();
@@ -2236,27 +2435,29 @@ mod tests {
         assert_eq!(inner.buffer.len(), 1);
     }
 
-    #[test]
-    fn multiple_subscribers_all_receive() {
+    #[tokio::test]
+    async fn multiple_subscribers_all_receive() {
         let c = coordinator();
-        let mut rx1 = c.subscribe_task_channel("t1", 0);
-        let mut rx2 = c.subscribe_task_channel("t1", 0);
+        register_running_task(&c, "t1").await;
+        let mut rx1 = c.subscribe_task_channel("t1", 0).await;
+        let mut rx2 = c.subscribe_task_channel("t1", 0).await;
 
-        c.send_task_message("t1", vec![42]);
+        c.send_task_message("t1", vec![42]).await;
 
         assert_eq!(extract_payload(rx1.try_recv().unwrap()), Some(vec![42]));
         assert_eq!(extract_payload(rx2.try_recv().unwrap()), Some(vec![42]));
     }
 
-    #[test]
-    fn late_second_subscriber_gets_full_replay() {
+    #[tokio::test]
+    async fn late_second_subscriber_gets_full_replay() {
         let c = coordinator();
-        let mut rx1 = c.subscribe_task_channel("t1", 0);
+        register_running_task(&c, "t1").await;
+        let mut rx1 = c.subscribe_task_channel("t1", 0).await;
 
-        c.send_task_message("t1", vec![1]);
-        c.send_task_message("t1", vec![2]);
+        c.send_task_message("t1", vec![1]).await;
+        c.send_task_message("t1", vec![2]).await;
 
-        let mut rx2 = c.subscribe_task_channel("t1", 0);
+        let mut rx2 = c.subscribe_task_channel("t1", 0).await;
 
         // rx1 got messages live.
         assert_eq!(extract_payload(rx1.try_recv().unwrap()), Some(vec![1]));
@@ -2267,28 +2468,30 @@ mod tests {
         assert_eq!(extract_payload(rx2.try_recv().unwrap()), Some(vec![2]));
     }
 
-    #[test]
-    fn subscribe_with_offset_skips_earlier_messages() {
+    #[tokio::test]
+    async fn subscribe_with_offset_skips_earlier_messages() {
         let c = coordinator();
+        register_running_task(&c, "t1").await;
 
-        c.send_task_message("t1", vec![10]);
-        c.send_task_message("t1", vec![20]);
-        c.send_task_message("t1", vec![30]);
+        c.send_task_message("t1", vec![10]).await;
+        c.send_task_message("t1", vec![20]).await;
+        c.send_task_message("t1", vec![30]).await;
 
-        let mut rx = c.subscribe_task_channel("t1", 2);
+        let mut rx = c.subscribe_task_channel("t1", 2).await;
 
         assert_eq!(extract_payload(rx.try_recv().unwrap()), Some(vec![30]));
         assert!(rx.try_recv().is_err());
     }
 
-    #[test]
-    fn subscribe_with_offset_beyond_buffer_gets_nothing() {
+    #[tokio::test]
+    async fn subscribe_with_offset_beyond_buffer_gets_nothing() {
         let c = coordinator();
+        register_running_task(&c, "t1").await;
 
-        c.send_task_message("t1", vec![10]);
-        c.send_task_message("t1", vec![20]);
+        c.send_task_message("t1", vec![10]).await;
+        c.send_task_message("t1", vec![20]).await;
 
-        let mut rx = c.subscribe_task_channel("t1", 5);
+        let mut rx = c.subscribe_task_channel("t1", 5).await;
 
         assert!(rx.try_recv().is_err());
     }
@@ -2320,8 +2523,8 @@ mod tests {
             state.proofs.insert("p1".into(), proof);
         }
 
-        let mut rx = c.subscribe_task_channel("t1", 0);
-        c.send_task_message("t1", vec![1]);
+        let mut rx = c.subscribe_task_channel("t1", 0).await;
+        c.send_task_message("t1", vec![1]).await;
 
         let _ = c.fail_proof("p1".into(), None, false, None).await;
 
@@ -2329,10 +2532,11 @@ mod tests {
         assert!(is_end_of_stream(&rx.try_recv().unwrap()));
     }
 
-    #[test]
-    fn send_after_mutex_poison_does_not_panic() {
+    #[tokio::test]
+    async fn send_after_mutex_poison_does_not_panic() {
         let c = coordinator();
-        c.send_task_message("t1", vec![1]);
+        register_running_task(&c, "t1").await;
+        c.send_task_message("t1", vec![1]).await;
 
         let state = c.task_channels.get("t1").unwrap();
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2341,14 +2545,15 @@ mod tests {
         }));
         drop(state);
 
-        c.send_task_message("t1", vec![2]);
+        c.send_task_message("t1", vec![2]).await;
     }
 
     #[tokio::test]
     async fn shutdown_closes_task_channels() {
         let c = Arc::new(coordinator());
-        let mut rx = c.subscribe_task_channel("t1", 0);
-        c.send_task_message("t1", vec![42]);
+        register_running_task(&c, "t1").await;
+        let mut rx = c.subscribe_task_channel("t1", 0).await;
+        c.send_task_message("t1", vec![42]).await;
 
         c.shutdown().await;
 
@@ -2356,37 +2561,34 @@ mod tests {
         assert!(is_end_of_stream(&rx.try_recv().unwrap()));
     }
 
-    #[test]
-    fn cleanup_removes_stale_closed_channels() {
+    #[tokio::test]
+    async fn cleanup_removes_stale_closed_channels() {
         let c = coordinator();
-        c.send_task_message("t1", vec![1]);
+        register_running_task(&c, "t1").await;
+        c.send_task_message("t1", vec![1]).await;
         c.close_task_channel("t1");
 
-        // Backdate the closed_at to exceed the stale threshold.
-        {
-            let entry = c.task_channels.get("t1").unwrap();
-            let mut inner = entry.inner.lock().unwrap();
-            inner.closed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(120));
-        }
-
+        backdate_channel_close(&c, "t1");
         c.cleanup_stale_task_channels();
         assert!(c.task_channels.is_empty());
     }
 
-    #[test]
-    fn cleanup_keeps_recently_closed_channels() {
+    #[tokio::test]
+    async fn cleanup_keeps_recently_closed_channels() {
         let c = coordinator();
-        c.send_task_message("t1", vec![1]);
+        register_running_task(&c, "t1").await;
+        c.send_task_message("t1", vec![1]).await;
         c.close_task_channel("t1");
 
         c.cleanup_stale_task_channels();
         assert_eq!(c.task_channels.len(), 1);
     }
 
-    #[test]
-    fn cleanup_keeps_open_channels() {
+    #[tokio::test]
+    async fn cleanup_keeps_open_channels() {
         let c = coordinator();
-        c.send_task_message("t1", vec![1]);
+        register_running_task(&c, "t1").await;
+        c.send_task_message("t1", vec![1]).await;
 
         c.cleanup_stale_task_channels();
         assert_eq!(c.task_channels.len(), 1);
@@ -2626,13 +2828,12 @@ mod tests {
     #[tokio::test]
     async fn cleanup_dead_workers_does_not_close_task_channel() {
         let c = Arc::new(coordinator());
-        let mut subscriber_rx = c.subscribe_task_channel("t1", 0);
-
         {
             let mut state = c.state.write().await;
             insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
             insert_dead_worker(&mut state, "w1", WorkerType::Gpu, &[("p1", "t1")]);
         }
+        let mut subscriber_rx = c.subscribe_task_channel("t1", 0).await;
 
         c.cleanup_dead_workers().await;
 
@@ -2887,14 +3088,13 @@ mod tests {
     #[tokio::test]
     async fn dead_worker_full_lifecycle_with_late_complete_is_no_op() {
         let c = Arc::new(coordinator());
-        let mut subscriber_rx = c.subscribe_task_channel("t1", 0);
-
         {
             let mut state = c.state.write().await;
             insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w_dead"));
             insert_dead_worker(&mut state, "w_dead", WorkerType::Gpu, &[("p1", "t1")]);
             insert_live_worker(&mut state, "w_live");
         }
+        let mut subscriber_rx = c.subscribe_task_channel("t1", 0).await;
 
         // 1. Dead-worker cleanup: w_dead removed, task re-enqueued.
         c.cleanup_dead_workers().await;

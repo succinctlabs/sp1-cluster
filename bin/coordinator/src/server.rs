@@ -450,7 +450,8 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
         let req = request.into_inner();
         let rx = self
             .coordinator
-            .subscribe_task_channel(&req.task_id, req.start_offset as usize);
+            .subscribe_task_channel(&req.task_id, req.start_offset as usize)
+            .await;
         Ok(Response::new(UnboundedReceiverStream::new(rx)))
     }
 
@@ -460,7 +461,8 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         self.coordinator
-            .send_task_message(&req.task_id, req.payload);
+            .send_task_message(&req.task_id, req.payload)
+            .await;
         Ok(Response::new(()))
     }
 }
