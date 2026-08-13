@@ -225,7 +225,7 @@ services:
       - FULFILLER_CLUSTER_RPC=http://api:50051
       - FULFILLER_LOG_FORMAT=Pretty
       - FULFILLER_CLUSTER_ARTIFACT_STORE=redis
-      - FULFILLER_VERSION=sp1-v6.1.0
+      - FULFILLER_VERSION=sp1-v6.4.0
       - FULFILLER_DOMAIN=${DOMAIN:-SPN_SEPOLIA_V1_DOMAIN}
       - FULFILLER_CLUSTER_REDIS_NODES=redis://:redispassword@redis:6379/0
       - FULFILLER_METRICS_ADDR=0.0.0.0:9090
@@ -268,7 +268,7 @@ services:
     logging: *default-logging
     environment:
       - BIDDER_LOG_FORMAT=Pretty
-      - BIDDER_VERSION=sp1-v6.1.0
+      - BIDDER_VERSION=sp1-v6.4.0
       - BIDDER_DOMAIN=${DOMAIN:-SPN_SEPOLIA_V1_DOMAIN}
       - BIDDER_METRICS_ADDR=0.0.0.0:9090
       - BIDDER_RPC_GRPC_ADDR=${RPC_GRPC_ADDR}
