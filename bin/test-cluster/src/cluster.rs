@@ -152,9 +152,9 @@ impl<A: StoreClient> Cluster<A> {
             .context("failed to connect to coordinator")
     }
 
-    /// Abruptly kill and reap an opted-in coordinator child process.
-    /// Awaiting its exit guarantees that its sockets and in-memory state are gone.
-    pub async fn crash_coordinator_process(&mut self) -> Result<()> {
+    /// Abruptly kill and reap the coordinator child, then start a fresh child with the
+    /// same listen addresses and API.
+    pub async fn crash_and_restart_coordinator_process(&mut self) -> Result<()> {
         let process = self
             .coordinator_process
             .as_mut()
@@ -179,18 +179,6 @@ impl<A: StoreClient> Cluster<A> {
             anyhow::bail!("coordinator child {pid:?} exited successfully after SIGKILL");
         }
         tracing::info!("coordinator child {pid:?} exited after SIGKILL: {status}");
-        Ok(())
-    }
-
-    /// Start a fresh coordinator child with the same listen addresses and API.
-    pub fn restart_coordinator_process(&mut self) -> Result<()> {
-        let process = self
-            .coordinator_process
-            .as_mut()
-            .context("coordinator is not configured as a child process")?;
-        if process.child.is_some() {
-            anyhow::bail!("coordinator child is already running");
-        }
         let child = spawn_coordinator_process(&process.settings)?;
         tracing::info!("restarted coordinator child {:?}", child.id());
         process.child = Some(child);

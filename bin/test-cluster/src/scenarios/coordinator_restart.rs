@@ -11,7 +11,7 @@ use crate::scenario::{Scenario, ScenarioFuture, Tier};
 pub fn scenario() -> Scenario {
     Scenario {
         name: "coordinator-restart",
-        timeout: Duration::from_mins(20),
+        timeout: Duration::from_mins(10),
         tier: Tier::Full,
         run: || -> ScenarioFuture { Box::pin(run()) },
     }
@@ -49,8 +49,7 @@ async fn run() -> anyhow::Result<()> {
     .await?;
     tracing::info!("proof {proof_id} is active; killing coordinator");
 
-    cluster.crash_coordinator_process().await?;
-    cluster.restart_coordinator_process()?;
+    cluster.crash_and_restart_coordinator_process().await?;
     crate::utils::wait_for_tcp(&cluster.addrs.coordinator, "restarted coordinator").await?;
 
     let mut coordinator = cluster.coordinator_client().await?;
