@@ -41,7 +41,7 @@ services:
 
   # API Service
   api:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.2
     logging: *default-logging
     environment:
       - API_GRPC_ADDR=0.0.0.0:50051
@@ -55,7 +55,7 @@ services:
 
   # Coordinator Service
   coordinator:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.2
     logging: *default-logging
     environment:
       - COORDINATOR_CLUSTER_RPC=http://api:50051
@@ -71,7 +71,7 @@ services:
   # Docker creates the circuit-cache volume owned by root. Workers run as UID 1001,
   # so give them the volume before any of them start.
   circuit-cache-init:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.2
     logging: *default-logging
     user: "0:0"
     entrypoint: ["/bin/sh", "-c", "chown -R 1001:1001 /var/cache/sp1/circuits"]
@@ -80,7 +80,7 @@ services:
 
   # CPU Node
   cpu-node:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.2
     logging: *default-logging
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
@@ -117,7 +117,7 @@ services:
 
   # CPU Node
   mixed:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.2
     logging: *default-logging
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
@@ -150,7 +150,7 @@ services:
 
   # GPU Node
   gpu0:
-    image: ghcr.io/succinctlabs/sp1-cluster:node-gpu-v2.7.1
+    image: ghcr.io/succinctlabs/sp1-cluster:node-gpu-v2.7.2
     logging: *default-logging
     environment:
       - NODE_COORDINATOR_RPC=http://coordinator:50051
@@ -219,7 +219,7 @@ services:
   # Fulfiller Service
   # DOMAIN: set to SPN_MAINNET_V1_DOMAIN for mainnet, defaults to SPN_SEPOLIA_V1_DOMAIN
   fulfiller:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.2
     logging: *default-logging
     environment:
       - FULFILLER_CLUSTER_RPC=http://api:50051
@@ -242,7 +242,7 @@ services:
   # why the default points at 127.0.0.1:8081 (same host as compose). For
   # remote SDK callers, override it to your public hostname.
   network-gateway:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.2
     logging: *default-logging
     profiles: ["gateway"]
     environment:
@@ -264,7 +264,7 @@ services:
 
   # Bidder Service
   bidder:
-    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.1
+    image: ghcr.io/succinctlabs/sp1-cluster:base-v2.7.2
     logging: *default-logging
     environment:
       - BIDDER_LOG_FORMAT=Pretty
