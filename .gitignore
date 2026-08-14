@@ -36,5 +36,9 @@ values-*.yaml
 **/docker-compose.override.yml
 **/compose.override.yml
 
-# Local agent documents
-.claude/local/**
+# AI
+.shellbrain/
+.cursor/
+.claude/
+.codex/
+agents/
