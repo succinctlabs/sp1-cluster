@@ -423,9 +423,11 @@ pub struct CoordinatorState<P: AssignmentPolicy> {
     /// Seconds a worker can be inactive before it is considered dead and its tasks requeue.
     pub worker_heartbeat_timeout_secs: u64,
 
-    /// Monotonic sum of per-task GPU busy time in GPU-milliseconds since [`Self::counters_since`].
-    /// `TaskMetadata::gpu_ms` is added on each first successful completion. Kept outside
-    /// [`AssignmentPolicy`] so the counter has one meaning for all policies.
+    /// Monotonic sum of GPU busy time in GPU-milliseconds since [`Self::counters_since`].
+    /// The coordinator adds `TaskMetadata::gpu_ms` one time for each assignment attempt
+    /// on a Gpu or All worker. See [`GpuAttempt`]. A redelivered task uses device time
+    /// on each worker that ran it. The counter is not part of [`AssignmentPolicy`], so
+    /// it has one meaning for all policies.
     pub gpu_busy_ms_total: u64,
 
     /// Monotonic integral of the connected GPU node count over time, in GPU-milliseconds,
@@ -550,6 +552,25 @@ impl<P: AssignmentPolicy> Worker<P> {
     }
 }
 
+/// One assignment of a task to one worker. The policy writes this record when it
+/// assigns the task. `complete_task` reads the record when the worker's report
+/// arrives.
+///
+/// Each attempt uses real device time, so the coordinator adds GPU time one time
+/// for each attempt. A worker can send its report more than one time, because the
+/// worker retries `complete_task` without limit. The `credited` flag limits each
+/// attempt to one count. The coordinator can remove a worker from
+/// `CoordinatorState::workers` before the worker's report arrives. For that case,
+/// `on_gpu` keeps the worker class from assignment time.
+#[derive(Clone, Copy, Debug)]
+pub struct GpuAttempt {
+    /// True when the worker was a Gpu or All worker at assignment time. Only these
+    /// workers add to `gpu_available_ms_total`.
+    pub on_gpu: bool,
+    /// True after one report for this attempt added its GPU time.
+    pub credited: bool,
+}
+
 /// A task to be completed.
 #[derive(Clone)]
 pub struct Task<P: AssignmentPolicy> {
@@ -574,6 +595,13 @@ pub struct Task<P: AssignmentPolicy> {
 
     /// The worker that is currently working on this task.
     pub worker: Option<String>,
+
+    /// All assignment attempts of this task, by worker id. See [`GpuAttempt`].
+    /// The map is part of the task. When the coordinator removes the task, it also
+    /// removes the map, and no other cleanup is necessary. If a report arrives
+    /// after the coordinator removed the proof, `complete_task` returns NotFound
+    /// and does not record that device time.
+    pub gpu_attempts: HashMap<String, GpuAttempt>,
 
     /// Number of times this task has been re-enqueued by the dead-worker cleanup path
     /// (heartbeat timeout, not a worker-reported failure).
@@ -753,6 +781,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             subscribers: HashSet::new(),
             worker: None,
             // allocation: None,
+            gpu_attempts: HashMap::new(),
             dead_worker_requeue_count: 0,
             extra: P::TaskState::default(),
         };
@@ -826,6 +855,26 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             );
             // Copy the GPU busy time before the policy takes ownership of `metadata` below.
             let gpu_ms = metadata.gpu_ms;
+            // Decide if this report adds GPU time. The code below adds the time to
+            // `state.gpu_busy_ms_total` when the borrow of `task` ends. Each
+            // assignment attempt counts one time. The policy writes a [`GpuAttempt`]
+            // when it assigns the task, and the first report for that attempt sets
+            // `credited`. The worker retries `complete_task` without limit, so a
+            // later copy of the same report does not count again. A redelivered task
+            // is a new attempt with its own record, and its device time also counts.
+            // The coordinator can remove a worker before the worker's report
+            // arrives. The record keeps `on_gpu` from assignment time, so that
+            // report still counts. A report without a record adds nothing. In a
+            // CPU-only cluster (`SP1_CLUSTER_CPU_ONLY`), all records have `on_gpu ==
+            // false`. Then busy stays 0 while available is 0, and the SPN does not
+            // store a wrong utilization.
+            let credit_gpu_time = match task.gpu_attempts.get_mut(&worker_id) {
+                Some(attempt) if !attempt.credited => {
+                    attempt.credited = true;
+                    attempt.on_gpu
+                }
+                _ => false,
+            };
             // A task can complete twice — a retry, or a preempted worker's reporter
             // landing next to its redelivery's. Only the first report notifies and
             // runs the success hooks; those record billing and scheduling history,
@@ -880,21 +929,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 None
             };
 
-            // Accumulate cluster GPU busy time. Both conditions are necessary.
-            //
-            // `!already_succeeded`: only the completion that moved the task to Succeeded
-            // counts; a racing retry or a redelivered copy must not count the same device
-            // time twice.
-            //
-            // `completed_on_gpu_node`: busy time is credited only for Gpu/All workers, the
-            // set `gpu_available_ms_total` integrates over. Without this, a CPU-only cluster
-            // (`SP1_CLUSTER_CPU_ONLY`) reports busy > 0 against available == 0, and the SPN
-            // stores that as a silently wrong utilization. Do not also test `closed` or the
-            // heartbeat here.
-            let completed_on_gpu_node = state.workers.get(&worker_id).is_some_and(|worker| {
-                matches!(worker.worker_type, WorkerType::Gpu | WorkerType::All)
-            });
-            if !already_succeeded && completed_on_gpu_node {
+            if credit_gpu_time {
                 state.gpu_busy_ms_total = state.gpu_busy_ms_total.saturating_add(gpu_ms);
             }
 
@@ -2722,6 +2757,7 @@ mod tests {
                     retries: 0,
                     subscribers: HashSet::new(),
                     worker: None,
+                    gpu_attempts: HashMap::new(),
                     dead_worker_requeue_count: 0,
                     extra: Default::default(),
                 },
@@ -2833,6 +2869,7 @@ mod tests {
                 retries: 0,
                 subscribers: HashSet::new(),
                 worker: worker_id.map(String::from),
+                gpu_attempts: HashMap::new(),
                 dead_worker_requeue_count: 0,
                 extra: Default::default(),
             },
@@ -3163,6 +3200,7 @@ mod tests {
             retries: 0,
             subscribers: HashSet::new(),
             worker: worker.map(String::from),
+            gpu_attempts: HashMap::new(),
             dead_worker_requeue_count: 0,
             extra: Default::default(),
         }
@@ -4297,6 +4335,32 @@ mod tests {
         state.workers.insert(worker_id.into(), worker);
     }
 
+    /// Write the attempt record that `complete_task` reads. The policies write the
+    /// same record when they assign a task to a worker.
+    fn record_gpu_attempt(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        proof_id: &str,
+        task_id: &str,
+        worker_id: &str,
+        on_gpu: bool,
+    ) {
+        state
+            .proofs
+            .get_mut(proof_id)
+            .unwrap()
+            .tasks
+            .get_mut(task_id)
+            .unwrap()
+            .gpu_attempts
+            .insert(
+                worker_id.into(),
+                GpuAttempt {
+                    on_gpu,
+                    credited: false,
+                },
+            );
+    }
+
     /// Insert a live worker of the given type. `insert_live_worker` always inserts a
     /// GPU worker; the busy-crediting tests need CPU and All workers too.
     fn insert_live_worker_of(
@@ -4508,6 +4572,7 @@ mod tests {
                 .unwrap()
                 .active_tasks
                 .insert(("p1".into(), "t1".into()));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", true);
         }
 
         c.complete_task(
@@ -4524,7 +4589,8 @@ mod tests {
 
     #[tokio::test]
     async fn repeat_completion_does_not_double_count_gpu_time() {
-        // A racing retry reports the same task twice, but the device time was spent once.
+        // The worker retries `complete_task` without limit, so one report can
+        // arrive two times. The device time of the attempt counts one time.
         let c = Arc::new(coordinator());
         {
             let mut state = c.state.write().await;
@@ -4539,6 +4605,7 @@ mod tests {
                 .unwrap()
                 .active_tasks
                 .insert(("p1".into(), "t1".into()));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", true);
         }
 
         for _ in 0..2 {
@@ -4555,15 +4622,16 @@ mod tests {
         assert_eq!(
             c.state.read().await.gpu_busy_ms_total,
             4_200,
-            "only the completion that moved the task to Succeeded may count"
+            "an attempt's report counts once however many times it lands"
         );
     }
 
     #[tokio::test]
     async fn completing_a_task_on_a_cpu_worker_accumulates_no_gpu_time() {
-        // Under SP1_CLUSTER_CPU_ONLY, CPU workers run GPU task types and the cluster has zero
-        // GPU nodes. If their completions added busy time, snapshots would show busy > 0
-        // against available == 0, stored by the SPN as a silently wrong utilization.
+        // Under SP1_CLUSTER_CPU_ONLY, CPU workers run GPU task types, and the
+        // cluster has zero GPU nodes. The policies record these attempts with
+        // `on_gpu == false`. If GPU time got through, snapshots would show busy > 0
+        // while available is 0. The SPN would then store a wrong utilization.
         let c = Arc::new(coordinator());
         {
             let mut state = c.state.write().await;
@@ -4575,6 +4643,7 @@ mod tests {
                 .unwrap()
                 .active_tasks
                 .insert(("p1".into(), "t1".into()));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", false);
         }
 
         c.complete_task(
@@ -4595,12 +4664,148 @@ mod tests {
 
     #[tokio::test]
     async fn completing_a_task_on_an_all_worker_accumulates_gpu_time() {
-        // `All` counts as a GPU node for availability, so its completions must add busy time.
+        // An `All` worker counts as a GPU node for available time, so its
+        // completions must add busy time. The test runs the real assignment path.
+        // Thus the test examines the `All -> on_gpu` mapping in the policy.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", None);
+            let queued = state
+                .proofs
+                .get("p1")
+                .unwrap()
+                .tasks
+                .get("t1")
+                .unwrap()
+                .clone();
+            c.enqueue_task(&mut state, queued).await;
+            insert_live_worker_of(&mut state, "w1", WorkerType::All);
+        }
+
+        let state = c.state.clone().write_owned().await;
+        c.assign_tasks(state).await.unwrap();
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(c.state.read().await.gpu_busy_ms_total, 4_200);
+    }
+
+    #[tokio::test]
+    async fn completing_a_task_on_a_draining_worker_still_accumulates_gpu_time() {
+        // See `gpu_node_filter_counts_a_draining_worker`. A draining node adds
+        // available time, so it must also add busy time. The two counters must
+        // count the same set of workers. Do not add a `closed` check here.
         let c = Arc::new(coordinator());
         {
             let mut state = c.state.write().await;
             insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
-            insert_live_worker_of(&mut state, "w1", WorkerType::All);
+            insert_live_worker_of(&mut state, "w1", WorkerType::Gpu);
+            let worker = state.workers.get_mut("w1").unwrap();
+            worker.closed = true;
+            worker.active_tasks.insert(("p1".into(), "t1".into()));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", true);
+        }
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(c.state.read().await.gpu_busy_ms_total, 4_200);
+    }
+
+    #[tokio::test]
+    async fn each_redelivered_attempt_accumulates_its_own_gpu_time() {
+        // t1 first ran on w1. Dead-worker cleanup removed w1, and the redelivery ran
+        // on w2. Each attempt used real device time, and `gpu_available_ms_total`
+        // counted both workers. Thus each report must add its time. The report from
+        // w1 arrives after the task succeeded and after the coordinator removed w1.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w2"));
+            // A second task keeps the proof alive after the first completion.
+            state.proofs.get_mut("p1").unwrap().active_tasks = 2;
+            insert_live_worker_of(&mut state, "w2", WorkerType::Gpu);
+            state
+                .workers
+                .get_mut("w2")
+                .unwrap()
+                .active_tasks
+                .insert(("p1".into(), "t1".into()));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", true);
+            record_gpu_attempt(&mut state, "p1", "t1", "w2", true);
+        }
+
+        c.complete_task(
+            "w2".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 3_000 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            c.state.read().await.gpu_busy_ms_total,
+            7_200,
+            "each attempt's device time counts once"
+        );
+    }
+
+    #[tokio::test]
+    async fn late_completion_from_a_reaped_gpu_worker_accumulates_its_time() {
+        // Dead-worker cleanup removed the worker before its report arrived. The
+        // attempt record from assignment time lets the report add its GPU time.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", true);
+        }
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(c.state.read().await.gpu_busy_ms_total, 4_200);
+    }
+
+    #[tokio::test]
+    async fn completion_without_a_recorded_attempt_accumulates_no_gpu_time() {
+        // A live GPU worker reports a task that the coordinator did not assign to
+        // it. Only recorded attempts add GPU time. The code does not read the
+        // worker map.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            insert_live_worker_of(&mut state, "w1", WorkerType::Gpu);
             state
                 .workers
                 .get_mut("w1")
@@ -4618,56 +4823,43 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(c.state.read().await.gpu_busy_ms_total, 4_200);
-    }
-
-    #[tokio::test]
-    async fn completing_a_task_on_a_draining_worker_still_accumulates_gpu_time() {
-        // The mirror of `gpu_node_filter_counts_a_draining_worker`: a draining node still adds
-        // availability, so it must still add busy time. Both counters must describe the same
-        // set of workers.
-        let c = Arc::new(coordinator());
-        {
-            let mut state = c.state.write().await;
-            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
-            insert_live_worker_of(&mut state, "w1", WorkerType::Gpu);
-            let worker = state.workers.get_mut("w1").unwrap();
-            worker.closed = true;
-            worker.active_tasks.insert(("p1".into(), "t1".into()));
-        }
-
-        c.complete_task(
-            "w1".into(),
-            "p1".into(),
-            "t1".into(),
-            policy::TaskMetadata { gpu_ms: 4_200 },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(c.state.read().await.gpu_busy_ms_total, 4_200);
-    }
-
-    #[tokio::test]
-    async fn completing_a_task_from_an_unknown_worker_accumulates_no_gpu_time() {
-        // The worker was reaped before completion: no worker_type to check, and no
-        // availability accrues for it.
-        let c = Arc::new(coordinator());
-        {
-            let mut state = c.state.write().await;
-            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
-        }
-
-        c.complete_task(
-            "w1".into(),
-            "p1".into(),
-            "t1".into(),
-            policy::TaskMetadata { gpu_ms: 4_200 },
-        )
-        .await
-        .unwrap();
-
         assert_eq!(c.state.read().await.gpu_busy_ms_total, 0);
+    }
+
+    #[tokio::test]
+    async fn assignment_records_the_attempt_that_completion_credits() {
+        // Full path through the default policy. Assignment writes the attempt
+        // record. Then `complete_task` adds the GPU time from that record. The test
+        // does not seed `gpu_attempts` by hand.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", None);
+            let queued = state
+                .proofs
+                .get("p1")
+                .unwrap()
+                .tasks
+                .get("t1")
+                .unwrap()
+                .clone();
+            c.enqueue_task(&mut state, queued).await;
+            insert_live_worker(&mut state, "w1");
+        }
+
+        let state = c.state.clone().write_owned().await;
+        c.assign_tasks(state).await.unwrap();
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(c.state.read().await.gpu_busy_ms_total, 4_200);
     }
 
     #[tokio::test]
