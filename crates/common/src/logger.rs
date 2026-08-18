@@ -15,99 +15,21 @@ use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 static INIT: Once = Once::new();
 
-fn build_env_filter(base: Option<EnvFilter>) -> EnvFilter {
-    let filter = base
-        .unwrap_or(EnvFilter::try_from_default_env().unwrap_or_else(|e| {
-            println!("failed to setup env filter: {:?}", e);
-            EnvFilter::new("info")
-        }))
+fn build_env_filter() -> EnvFilter {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|e| {
+        println!("failed to setup env filter: {:?}", e);
+        EnvFilter::new("info")
+    });
+
+    disable_noisy_targets(filter)
+}
+
+fn disable_noisy_targets(filter: EnvFilter) -> EnvFilter {
+    filter
         .add_directive("p3_keccak_air=off".parse().unwrap())
         .add_directive("p3_fri=off".parse().unwrap())
         .add_directive("p3_dft=off".parse().unwrap())
-        .add_directive("p3_challenger=off".parse().unwrap());
-
-    let filter = with_sp1_debug(filter);
-    let filter = with_sp1_gpu_debug(filter);
-    with_slop_debug(filter)
-}
-
-fn with_sp1_debug(env_filter: EnvFilter) -> EnvFilter {
-    env_filter
-        .add_directive("sp1_build=debug".parse().unwrap())
-        .add_directive("sp1_core_executor=debug".parse().unwrap())
-        .add_directive("sp1_core_machine=debug".parse().unwrap())
-        .add_directive("sp1_cuda=debug".parse().unwrap())
-        .add_directive("sp1_curves=debug".parse().unwrap())
-        .add_directive("sp1_derive=debug".parse().unwrap())
-        .add_directive("sp1_hypercube=debug".parse().unwrap())
-        .add_directive("sp1_jit=debug".parse().unwrap())
-        .add_directive("sp1_lib=debug".parse().unwrap())
-        .add_directive("sp1_primitives=debug".parse().unwrap())
-        .add_directive("sp1_prover=debug".parse().unwrap())
-        .add_directive("sp1_prover_types=debug".parse().unwrap())
-        .add_directive("sp1_recursion_circuit=debug".parse().unwrap())
-        .add_directive("sp1_recursion_compiler=debug".parse().unwrap())
-        .add_directive("sp1_recursion_executor=debug".parse().unwrap())
-        .add_directive("sp1_recursion_gnark_ffi=debug".parse().unwrap())
-        .add_directive("sp1_recursion_machine=debug".parse().unwrap())
-        .add_directive("sp1_sdk=debug".parse().unwrap())
-        .add_directive("sp1_verifier=debug".parse().unwrap())
-}
-
-fn with_sp1_gpu_debug(env_filter: EnvFilter) -> EnvFilter {
-    env_filter
-        .add_directive("sp1_gpu_air=debug".parse().unwrap())
-        .add_directive("sp1_gpu_basefold=debug".parse().unwrap())
-        .add_directive("sp1_gpu_challenger=debug".parse().unwrap())
-        .add_directive("sp1_gpu_commit=debug".parse().unwrap())
-        .add_directive("sp1_gpu_cudart=debug".parse().unwrap())
-        .add_directive("sp1_gpu_experimental=debug".parse().unwrap())
-        .add_directive("sp1_gpu_jagged_assist=debug".parse().unwrap())
-        .add_directive("sp1_gpu_jagged_sumcheck=debug".parse().unwrap())
-        .add_directive("sp1_gpu_jagged_tracegen=debug".parse().unwrap())
-        .add_directive("sp1_gpu_logup_gkr=debug".parse().unwrap())
-        .add_directive("sp1_gpu_merkle_tree=debug".parse().unwrap())
-        .add_directive("sp1_gpu_perf=debug".parse().unwrap())
-        .add_directive("sp1_gpu_prover=debug".parse().unwrap())
-        .add_directive("sp1_gpu_server=debug".parse().unwrap())
-        .add_directive("sp1_gpu_shard_prover=debug".parse().unwrap())
-        .add_directive("sp1_gpu_sys=debug".parse().unwrap())
-        .add_directive("sp1_gpu_tracegen=debug".parse().unwrap())
-        .add_directive("sp1_gpu_tracing=debug".parse().unwrap())
-        .add_directive("sp1_gpu_utils=debug".parse().unwrap())
-        .add_directive("sp1_gpu_zerocheck=debug".parse().unwrap())
-}
-
-fn with_slop_debug(env_filter: EnvFilter) -> EnvFilter {
-    env_filter
-        .add_directive("slop_air=debug".parse().unwrap())
-        .add_directive("slop_algebra=debug".parse().unwrap())
-        .add_directive("slop_alloc=debug".parse().unwrap())
-        .add_directive("slop_baby_bear=debug".parse().unwrap())
-        .add_directive("slop_basefold=debug".parse().unwrap())
-        .add_directive("slop_basefold_prover=debug".parse().unwrap())
-        .add_directive("slop_bn254=debug".parse().unwrap())
-        .add_directive("slop_challenger=debug".parse().unwrap())
-        .add_directive("slop_commit=debug".parse().unwrap())
-        .add_directive("slop_dft=debug".parse().unwrap())
-        .add_directive("slop_fri=debug".parse().unwrap())
-        .add_directive("slop_futures=debug".parse().unwrap())
-        .add_directive("slop_jagged=debug".parse().unwrap())
-        .add_directive("slop_keccak_air=debug".parse().unwrap())
-        .add_directive("slop_koala_bear=debug".parse().unwrap())
-        .add_directive("slop_matrix=debug".parse().unwrap())
-        .add_directive("slop_maybe_rayon=debug".parse().unwrap())
-        .add_directive("slop_merkle_tree=debug".parse().unwrap())
-        .add_directive("slop_multilinear=debug".parse().unwrap())
-        .add_directive("slop_poseidon2=debug".parse().unwrap())
-        .add_directive("slop_primitives=debug".parse().unwrap())
-        .add_directive("slop_stacked=debug".parse().unwrap())
-        .add_directive("slop_sumcheck=debug".parse().unwrap())
-        .add_directive("slop_symmetric=debug".parse().unwrap())
-        .add_directive("slop_tensor=debug".parse().unwrap())
-        .add_directive("slop_uni_stark=debug".parse().unwrap())
-        .add_directive("slop_utils=debug".parse().unwrap())
-        .add_directive("slop_whir=debug".parse().unwrap())
+        .add_directive("p3_challenger=off".parse().unwrap())
 }
 
 fn get_otlp_endpoint() -> String {
@@ -119,7 +41,7 @@ pub fn init(resource: Resource) {
         global::set_text_map_propagator(TraceContextPropagator::new());
 
         let otlp_endpoint = get_otlp_endpoint();
-        let env_filter = build_env_filter(None);
+        let env_filter = build_env_filter();
         let tracing_enabled = std::env::var("TRACING_ENABLED")
             .map(|s| s == "true")
             .unwrap_or(false);
@@ -149,17 +71,17 @@ pub fn init(resource: Resource) {
             )
         };
 
-        let env_filter = build_env_filter(None);
+        let env_filter = build_env_filter();
         let json_logs = std::env::var("LOG_FORMAT")
             .map(|s| s.eq_ignore_ascii_case("json"))
             .unwrap_or(false);
         let base = tracing_subscriber::fmt::layer()
-            .with_target(false)
+            .with_target(!json_logs)
             .with_thread_names(false)
             .with_span_events(FmtSpan::CLOSE)
             .with_writer(std::io::stdout)
-            .with_file(true)
-            .with_line_number(true);
+            .with_file(json_logs)
+            .with_line_number(json_logs);
         let fmt_layer = if json_logs {
             base.json().with_filter(env_filter).boxed()
         } else {
@@ -170,7 +92,7 @@ pub fn init(resource: Resource) {
             .map(|s| s == "true")
             .unwrap_or(false);
 
-        let env_filter = build_env_filter(None);
+        let env_filter = build_env_filter();
         let log_export_layer: Option<Box<dyn Layer<_> + Send + Sync>> = if logging_enabled {
             let export_layer = opentelemetry_otlp::new_pipeline()
                 .logging()
@@ -218,4 +140,23 @@ pub fn init(resource: Resource) {
         log::info!("logging initialized");
         log::debug!("OTLP endpoint configured: {}", otlp_endpoint);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn info_filter_does_not_enable_debug_targets() {
+        let filter = disable_noisy_targets(EnvFilter::new("info")).to_string();
+
+        assert!(!filter.contains("=debug"), "{filter}");
+    }
+
+    #[test]
+    fn targeted_debug_filter_is_preserved() {
+        let filter = disable_noisy_targets(EnvFilter::new("info,sp1_prover=debug")).to_string();
+
+        assert!(filter.contains("sp1_prover=debug"), "{filter}");
+    }
 }
