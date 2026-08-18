@@ -39,11 +39,36 @@ To get started, you will need to have the following installed:
 
 ```bash
 git clone https://github.com/succinctlabs/sp1-cluster.git
-cd cluster
+cd sp1-cluster
 
 # Build
 cargo build --release
 ```
+
+## Benchmarking
+
+Start `gpu0`. Compose also starts its API, coordinator, Redis, and Postgres dependencies:
+
+```bash
+docker compose -f infra/docker-compose.yml up -d gpu0
+```
+
+The CLI connects to the **API** service, not the coordinator. It must use the workers' artifact
+store:
+
+```bash
+export CLI_CLUSTER_RPC=http://127.0.0.1:50051
+export CLI_REDIS_NODES=redis://:redispassword@127.0.0.1:6379/0
+
+# One 20M-cycle Fibonacci proof.
+./target/release/sp1-cluster-cli bench fibonacci 20
+
+# Four at once, for aggregate cluster throughput.
+./target/release/sp1-cluster-cli bench fibonacci 20 --count 4
+```
+
+Inside the Compose network, use service names:
+`CLI_CLUSTER_RPC=http://api:50051` and `CLI_REDIS_NODES=redis://:redispassword@redis:6379/0`.
 
 ## Deploying
 
