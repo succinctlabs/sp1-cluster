@@ -41,6 +41,9 @@ RUST_LOG=info cargo run --release --bin sp1-test-cluster --features gpu -- suite
 SP1_CLUSTER_CPU_ONLY=1 RUST_LOG=info cargo run --release --bin sp1-test-cluster -- suite full
 ```
 
+Use `RUST_LOG=info,sp1=debug` to show debug logs from all SP1 crates. Add
+`,slop=debug` to include Slop crates.
+
 Suite logs: `target/test-cluster-logs/<scenario>.log` (relative to the working
 directory). Requirements: docker (testcontainers), network access on first run
 (circuit artifacts for CPU workers, container images).
