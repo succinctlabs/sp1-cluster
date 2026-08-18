@@ -16,6 +16,7 @@ use sp1_cluster_coordinator::policy::balanced::BalancedPolicy;
 use sp1_cluster_coordinator::server::start_coordinator_server_custom;
 use sp1_cluster_network_gateway::auth::AuthMode;
 use sp1_cluster_network_gateway::config::Config as GatewayConfig;
+use tokio::process::Child;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
@@ -86,6 +87,7 @@ struct Component {
 
 pub struct ClusterBuilder {
     coordinator: CoordinatorKind,
+    process_isolated_coordinator: bool,
     cpu_nodes: usize,
     gpu_nodes: usize,
     worker_heartbeat_timeout_secs: u64,
@@ -95,9 +97,15 @@ pub struct Cluster<A: StoreClient> {
     pub root: CancellationToken,
     pub addrs: ClusterAddrs,
     components: HashMap<String, Component>,
+    coordinator_process: Option<CoordinatorProcess>,
     artifact_client: A,
     _artifact_container_handle: ArtifactContainerHandle,
     _postgres: env::Postgres,
+}
+
+struct CoordinatorProcess {
+    settings: CoordinatorSettings,
+    child: Option<Child>,
 }
 
 #[allow(unused)]
@@ -110,6 +118,7 @@ impl Cluster<RedisArtifactClient> {
     pub fn builder() -> ClusterBuilder {
         ClusterBuilder {
             coordinator: CoordinatorKind::Prover,
+            process_isolated_coordinator: false,
             cpu_nodes: 0,
             gpu_nodes: 0,
             worker_heartbeat_timeout_secs:
@@ -141,6 +150,39 @@ impl<A: StoreClient> Cluster<A> {
         RawCoordinatorClient::connect(format!("http://{}", self.addrs.coordinator))
             .await
             .context("failed to connect to coordinator")
+    }
+
+    /// Abruptly kill and reap the coordinator child, then start a fresh child with the
+    /// same listen addresses and API.
+    pub async fn crash_and_restart_coordinator_process(&mut self) -> Result<()> {
+        let process = self
+            .coordinator_process
+            .as_mut()
+            .context("coordinator is not running as a child process")?;
+        let mut child = process
+            .child
+            .take()
+            .context("coordinator child is not running")?;
+        let pid = child.id();
+        if let Some(status) = child
+            .try_wait()
+            .context("check coordinator child before SIGKILL")?
+        {
+            anyhow::bail!("coordinator child {pid:?} exited unexpectedly before crash: {status}");
+        }
+        child.start_kill().context("SIGKILL coordinator child")?;
+        let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
+            .await
+            .context("timed out waiting for killed coordinator child")?
+            .context("wait for killed coordinator child")?;
+        if status.success() {
+            anyhow::bail!("coordinator child {pid:?} exited successfully after SIGKILL");
+        }
+        tracing::info!("coordinator child {pid:?} exited after SIGKILL: {status}");
+        let child = spawn_coordinator_process(&process.settings)?;
+        tracing::info!("restarted coordinator child {:?}", child.id());
+        process.child = Some(child);
+        Ok(())
     }
 
     /// Whether a component with this name was spawned (e.g. "gpu-node-0" exists only
@@ -206,6 +248,11 @@ impl<A: StoreClient> Cluster<A> {
     /// Shut the whole cluster down: cancel root, await every component (bounded).
     pub async fn shutdown(mut self) {
         self.root.cancel();
+        if let Some(mut process) = self.coordinator_process.take() {
+            if let Some(mut child) = process.child.take() {
+                let _ = child.kill().await;
+            }
+        }
         for (name, c) in self.components.drain() {
             let Some(handle) = c.handle else { continue };
             match tokio::time::timeout(Duration::from_mins(1), handle).await {
@@ -258,6 +305,12 @@ impl<A: StoreClient> Cluster<A> {
 impl ClusterBuilder {
     pub fn coordinator(mut self, kind: CoordinatorKind) -> Self {
         self.coordinator = kind;
+        self
+    }
+
+    /// Run the coordinator in a real child process so crash tests drop all sockets and memory.
+    pub fn process_isolated_coordinator(mut self) -> Self {
+        self.process_isolated_coordinator = true;
         self
     }
 
@@ -377,15 +430,23 @@ impl ClusterBuilder {
         utils::wait_for_tcp(&addrs.api_grpc, "api gRPC").await?;
 
         // coordinator
-        {
-            let settings = CoordinatorSettings {
-                addr: addrs.coordinator.clone(),
-                cluster_rpc: format!("http://{}", addrs.api_grpc),
-                metrics_addr: addrs.coordinator_metrics.clone(),
-                disable_proof_status_update: false,
-                execute_only_mode: self.coordinator == CoordinatorKind::ExecuteOnly,
-                worker_heartbeat_timeout_secs: self.worker_heartbeat_timeout_secs,
-            };
+        let coordinator_settings = CoordinatorSettings {
+            addr: addrs.coordinator.clone(),
+            cluster_rpc: format!("http://{}", addrs.api_grpc),
+            metrics_addr: addrs.coordinator_metrics.clone(),
+            disable_proof_status_update: false,
+            execute_only_mode: self.coordinator == CoordinatorKind::ExecuteOnly,
+            worker_heartbeat_timeout_secs: self.worker_heartbeat_timeout_secs,
+        };
+        let coordinator_process = if self.process_isolated_coordinator {
+            let child = spawn_coordinator_process(&coordinator_settings)?;
+            tracing::info!("started coordinator child {:?}", child.id());
+            Some(CoordinatorProcess {
+                child: Some(child),
+                settings: coordinator_settings,
+            })
+        } else {
+            let settings = coordinator_settings;
             let respawn = component_factory("coordinator", root.clone(), move |token| {
                 let settings = settings.clone();
                 async move {
@@ -398,7 +459,8 @@ impl ClusterBuilder {
                 }
             });
             insert_component(&mut components, &root, "coordinator", respawn);
-        }
+            None
+        };
         utils::wait_for_tcp(&addrs.coordinator, "coordinator gRPC").await?;
 
         // gateway
@@ -474,6 +536,7 @@ impl ClusterBuilder {
             root,
             addrs,
             components,
+            coordinator_process,
             _artifact_container_handle: artifact_container_handle,
             _postgres: postgres,
             artifact_client,
@@ -487,6 +550,30 @@ impl ClusterBuilder {
             .await?;
         Ok(cluster)
     }
+}
+
+fn spawn_coordinator_process(settings: &CoordinatorSettings) -> Result<Child> {
+    let exe = std::env::current_exe().context("resolve test-cluster executable")?;
+    tokio::process::Command::new(exe)
+        .arg("__coordinator-child")
+        .env("COORDINATOR_ADDR", &settings.addr)
+        .env("COORDINATOR_CLUSTER_RPC", &settings.cluster_rpc)
+        .env("COORDINATOR_METRICS_ADDR", &settings.metrics_addr)
+        .env(
+            "COORDINATOR_DISABLE_PROOF_STATUS_UPDATE",
+            settings.disable_proof_status_update.to_string(),
+        )
+        .env(
+            "COORDINATOR_EXECUTE_ONLY_MODE",
+            settings.execute_only_mode.to_string(),
+        )
+        .env(
+            "COORDINATOR_WORKER_HEARTBEAT_TIMEOUT_SECS",
+            settings.worker_heartbeat_timeout_secs.to_string(),
+        )
+        .kill_on_drop(true)
+        .spawn()
+        .context("spawn coordinator child process")
 }
 
 fn spawn_node<A: StoreClient>(
