@@ -11,7 +11,7 @@ use tonic::Status;
 
 use crate::{
     estimate_duration, track_latency, util::worker_type_from_task_type, Coordinator,
-    CoordinatorState, Proof, Task, Worker,
+    CoordinatorState, GpuAttempt, Proof, Task, Worker,
 };
 
 use super::{AssignmentPolicy, TaskMetadata};
@@ -151,6 +151,16 @@ impl BalancedPolicy {
                     .unwrap();
                 mut_task.worker = Some(worker.id.clone());
                 mut_task.status = TaskStatus::Running;
+                // Record this attempt. `complete_task` uses the record to add this
+                // worker's device time. This also works when the coordinator removed
+                // the worker, or when it redelivered the task.
+                mut_task.gpu_attempts.insert(
+                    worker.id.clone(),
+                    GpuAttempt {
+                        on_gpu: matches!(worker.worker_type, WorkerType::Gpu | WorkerType::All),
+                        credited: false,
+                    },
+                );
 
                 // Update proof GPU weight tracking for GPU tasks
                 if worker_type == WorkerType::Gpu {

@@ -85,6 +85,8 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
                             version: hb.version.clone(),
                             git_sha: hb.git_sha.clone(),
                             image_tag: hb.image_tag.clone(),
+                            gpu_name: hb.gpu_name.clone(),
+                            gpu_memory_total_bytes: hb.gpu_memory_total_bytes,
                             location,
                         },
                     )

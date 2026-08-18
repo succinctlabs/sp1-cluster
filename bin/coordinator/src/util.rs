@@ -76,6 +76,7 @@ pub fn spawn_coordinator_periodic_task<P: AssignmentPolicy>(
     tokio::task::spawn({
         async move {
             loop {
+                coordinator.accumulate_gpu_available_ms().await;
                 coordinator.cleanup_dead_workers().await;
                 coordinator.cleanup_dead_subscribers().await;
                 coordinator.cleanup_stale_task_channels();

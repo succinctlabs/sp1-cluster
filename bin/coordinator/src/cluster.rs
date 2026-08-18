@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc, time::SystemTime};
 
 use crate::metrics::CoordinatorMetrics;
-use crate::{AssignmentPolicy, Coordinator, ProofResult};
+use crate::{AssignmentPolicy, ClusterInfo, Coordinator, ProofResult};
 use dashmap::{DashMap, DashSet};
 use futures::StreamExt;
 use hex;
@@ -138,10 +138,9 @@ pub fn spawn_proof_status_task<P: AssignmentPolicy>(
 const MANIFEST_PUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(240);
 
 /// Spawn a task that periodically pushes the coordinator's full component build
-/// manifest (its own build + one entry per connected worker) to the cluster API,
-/// where the fulfiller reads it for `ReportProverInfo`. Best-effort: a failed push
-/// just retries next tick, and the API-side `updated_at` going stale is how readers
-/// detect a dead coordinator. Stops when `token` fires.
+/// manifest and GPU capacity snapshot to the cluster API for `ReportProverInfo`.
+/// Best-effort: a failed push retries next tick, and a stale API-side `updated_at`
+/// shows readers the coordinator is dead. Stops when `token` fires.
 pub fn spawn_manifest_push_task<P: AssignmentPolicy>(
     api_client: Arc<ClusterServiceClient>,
     coordinator: Arc<Coordinator<P>>,
@@ -149,8 +148,14 @@ pub fn spawn_manifest_push_task<P: AssignmentPolicy>(
 ) -> JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
-            let components = coordinator.get_cluster_component_info().await;
-            if let Err(e) = api_client.set_cluster_component_info(components).await {
+            let ClusterInfo {
+                components,
+                capacity,
+            } = coordinator.get_cluster_info().await;
+            if let Err(e) = api_client
+                .set_cluster_component_info(components, Some(capacity))
+                .await
+            {
                 tracing::warn!(
                     "failed to push cluster component manifest to API (retrying next tick): {e}"
                 );

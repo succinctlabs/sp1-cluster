@@ -290,6 +290,10 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
     /// SKIPPED: the receiver treats the payload as a full snapshot, so sending a
     /// partial one would prune coordinator/worker rows. The next tick retries.
     ///
+    /// The GPU capacity snapshot travels on the same report and shares the manifest's age
+    /// gate (`updated_at`). It must not go through `assemble_components`: the dedupe there
+    /// removes the per-node counts. A cluster without capacity still reports its components.
+    ///
     /// On any error, logs a warning and returns — this telemetry never fails the
     /// fulfiller. `ReportProverInfo` carries no nonce, so unlike fulfill/fail it needs
     /// no `nonce_lock` serialization.
@@ -304,6 +308,13 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                 return;
             }
         };
+
+        // Taken before `fresh_manifest_components` consumes the manifest. Each skip below
+        // also skips the capacity: a snapshot goes out only with an accepted manifest.
+        let capacity = manifest
+            .capacity
+            .clone()
+            .map(prover_info::capacity_from_cluster);
 
         let cluster_components = match fresh_manifest_components(manifest, time_now()) {
             Ok(components) => components,
@@ -323,7 +334,13 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 
         if let Err(e) = self
             .network
-            .report_prover_info(self.domain.as_slice(), prover, components, &self.signer)
+            .report_prover_info(
+                self.domain.as_slice(),
+                prover,
+                components,
+                capacity,
+                &self.signer,
+            )
             .await
         {
             warn!("failed to report prover info (continuing): {:?}", e);
@@ -1159,4 +1176,91 @@ mod tests {
         };
         assert!(fresh_manifest_components(manifest, now).is_ok());
     }
+
+    // --- capacity reporting (routed around the component dedupe) ---
+
+    /// Eight same-build GPU workers on one GPU model: here the component dedupe and the
+    /// capacity snapshot must disagree.
+    fn eight_node_manifest() -> sp1_cluster_common::proto::ClusterComponentManifest {
+        let mut components = vec![cluster_entry("coordinator", "coordsha")];
+        components.extend(std::iter::repeat_n(cluster_entry("gpu-node", "gpusha"), 8));
+        sp1_cluster_common::proto::ClusterComponentManifest {
+            components,
+            updated_at: 1_000_000,
+            capacity: Some(sp1_cluster_common::proto::ClusterCapacitySnapshot {
+                observed_at: 1_000_000,
+                counters_since: 999_000,
+                gpu_nodes: 8,
+                gpu_available_ms_total: 8_000_000,
+                gpu_busy_ms_total: 2_000_000,
+                gpus: vec![sp1_cluster_common::proto::GpuClassCount {
+                    name: "NVIDIA L4".to_string(),
+                    memory_total_bytes: 24 * 1024 * 1024 * 1024,
+                    node_count: 8,
+                }],
+            }),
+        }
+    }
+
+    #[test]
+    fn capacity_survives_the_component_dedupe_that_collapses_its_nodes() {
+        let manifest = eight_node_manifest();
+        // The same two steps the fulfiller runs, in order.
+        let capacity = manifest
+            .capacity
+            .clone()
+            .map(prover_info::capacity_from_cluster)
+            .expect("manifest carries capacity");
+        let components = assemble_components(
+            &fulfiller_identity(),
+            fresh_manifest_components(manifest, 1_000_000).unwrap(),
+        )
+        .unwrap();
+
+        // The dedupe merges eight identical builds into one gpu-node entry.
+        assert_eq!(
+            components
+                .iter()
+                .filter(|c| c.component == "gpu-node")
+                .count(),
+            1,
+            "the component dedupe still collapses same-build workers"
+        );
+        // Capacity does not pass through the dedupe, so the node count stays 8.
+        assert_eq!(
+            capacity.gpu_nodes, 8,
+            "capacity must not be collapsed by the component dedupe"
+        );
+        assert_eq!(capacity.gpus[0].node_count, 8);
+        assert_eq!(capacity.gpu_available_ms_total, 8_000_000);
+        assert_eq!(capacity.gpu_busy_ms_total, 2_000_000);
+    }
+
+    #[test]
+    fn a_manifest_without_capacity_still_yields_reportable_components() {
+        // Absent capacity must not turn a good report into a skip.
+        let manifest = sp1_cluster_common::proto::ClusterComponentManifest {
+            components: vec![
+                cluster_entry("coordinator", "coordsha"),
+                cluster_entry("gpu-node", "gpusha"),
+            ],
+            updated_at: 1_000_000,
+            capacity: None,
+        };
+        let capacity = manifest.capacity.clone();
+        let components = assemble_components(
+            &fulfiller_identity(),
+            fresh_manifest_components(manifest, 1_000_000).unwrap(),
+        )
+        .unwrap();
+
+        assert!(capacity.is_none());
+        assert_eq!(components.len(), 3, "fulfiller + coordinator + gpu-node");
+    }
+
+    // No test covers "every skip path drops the capacity". The property is structural:
+    // `report_prover_info` returns before the send on each rejection, and this crate has no
+    // doubles to observe that. The `fresh_manifest_components_rejects_*` and
+    // `assemble_components_rejects_*` tests cover the rejections, and none of those gates
+    // reads the capacity field.
 }

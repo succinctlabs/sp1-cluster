@@ -66,6 +66,91 @@ pub fn worker_component_name(worker_type: WorkerType) -> Option<&'static str> {
     }
 }
 
+/// Whether a worker counts as a connected GPU node for capacity reporting. Each GPU node drives
+/// one GPU, so the count of matching workers is a device count.
+///
+/// - `Gpu` and `All` both count: `All` is `NodeConfig::default()` and receives GPU tasks.
+/// - A closed (draining) worker counts, intentionally: its completions still add to
+///   [`CoordinatorState::gpu_busy_ms_total`]. If you exclude it, busy time becomes larger
+///   than available time; the SPN stores such a snapshot with only a warning, so the
+///   published utilization is silently wrong. Do not add `!closed` here.
+/// - An expired heartbeat does not count: the exact complement of the
+///   [`Coordinator::cleanup_dead_workers`] condition.
+pub fn is_connected_gpu_node(
+    worker_type: WorkerType,
+    last_heartbeat: u64,
+    now: u64,
+    heartbeat_timeout_secs: u64,
+) -> bool {
+    matches!(worker_type, WorkerType::Gpu | WorkerType::All)
+        && now.saturating_sub(last_heartbeat) <= heartbeat_timeout_secs
+}
+
+/// Group nodes into one [`proto::GpuClassCount`] per distinct `(name, memory_total_bytes)`.
+///
+/// The `node_count` values sum to the number of input nodes. Nodes with an unidentified GPU
+/// group under the empty name with zero VRAM; they are not dropped.
+///
+/// The result is sorted, so snapshots of an unchanged cluster are identical.
+pub fn group_gpu_classes(nodes: impl Iterator<Item = (String, u64)>) -> Vec<proto::GpuClassCount> {
+    let mut counts: HashMap<(String, u64), u32> = HashMap::new();
+    for node in nodes {
+        *counts.entry(node).or_insert(0) += 1;
+    }
+
+    let mut classes: Vec<proto::GpuClassCount> = counts
+        .into_iter()
+        .map(
+            |((name, memory_total_bytes), node_count)| proto::GpuClassCount {
+                name,
+                memory_total_bytes,
+                node_count,
+            },
+        )
+        .collect();
+    classes.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then(a.memory_total_bytes.cmp(&b.memory_total_bytes))
+    });
+    classes
+}
+
+/// Add one tick to the GPU availability integral: `gpu_nodes * elapsed`.
+///
+/// `elapsed` must come from a monotonic [`std::time::Instant`]: a wall-clock step must not
+/// change the integral. Arithmetic saturates, so the counter cannot decrease.
+pub fn advance_gpu_available_ms(total: u64, gpu_nodes: u32, elapsed: Duration) -> u64 {
+    let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+    total.saturating_add(u64::from(gpu_nodes).saturating_mul(elapsed_ms))
+}
+
+/// Advance the GPU availability integral of `state` to now, and start the next interval.
+///
+/// Used by the periodic tick and by [`Coordinator::get_cluster_info`], which must advance
+/// the integral itself so its snapshot is not one [`COORDINATOR_PERIODIC_INTERVAL`] behind
+/// its busy counter.
+///
+/// The caller supplies `now` so the integral, the node count, and `observed_at` use one
+/// timestamp.
+fn advance_gpu_available_integral<P: AssignmentPolicy>(state: &mut CoordinatorState<P>, now: u64) {
+    let gpu_nodes = state.connected_gpu_nodes(now).count() as u32;
+    // Read the instant once, so no time is lost between two intervals.
+    let tick = std::time::Instant::now();
+    let elapsed = tick.saturating_duration_since(state.gpu_available_last_tick);
+    state.gpu_available_last_tick = tick;
+    state.gpu_available_ms_total =
+        advance_gpu_available_ms(state.gpu_available_ms_total, gpu_nodes, elapsed);
+}
+
+/// The current unix timestamp in seconds.
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 /// Estimate the duration of a task based on its type. Used as a heuristic when assigning tasks to
 /// workers.
 pub fn estimate_duration(task_type: TaskType) -> u128 {
@@ -250,6 +335,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 policy: P::default(),
                 execute_only_mode: false,
                 worker_heartbeat_timeout_secs: DEFAULT_WORKER_HEARTBEAT_TIMEOUT,
+                gpu_busy_ms_total: 0,
+                gpu_available_ms_total: 0,
+                gpu_available_last_tick: std::time::Instant::now(),
+                counters_since: unix_now(),
             })),
             subscribers: DashMap::new(),
             task_channels: DashMap::new(),
@@ -261,6 +350,17 @@ impl<P: AssignmentPolicy> Coordinator<P> {
     pub fn set_metrics(&mut self, metrics: Arc<metrics::CoordinatorMetrics>) {
         self.metrics = Some(metrics);
     }
+}
+
+/// The cluster telemetry the coordinator publishes to the API. One state read builds both
+/// fields, so they describe the same instant.
+#[derive(Clone, Debug)]
+pub struct ClusterInfo {
+    /// The coordinator's build identity plus one entry per connected worker.
+    pub components: Vec<proto::ClusterComponentInfo>,
+
+    /// GPU capacity and utilization from the same state read.
+    pub capacity: proto::ClusterCapacitySnapshot,
 }
 
 /// A proof being proven with tasks to complete.
@@ -322,10 +422,45 @@ pub struct CoordinatorState<P: AssignmentPolicy> {
 
     /// Seconds a worker can be inactive before it is considered dead and its tasks requeue.
     pub worker_heartbeat_timeout_secs: u64,
+
+    /// Monotonic sum of GPU busy time in GPU-milliseconds since [`Self::counters_since`].
+    /// The coordinator adds `TaskMetadata::gpu_ms` one time for each assignment attempt
+    /// on a Gpu or All worker. See [`GpuAttempt`]. A redelivered task uses device time
+    /// on each worker that ran it. The counter is not part of [`AssignmentPolicy`], so
+    /// it has one meaning for all policies.
+    pub gpu_busy_ms_total: u64,
+
+    /// Monotonic integral of the connected GPU node count over time, in GPU-milliseconds,
+    /// since [`Self::counters_since`].
+    pub gpu_available_ms_total: u64,
+
+    /// The instant of the last integral advance. Monotonic, so a clock step cannot change the
+    /// integral.
+    pub gpu_available_last_tick: std::time::Instant,
+
+    /// Unix seconds when this process started and reset both counters. Difference two
+    /// snapshots only if their `counters_since` values match.
+    pub counters_since: u64,
+}
+
+impl<P: AssignmentPolicy> CoordinatorState<P> {
+    /// The workers that count as connected GPU nodes at `now` (unix seconds), per
+    /// [`is_connected_gpu_node`].
+    pub fn connected_gpu_nodes(&self, now: u64) -> impl Iterator<Item = &Worker<P>> {
+        let heartbeat_timeout_secs = self.worker_heartbeat_timeout_secs;
+        self.workers.values().filter(move |worker| {
+            is_connected_gpu_node(
+                worker.worker_type,
+                worker.last_heartbeat,
+                now,
+                heartbeat_timeout_secs,
+            )
+        })
+    }
 }
 
 /// What a worker says about itself when it registers (`OpenRequest`): the build
-/// it is running and where it runs.
+/// it is running, the GPU it is bound to, and where it runs.
 ///
 /// Grouped rather than passed as four adjacent `String`s, where any two could be
 /// swapped at a call site without the compiler noticing.
@@ -339,6 +474,13 @@ pub struct WorkerIdentity {
 
     /// Container image tag the worker is running.
     pub image_tag: String,
+
+    /// Name of the bound GPU from CUDA, for example "NVIDIA L4". Empty if the worker has
+    /// no GPU or could not identify it.
+    pub gpu_name: String,
+
+    /// Total VRAM of the bound GPU in bytes. Zero if unknown.
+    pub gpu_memory_total_bytes: u64,
 
     /// Where the worker runs, as an opaque label the worker derives from its
     /// own environment (empty = it could not tell). sp1-cluster does not
@@ -410,6 +552,25 @@ impl<P: AssignmentPolicy> Worker<P> {
     }
 }
 
+/// One assignment of a task to one worker. The policy writes this record when it
+/// assigns the task. `complete_task` reads the record when the worker's report
+/// arrives.
+///
+/// Each attempt uses real device time, so the coordinator adds GPU time one time
+/// for each attempt. A worker can send its report more than one time, because the
+/// worker retries `complete_task` without limit. The `credited` flag limits each
+/// attempt to one count. The coordinator can remove a worker from
+/// `CoordinatorState::workers` before the worker's report arrives. For that case,
+/// `on_gpu` keeps the worker class from assignment time.
+#[derive(Clone, Copy, Debug)]
+pub struct GpuAttempt {
+    /// True when the worker was a Gpu or All worker at assignment time. Only these
+    /// workers add to `gpu_available_ms_total`.
+    pub on_gpu: bool,
+    /// True after one report for this attempt added its GPU time.
+    pub credited: bool,
+}
+
 /// A task to be completed.
 #[derive(Clone)]
 pub struct Task<P: AssignmentPolicy> {
@@ -434,6 +595,13 @@ pub struct Task<P: AssignmentPolicy> {
 
     /// The worker that is currently working on this task.
     pub worker: Option<String>,
+
+    /// All assignment attempts of this task, by worker id. See [`GpuAttempt`].
+    /// The map is part of the task. When the coordinator removes the task, it also
+    /// removes the map, and no other cleanup is necessary. If a report arrives
+    /// after the coordinator removed the proof, `complete_task` returns NotFound
+    /// and does not record that device time.
+    pub gpu_attempts: HashMap<String, GpuAttempt>,
 
     /// Number of times this task has been re-enqueued by the dead-worker cleanup path
     /// (heartbeat timeout, not a worker-reported failure).
@@ -613,6 +781,7 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             subscribers: HashSet::new(),
             worker: None,
             // allocation: None,
+            gpu_attempts: HashMap::new(),
             dead_worker_requeue_count: 0,
             extra: P::TaskState::default(),
         };
@@ -684,6 +853,28 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 task.data.proof_id,
                 P::debug_proof(&proof.extra),
             );
+            // Copy the GPU busy time before the policy takes ownership of `metadata` below.
+            let gpu_ms = metadata.gpu_ms;
+            // Decide if this report adds GPU time. The code below adds the time to
+            // `state.gpu_busy_ms_total` when the borrow of `task` ends. Each
+            // assignment attempt counts one time. The policy writes a [`GpuAttempt`]
+            // when it assigns the task, and the first report for that attempt sets
+            // `credited`. The worker retries `complete_task` without limit, so a
+            // later copy of the same report does not count again. A redelivered task
+            // is a new attempt with its own record, and its device time also counts.
+            // The coordinator can remove a worker before the worker's report
+            // arrives. The record keeps `on_gpu` from assignment time, so that
+            // report still counts. A report without a record adds nothing. In a
+            // CPU-only cluster (`SP1_CLUSTER_CPU_ONLY`), all records have `on_gpu ==
+            // false`. Then busy stays 0 while available is 0, and the SPN does not
+            // store a wrong utilization.
+            let credit_gpu_time = match task.gpu_attempts.get_mut(&worker_id) {
+                Some(attempt) if !attempt.credited => {
+                    attempt.credited = true;
+                    attempt.on_gpu
+                }
+                _ => false,
+            };
             // A task can complete twice — a retry, or a preempted worker's reporter
             // landing next to its redelivery's. Only the first report notifies and
             // runs the success hooks; those record billing and scheduling history,
@@ -737,6 +928,10 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             } else {
                 None
             };
+
+            if credit_gpu_time {
+                state.gpu_busy_ms_total = state.gpu_busy_ms_total.saturating_add(gpu_ms);
+            }
 
             // Policy weight is charged when a worker takes the task and released when it
             // gives it up. A completion from a worker that no longer holds it — preempted,
@@ -998,6 +1193,26 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             self.assign_tasks(state).await.unwrap();
         }
         Ok(())
+    }
+
+    /// Advance the GPU availability integral by one periodic tick.
+    ///
+    /// Adds `connected GPU nodes * time since the previous tick`: the GPU time the cluster
+    /// had available, the denominator for `gpu_busy_ms_total`.
+    ///
+    /// The node count is sampled at the end of each interval, so the error is at most one
+    /// interval per node join or leave: small against the 240s push cadence.
+    pub async fn accumulate_gpu_available_ms(self: &Arc<Self>) {
+        let mut state = self
+            .state
+            .clone()
+            .write_owned()
+            .instrument(tracing::debug_span!("acquire_write"))
+            .await;
+
+        track_latency!("coordinator.accumulate_gpu_available_ms", {
+            advance_gpu_available_integral(&mut state, unix_now());
+        });
     }
 
     /// Check if any workers have timed out.
@@ -1911,20 +2126,27 @@ impl<P: AssignmentPolicy> Coordinator<P> {
         }
     }
 
-    /// Build the cluster component manifest: the coordinator's own build identity
-    /// followed by one entry per connected worker, from the in-memory registry.
+    /// Build the cluster telemetry the manifest push publishes: the component build manifest
+    /// and the GPU capacity snapshot.
     ///
-    /// The manifest push task periodically publishes this to the cluster API
-    /// (`SetClusterComponentInfo`), where the fulfiller reads it and forwards the
-    /// entries to the SPN `ReportProverInfo` RPC. Component names use the
-    /// network's allowlist: "coordinator", "gpu-node", "cpu-node".
-    pub async fn get_cluster_component_info(&self) -> Vec<proto::ClusterComponentInfo> {
+    /// The manifest is the coordinator's build identity plus one entry per connected worker,
+    /// named from the network's allowlist: "coordinator", "gpu-node", "cpu-node". One
+    /// state-lock acquisition reads everything, so all fields describe `observed_at`.
+    ///
+    /// The lock is a write lock because this function must advance the availability integral
+    /// itself; if it does not, the availability figure is up to one
+    /// [`COORDINATOR_PERIODIC_INTERVAL`] behind the busy counter. This runs once per push
+    /// (240s), so the write lock is cheap.
+    pub async fn get_cluster_info(&self) -> ClusterInfo {
         // Acquire the same state lock used elsewhere; keep the registry in-memory.
-        let state = self
+        let mut state = self
             .state
-            .read()
-            .instrument(tracing::debug_span!("acquire"))
+            .write()
+            .instrument(tracing::debug_span!("acquire_write"))
             .await;
+
+        let observed_at = unix_now();
+        advance_gpu_available_integral(&mut state, observed_at);
 
         // Coordinator's own build identity first.
         let mut components = vec![proto::ClusterComponentInfo {
@@ -1955,7 +2177,27 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             })
         }));
 
-        components
+        // Only workers that pass `is_connected_gpu_node` count. `gpu_nodes` is the sum of the
+        // breakdown, so the two always agree.
+        let gpus = group_gpu_classes(state.connected_gpu_nodes(observed_at).map(|w| {
+            (
+                w.identity.gpu_name.clone(),
+                w.identity.gpu_memory_total_bytes,
+            )
+        }));
+        let capacity = proto::ClusterCapacitySnapshot {
+            observed_at,
+            counters_since: state.counters_since,
+            gpu_nodes: gpus.iter().map(|class| class.node_count).sum(),
+            gpu_available_ms_total: state.gpu_available_ms_total,
+            gpu_busy_ms_total: state.gpu_busy_ms_total,
+            gpus,
+        };
+
+        ClusterInfo {
+            components,
+            capacity,
+        }
     }
 
     /// Print coordinator info.
@@ -2515,6 +2757,7 @@ mod tests {
                     retries: 0,
                     subscribers: HashSet::new(),
                     worker: None,
+                    gpu_attempts: HashMap::new(),
                     dead_worker_requeue_count: 0,
                     extra: Default::default(),
                 },
@@ -2626,6 +2869,7 @@ mod tests {
                 retries: 0,
                 subscribers: HashSet::new(),
                 worker: worker_id.map(String::from),
+                gpu_attempts: HashMap::new(),
                 dead_worker_requeue_count: 0,
                 extra: Default::default(),
             },
@@ -2956,6 +3200,7 @@ mod tests {
             retries: 0,
             subscribers: HashSet::new(),
             worker: worker.map(String::from),
+            gpu_attempts: HashMap::new(),
             dead_worker_requeue_count: 0,
             extra: Default::default(),
         }
@@ -3200,7 +3445,7 @@ mod tests {
             version: version.into(),
             git_sha: git_sha.into(),
             image_tag: image_tag.into(),
-            location: String::new(),
+            ..WorkerIdentity::default()
         }
     }
 
@@ -3288,7 +3533,7 @@ mod tests {
         .await
         .unwrap();
 
-        let components = c.get_cluster_component_info().await;
+        let components = c.get_cluster_info().await.components;
 
         // Exactly one coordinator entry + one per worker.
         assert_eq!(components.len(), 3, "coordinator + 2 workers");
@@ -3328,7 +3573,7 @@ mod tests {
         .await
         .unwrap();
 
-        let components = c.get_cluster_component_info().await;
+        let components = c.get_cluster_info().await.components;
 
         let all = components
             .iter()
@@ -3364,7 +3609,7 @@ mod tests {
         .await
         .unwrap();
 
-        let components = c.get_cluster_component_info().await;
+        let components = c.get_cluster_info().await.components;
 
         // Non-reportable worker_types are skipped (never reported as a false
         // cpu-node); only the coordinator's own entry remains.
@@ -4059,6 +4304,592 @@ mod tests {
                 .active_tasks
                 .contains(&("p1".into(), "t1".into())),
             "a succeeded task must not be re-assigned"
+        );
+    }
+
+    // --- GPU capacity reporting (node filter, counters, snapshot) ---
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const TIMEOUT: u64 = DEFAULT_WORKER_HEARTBEAT_TIMEOUT;
+    const NOW: u64 = 1_700_000_000;
+
+    /// Insert a worker with the given type, closed flag, and heartbeat, without the
+    /// registration RPC. For filter tests that need a draining or silent worker.
+    fn add_worker_to_state(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        worker_id: &str,
+        worker_type: WorkerType,
+        closed: bool,
+        last_heartbeat: u64,
+    ) {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut worker = Worker::new(
+            worker_id.into(),
+            worker_type,
+            24,
+            tx,
+            WorkerIdentity::default(),
+        );
+        worker.closed = closed;
+        worker.last_heartbeat = last_heartbeat;
+        state.workers.insert(worker_id.into(), worker);
+    }
+
+    /// Write the attempt record that `complete_task` reads. The policies write the
+    /// same record when they assign a task to a worker.
+    fn record_gpu_attempt(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        proof_id: &str,
+        task_id: &str,
+        worker_id: &str,
+        on_gpu: bool,
+    ) {
+        state
+            .proofs
+            .get_mut(proof_id)
+            .unwrap()
+            .tasks
+            .get_mut(task_id)
+            .unwrap()
+            .gpu_attempts
+            .insert(
+                worker_id.into(),
+                GpuAttempt {
+                    on_gpu,
+                    credited: false,
+                },
+            );
+    }
+
+    /// Insert a live worker of the given type. `insert_live_worker` always inserts a
+    /// GPU worker; the busy-crediting tests need CPU and All workers too.
+    fn insert_live_worker_of(
+        state: &mut CoordinatorState<DefaultPolicy>,
+        worker_id: &str,
+        worker_type: WorkerType,
+    ) {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        state.workers.insert(
+            worker_id.into(),
+            Worker::new(
+                worker_id.into(),
+                worker_type,
+                24,
+                tx,
+                WorkerIdentity::default(),
+            ),
+        );
+    }
+
+    /// Register a worker bound to the given GPU. `add_worker` sets its heartbeat to now.
+    async fn add_gpu_worker(
+        c: &Arc<Coordinator<DefaultPolicy>>,
+        worker_id: &str,
+        worker_type: WorkerType,
+        gpu_name: &str,
+        gpu_memory_total_bytes: u64,
+    ) {
+        // The receiver is dropped: these tests assert on registry state, not on messages.
+        let (tx, _rx) = mpsc::unbounded_channel();
+        c.add_worker(
+            worker_id.into(),
+            worker_type,
+            24,
+            tx,
+            WorkerIdentity {
+                gpu_name: gpu_name.into(),
+                gpu_memory_total_bytes,
+                ..build("2.6.0", "sha", "tag")
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn gpu_node_filter_counts_both_gpu_and_all_worker_types() {
+        // `All` is NodeConfig::default() and receives GPU tasks, so it must count.
+        assert!(is_connected_gpu_node(WorkerType::Gpu, NOW, NOW, TIMEOUT));
+        assert!(is_connected_gpu_node(WorkerType::All, NOW, NOW, TIMEOUT));
+    }
+
+    #[test]
+    fn gpu_node_filter_excludes_non_gpu_worker_types() {
+        for worker_type in [
+            WorkerType::Cpu,
+            WorkerType::None,
+            WorkerType::UnspecifiedWorkerType,
+        ] {
+            assert!(
+                !is_connected_gpu_node(worker_type, NOW, NOW, TIMEOUT),
+                "{worker_type:?} drives no GPU"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn gpu_node_filter_counts_a_draining_worker() {
+        // A draining (closed) worker continues its in-flight tasks, and those completions add
+        // to gpu_busy_ms_total. It must count as available too; if not, busy time can become
+        // larger than available time and the published utilization is silently wrong. For
+        // this reason, `is_connected_gpu_node` has no `closed` parameter.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            add_worker_to_state(&mut state, "draining", WorkerType::Gpu, true, unix_now());
+            add_worker_to_state(
+                &mut state,
+                "draining_all",
+                WorkerType::All,
+                true,
+                unix_now(),
+            );
+        }
+
+        let state = c.state.read().await;
+        assert_eq!(
+            state.connected_gpu_nodes(unix_now()).count(),
+            2,
+            "a draining GPU node still occupies its GPU, so it still counts"
+        );
+    }
+
+    #[test]
+    fn gpu_node_filter_excludes_an_expired_heartbeat() {
+        // At the timeout the worker is alive; one second later it is not: the exact
+        // complement of the `cleanup_dead_workers` condition.
+        assert!(is_connected_gpu_node(
+            WorkerType::Gpu,
+            NOW - TIMEOUT,
+            NOW,
+            TIMEOUT
+        ));
+        assert!(!is_connected_gpu_node(
+            WorkerType::Gpu,
+            NOW - TIMEOUT - 1,
+            NOW,
+            TIMEOUT
+        ));
+    }
+
+    #[test]
+    fn gpu_node_filter_agrees_with_the_dead_worker_reaper() {
+        // The reaper removes a worker if `last_heartbeat + timeout < now`. The filter must
+        // exclude exactly those workers.
+        for age in 0..(TIMEOUT + 5) {
+            let last_heartbeat = NOW - age;
+            let reaper_considers_dead = last_heartbeat + TIMEOUT < NOW;
+            let counted = is_connected_gpu_node(WorkerType::Gpu, last_heartbeat, NOW, TIMEOUT);
+            assert_eq!(
+                counted, !reaper_considers_dead,
+                "disagreement at heartbeat age {age}s"
+            );
+        }
+    }
+
+    #[test]
+    fn availability_integral_accumulates_nodes_times_elapsed() {
+        // Two nodes for ten seconds is twenty GPU-seconds.
+        assert_eq!(
+            advance_gpu_available_ms(0, 2, Duration::from_secs(10)),
+            20_000
+        );
+        // Monotonic: each tick adds to the running total.
+        assert_eq!(
+            advance_gpu_available_ms(20_000, 3, Duration::from_secs(10)),
+            50_000
+        );
+        // An empty cluster adds nothing, for any tick length.
+        assert_eq!(
+            advance_gpu_available_ms(50_000, 0, Duration::from_secs(600)),
+            50_000
+        );
+        // A zero-length tick also adds nothing.
+        assert_eq!(advance_gpu_available_ms(50_000, 8, Duration::ZERO), 50_000);
+    }
+
+    #[test]
+    fn availability_integral_saturates_instead_of_wrapping() {
+        // Saturation keeps the counter monotonic for all inputs.
+        assert_eq!(
+            advance_gpu_available_ms(u64::MAX - 1, 8, Duration::from_secs(10)),
+            u64::MAX
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_cluster_reports_zero_gpu_nodes_and_no_classes() {
+        let c = Arc::new(coordinator());
+        let capacity = c.get_cluster_info().await.capacity;
+        assert_eq!(capacity.gpu_nodes, 0);
+        assert!(capacity.gpus.is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_worker_stores_the_bound_gpu() {
+        let c = Arc::new(coordinator());
+        add_gpu_worker(&c, "gpu1", WorkerType::Gpu, "NVIDIA L4", 24 * GIB).await;
+
+        let state = c.state.read().await;
+        let worker = state.workers.get("gpu1").expect("worker registered");
+        assert_eq!(worker.identity.gpu_name, "NVIDIA L4");
+        assert_eq!(worker.identity.gpu_memory_total_bytes, 24 * GIB);
+    }
+
+    #[tokio::test]
+    async fn add_worker_reconnect_refreshes_the_bound_gpu() {
+        let c = Arc::new(coordinator());
+        add_gpu_worker(&c, "gpu1", WorkerType::Gpu, "NVIDIA L4", 24 * GIB).await;
+        // The same worker id reconnects from different hardware.
+        add_gpu_worker(
+            &c,
+            "gpu1",
+            WorkerType::Gpu,
+            "NVIDIA H100 80GB HBM3",
+            80 * GIB,
+        )
+        .await;
+
+        let state = c.state.read().await;
+        let worker = state.workers.get("gpu1").expect("worker registered");
+        assert_eq!(
+            worker.identity.gpu_name, "NVIDIA H100 80GB HBM3",
+            "the GPU must refresh on reconnect, not stay stale"
+        );
+        assert_eq!(worker.identity.gpu_memory_total_bytes, 80 * GIB);
+    }
+
+    #[tokio::test]
+    async fn completing_a_task_accumulates_its_gpu_time() {
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            insert_live_worker_of(&mut state, "w1", WorkerType::Gpu);
+            state
+                .workers
+                .get_mut("w1")
+                .unwrap()
+                .active_tasks
+                .insert(("p1".into(), "t1".into()));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", true);
+        }
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(c.state.read().await.gpu_busy_ms_total, 4_200);
+    }
+
+    #[tokio::test]
+    async fn repeat_completion_does_not_double_count_gpu_time() {
+        // The worker retries `complete_task` without limit, so one report can
+        // arrive two times. The device time of the attempt counts one time.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            // A second task keeps the proof alive, so the repeat completion finds it.
+            let proof = state.proofs.get_mut("p1").unwrap();
+            proof.active_tasks = 2;
+            insert_live_worker_of(&mut state, "w1", WorkerType::Gpu);
+            state
+                .workers
+                .get_mut("w1")
+                .unwrap()
+                .active_tasks
+                .insert(("p1".into(), "t1".into()));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", true);
+        }
+
+        for _ in 0..2 {
+            c.complete_task(
+                "w1".into(),
+                "p1".into(),
+                "t1".into(),
+                policy::TaskMetadata { gpu_ms: 4_200 },
+            )
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(
+            c.state.read().await.gpu_busy_ms_total,
+            4_200,
+            "an attempt's report counts once however many times it lands"
+        );
+    }
+
+    #[tokio::test]
+    async fn completing_a_task_on_a_cpu_worker_accumulates_no_gpu_time() {
+        // Under SP1_CLUSTER_CPU_ONLY, CPU workers run GPU task types, and the
+        // cluster has zero GPU nodes. The policies record these attempts with
+        // `on_gpu == false`. If GPU time got through, snapshots would show busy > 0
+        // while available is 0. The SPN would then store a wrong utilization.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            insert_live_worker_of(&mut state, "w1", WorkerType::Cpu);
+            state
+                .workers
+                .get_mut("w1")
+                .unwrap()
+                .active_tasks
+                .insert(("p1".into(), "t1".into()));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", false);
+        }
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            c.state.read().await.gpu_busy_ms_total,
+            0,
+            "a CPU worker is not in the population gpu_available_ms_total integrates over"
+        );
+    }
+
+    #[tokio::test]
+    async fn completing_a_task_on_an_all_worker_accumulates_gpu_time() {
+        // An `All` worker counts as a GPU node for available time, so its
+        // completions must add busy time. The test runs the real assignment path.
+        // Thus the test examines the `All -> on_gpu` mapping in the policy.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", None);
+            let queued = state
+                .proofs
+                .get("p1")
+                .unwrap()
+                .tasks
+                .get("t1")
+                .unwrap()
+                .clone();
+            c.enqueue_task(&mut state, queued).await;
+            insert_live_worker_of(&mut state, "w1", WorkerType::All);
+        }
+
+        let state = c.state.clone().write_owned().await;
+        c.assign_tasks(state).await.unwrap();
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(c.state.read().await.gpu_busy_ms_total, 4_200);
+    }
+
+    #[tokio::test]
+    async fn completing_a_task_on_a_draining_worker_still_accumulates_gpu_time() {
+        // See `gpu_node_filter_counts_a_draining_worker`. A draining node adds
+        // available time, so it must also add busy time. The two counters must
+        // count the same set of workers. Do not add a `closed` check here.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            insert_live_worker_of(&mut state, "w1", WorkerType::Gpu);
+            let worker = state.workers.get_mut("w1").unwrap();
+            worker.closed = true;
+            worker.active_tasks.insert(("p1".into(), "t1".into()));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", true);
+        }
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(c.state.read().await.gpu_busy_ms_total, 4_200);
+    }
+
+    #[tokio::test]
+    async fn each_redelivered_attempt_accumulates_its_own_gpu_time() {
+        // t1 first ran on w1. Dead-worker cleanup removed w1, and the redelivery ran
+        // on w2. Each attempt used real device time, and `gpu_available_ms_total`
+        // counted both workers. Thus each report must add its time. The report from
+        // w1 arrives after the task succeeded and after the coordinator removed w1.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w2"));
+            // A second task keeps the proof alive after the first completion.
+            state.proofs.get_mut("p1").unwrap().active_tasks = 2;
+            insert_live_worker_of(&mut state, "w2", WorkerType::Gpu);
+            state
+                .workers
+                .get_mut("w2")
+                .unwrap()
+                .active_tasks
+                .insert(("p1".into(), "t1".into()));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", true);
+            record_gpu_attempt(&mut state, "p1", "t1", "w2", true);
+        }
+
+        c.complete_task(
+            "w2".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 3_000 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            c.state.read().await.gpu_busy_ms_total,
+            7_200,
+            "each attempt's device time counts once"
+        );
+    }
+
+    #[tokio::test]
+    async fn late_completion_from_a_reaped_gpu_worker_accumulates_its_time() {
+        // Dead-worker cleanup removed the worker before its report arrived. The
+        // attempt record from assignment time lets the report add its GPU time.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            record_gpu_attempt(&mut state, "p1", "t1", "w1", true);
+        }
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(c.state.read().await.gpu_busy_ms_total, 4_200);
+    }
+
+    #[tokio::test]
+    async fn completion_without_a_recorded_attempt_accumulates_no_gpu_time() {
+        // A live GPU worker reports a task that the coordinator did not assign to
+        // it. Only recorded attempts add GPU time. The code does not read the
+        // worker map.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_task(&mut state, "p1", "t1", Some("w1"));
+            insert_live_worker_of(&mut state, "w1", WorkerType::Gpu);
+            state
+                .workers
+                .get_mut("w1")
+                .unwrap()
+                .active_tasks
+                .insert(("p1".into(), "t1".into()));
+        }
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(c.state.read().await.gpu_busy_ms_total, 0);
+    }
+
+    #[tokio::test]
+    async fn assignment_records_the_attempt_that_completion_credits() {
+        // Full path through the default policy. Assignment writes the attempt
+        // record. Then `complete_task` adds the GPU time from that record. The test
+        // does not seed `gpu_attempts` by hand.
+        let c = Arc::new(coordinator());
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", None);
+            let queued = state
+                .proofs
+                .get("p1")
+                .unwrap()
+                .tasks
+                .get("t1")
+                .unwrap()
+                .clone();
+            c.enqueue_task(&mut state, queued).await;
+            insert_live_worker(&mut state, "w1");
+        }
+
+        let state = c.state.clone().write_owned().await;
+        c.assign_tasks(state).await.unwrap();
+
+        c.complete_task(
+            "w1".into(),
+            "p1".into(),
+            "t1".into(),
+            policy::TaskMetadata { gpu_ms: 4_200 },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(c.state.read().await.gpu_busy_ms_total, 4_200);
+    }
+
+    #[tokio::test]
+    async fn snapshot_advances_the_availability_integral_itself() {
+        // `get_cluster_info` must advance the integral itself; no periodic tick runs in this
+        // test.
+        let c = Arc::new(coordinator());
+        add_gpu_worker(&c, "gpu1", WorkerType::Gpu, "NVIDIA L4", 24 * GIB).await;
+        {
+            let mut state = c.state.write().await;
+            assert_eq!(
+                state.gpu_available_ms_total, 0,
+                "no tick has run, so nothing has accrued yet"
+            );
+            // Rewind the tick marker so a known interval is outstanding.
+            state.gpu_available_last_tick =
+                std::time::Instant::now() - std::time::Duration::from_secs(10);
+        }
+
+        let capacity = c.get_cluster_info().await.capacity;
+
+        assert!(
+            (9_000..=11_000).contains(&capacity.gpu_available_ms_total),
+            "expected ~1 node * 10s = 10000 GPU-ms in the snapshot, got {}",
+            capacity.gpu_available_ms_total
+        );
+        assert_eq!(
+            c.state.read().await.gpu_available_ms_total,
+            capacity.gpu_available_ms_total,
+            "the snapshot publishes the advanced integral, it does not fork its own copy"
         );
     }
 }

@@ -53,13 +53,15 @@ impl FulfillmentNetwork for MainnetFulfiller {
         domain: &[u8],
         prover: Address,
         components: Vec<spn_network_types::ComponentInfo>,
+        capacity: Option<spn_network_types::ClusterCapacitySnapshot>,
         signer: &NetworkSigner,
     ) -> Result<()> {
         // ReportProverInfo carries no nonce and writes no ledger
         // tx — it is signed, non-ledger telemetry: the body is signed and the
         // receiver verifies the signer, binding the report to the signer-resolved
         // prover. Build + sign the body exactly like fulfill_proof, minus GetNonce.
-        let body = build_report_prover_info_body(domain, prover.as_slice(), components);
+        // The signature covers the encoded body, so it covers the capacity snapshot too.
+        let body = build_report_prover_info_body(domain, prover.as_slice(), components, capacity);
 
         let request = spn_network_types::ReportProverInfoRequest {
             format: spn_network_types::MessageFormat::Binary.into(),
