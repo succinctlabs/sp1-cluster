@@ -1,3 +1,4 @@
+use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -5,7 +6,7 @@ use clap::{Args, Subcommand};
 use eyre::Result;
 use sp1_cluster_artifact::{redis::RedisArtifactClient, ArtifactClient, ArtifactType};
 use sp1_cluster_common::proto::{CreateDummyProofRequest, TaskStatus, TaskType, WorkerType};
-use sp1_cluster_utils::{request_proof_from_env, ClusterElf, ProofRequestResults};
+use sp1_cluster_utils::{request_proofs_from_env, ClusterElf, ProofRequestResults};
 use sp1_cluster_worker::client::WorkerServiceClient;
 use sp1_prover::worker::{
     ProofId, RawTaskRequest, RequesterId, SP1LightNode, TaskContext, WorkerClient,
@@ -41,9 +42,17 @@ pub struct CommonArgs {
     #[arg(short, long, default_value="compressed", value_parser = parse_proof_mode)]
     pub mode: ProofMode,
 
-    #[arg(short, long, default_value_t = 1)]
-    pub count: u32,
+    #[arg(short, long, default_value_t = NonZeroU16::MIN)]
+    pub count: NonZeroU16,
 }
+
+/// Fibonacci iterations that cost one million cycles in `artifacts/fibonacci.bin`.
+const FIBONACCI_ITERS_PER_MCYCLE: u32 = 83_333;
+
+const FIBONACCI_ELF: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../artifacts/fibonacci.bin"
+));
 
 pub fn parse_proof_mode(s: &str) -> Result<ProofMode> {
     ProofMode::from_str_name(&s.to_ascii_uppercase())
@@ -99,10 +108,15 @@ impl BenchCommand {
                     mcycles
                 );
                 let mut stdin = SP1Stdin::new();
-                stdin.write(&(mcycles * 83333));
+                stdin.write(&(mcycles * FIBONACCI_ITERS_PER_MCYCLE));
 
-                let elf = include_bytes!("../../../../artifacts/fibonacci.bin");
-                Self::run_benchmark(elf.to_vec(), stdin.clone(), common).await?;
+                Self::run_benchmark(
+                    FIBONACCI_ELF.to_vec(),
+                    stdin,
+                    common,
+                    Some(*mcycles as u64 * 1_000_000),
+                )
+                .await?;
             }
             BenchCommand::Input {
                 elf_file,
@@ -117,7 +131,7 @@ impl BenchCommand {
                 );
                 let elf = std::fs::read(elf_file)?;
                 let stdin = bincode::deserialize::<SP1Stdin>(&std::fs::read(stdin_file)?)?;
-                let proof_ids = Self::run_benchmark(elf.to_vec(), stdin, common).await?;
+                let proof_ids = Self::run_benchmark(elf.to_vec(), stdin, common, None).await?;
 
                 let elf_name = elf_file.file_name().unwrap().to_str().unwrap();
                 let workload_name = stdin_file.file_name().unwrap().to_str().unwrap();
@@ -139,7 +153,7 @@ impl BenchCommand {
                 tracing::info!("Downloading program from s3://{}/{}...", bucket, s3_path);
                 let (elf, stdin) = Self::download_from_s3(bucket, s3_path, param).await?;
                 tracing::info!("Running S3 program {:?} benchmark...", s3_path);
-                let proof_ids = Self::run_benchmark(elf, stdin, common).await?;
+                let proof_ids = Self::run_benchmark(elf, stdin, common, None).await?;
 
                 // Write all proof IDs to CSV
                 for (proof_id, duration) in proof_ids {
@@ -169,36 +183,53 @@ impl BenchCommand {
     }
 
     /// Runs a benchmark for a given elf and stdin, returning the proof ids and elapsed times.
-    ///
-    /// TODO: Expensive clone + reuploading of elf and stdin for when running for multiple repetitions.
     async fn run_benchmark(
         elf: Vec<u8>,
         stdin: SP1Stdin,
         common: &CommonArgs,
+        cycles_estimate: Option<u64>,
     ) -> Result<Vec<(String, Duration)>> {
         let client = SP1LightNode::new().await;
 
         let vk = client.setup(&elf).await.expect("failed to setup elf");
 
-        let mut proof_ids = Vec::with_capacity(common.count as usize);
-        for _ in 0..common.count {
-            let cluster_elf = ClusterElf::NewElf(elf.clone());
+        let start_time = Instant::now();
+        let results =
+            request_proofs_from_env(common.mode, 4, ClusterElf::NewElf(elf), stdin, common.count)
+                .await?;
+        let total_elapsed = start_time.elapsed();
 
-            let ProofRequestResults {
-                proof_id,
-                proof,
-                elapsed,
-            } = request_proof_from_env(common.mode, 4, cluster_elf, stdin.clone()).await?;
-
+        let mut proof_ids = Vec::with_capacity(results.len());
+        for ProofRequestResults {
+            proof_id,
+            proof,
+            elapsed,
+        } in results
+        {
             // Verify proof to CSV
             client
                 .verify(&vk, &proof.proof)
                 .expect("failed to verify proof");
 
-            tracing::info!("Proof completed in {:?}", elapsed);
+            tracing::info!("Proof {} completed in {:?}", proof_id, elapsed);
 
             proof_ids.push((proof_id, elapsed));
         }
+
+        tracing::info!(
+            "{} proofs completed in {:?}",
+            proof_ids.len(),
+            total_elapsed
+        );
+        if let Some(cycles_estimate) = cycles_estimate {
+            let total_cycles = cycles_estimate * u64::from(common.count.get());
+            tracing::info!(
+                "Total Cycles: {} | Aggregate MHz: {:.2}",
+                total_cycles,
+                total_cycles as f64 / total_elapsed.as_secs_f64() / 1_000_000.0
+            );
+        }
+
         Ok(proof_ids)
     }
 
@@ -336,7 +367,7 @@ impl BenchCommand {
             .await
             .map_err(|e| eyre::eyre!("Failed to upload stdin: {}", e))?;
 
-        let count = common.count;
+        let count = u32::from(common.count.get());
         let cluster_rpc = common.cluster_rpc.clone();
 
         tracing::info!(

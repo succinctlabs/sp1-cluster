@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 
+use std::num::NonZeroU16;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use eyre::Result;
@@ -10,7 +11,7 @@ use sp1_cluster_artifact::{
 };
 use sp1_cluster_common::{
     client::ClusterServiceClient,
-    proto::{self, ProofRequestStatus},
+    proto::{self, ProofRequestCancelRequest, ProofRequestStatus},
 };
 use sp1_prover_types::Artifact;
 use sp1_sdk::{network::proto::types::ProofMode, ProofFromNetwork, SP1Stdin};
@@ -54,6 +55,25 @@ pub enum ClusterElf {
     ExistingElf(Artifact),
 }
 
+/// `ClusterServiceClient::new` retries a refused connection forever, which leaves the CLI logging
+/// warnings with nothing to show for it.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+async fn connect(cluster_rpc: &str) -> Result<ClusterServiceClient> {
+    tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        ClusterServiceClient::new(cluster_rpc.to_string()),
+    )
+    .await
+    .map_err(|_| {
+        eyre::eyre!(
+            "no cluster at {} after {:?}: start the cluster, or set CLI_CLUSTER_RPC to its API",
+            cluster_rpc,
+            CONNECT_TIMEOUT
+        )
+    })?
+}
+
 /// Creates a proof request and returns the proof id, deadline, and start time.
 pub async fn create_request<A: ArtifactClient>(
     artifact_client: A,
@@ -61,10 +81,28 @@ pub async fn create_request<A: ArtifactClient>(
     stdin: SP1Stdin,
     config: &ProofRequestConfig,
 ) -> Result<ProofRequest> {
-    let client = ClusterServiceClient::new(config.cluster_rpc.clone()).await?;
+    let client = connect(&config.cluster_rpc).await?;
+    let mut requests = create_requests(
+        &client,
+        artifact_client,
+        elf,
+        stdin,
+        NonZeroU16::MIN,
+        config,
+    )
+    .await?;
+    Ok(requests.pop().expect("one request created"))
+}
 
-    let (elf_id, stdin_id, proof_output_id) =
-        setup_artifacts(artifact_client.clone(), elf, stdin).await?;
+async fn create_requests<A: ArtifactClient>(
+    client: &ClusterServiceClient,
+    artifact_client: A,
+    elf: ClusterElf,
+    stdin: SP1Stdin,
+    count: NonZeroU16,
+    config: &ProofRequestConfig,
+) -> Result<Vec<ProofRequest>> {
+    let (elf_id, stdin_id) = setup_artifacts(artifact_client.clone(), elf, stdin).await?;
 
     let base_id = format!(
         "cli_{}",
@@ -75,33 +113,46 @@ pub async fn create_request<A: ArtifactClient>(
     );
 
     let deadline = SystemTime::now() + Duration::from_secs(config.timeout_hours * 60 * 60);
-    let proof_id = base_id.to_string();
 
-    // Create the proof request.
-    client
-        .create_proof_request(sp1_cluster_common::proto::ProofRequestCreateRequest {
-            proof_id: proof_id.clone(),
-            program_artifact_id: elf_id.clone().to_id(),
-            stdin_artifact_id: stdin_id.clone().to_id(),
-            options_artifact_id: Some((config.mode as i32).to_string()),
-            proof_artifact_id: Some(proof_output_id.clone().to_id()),
-            requester: vec![],
-            deadline: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs(),
-            cycle_limit: u64::MAX,
-            gas_limit: u64::MAX,
-            scheduled_by: None,
-            stdin_private: false,
-        })
-        .await?;
+    let mut requests = Vec::with_capacity(usize::from(count.get()));
+    for i in 0..count.get() {
+        let proof_id = format!("{base_id}_{i}");
+        let proof_output_id = match artifact_client.create_artifact() {
+            Ok(proof_output_id) => proof_output_id,
+            Err(error) => {
+                return Err(error_after_cancelling(client, &requests, eyre::eyre!(error)).await)
+            }
+        };
 
-    let start_time: Instant = Instant::now();
-    tracing::info!("Successfully created proof request {}", proof_id);
-    Ok(ProofRequest {
-        proof_id,
-        proof_output_id,
-        deadline,
-        start_time,
-    })
+        if let Err(error) = client
+            .create_proof_request(sp1_cluster_common::proto::ProofRequestCreateRequest {
+                proof_id: proof_id.clone(),
+                program_artifact_id: elf_id.clone().to_id(),
+                stdin_artifact_id: stdin_id.clone().to_id(),
+                options_artifact_id: Some((config.mode as i32).to_string()),
+                proof_artifact_id: Some(proof_output_id.clone().to_id()),
+                requester: vec![],
+                deadline: deadline.duration_since(UNIX_EPOCH).unwrap().as_secs(),
+                cycle_limit: u64::MAX,
+                gas_limit: u64::MAX,
+                scheduled_by: None,
+                stdin_private: false,
+            })
+            .await
+        {
+            return Err(error_after_cancelling(client, &requests, error).await);
+        }
+
+        let start_time: Instant = Instant::now();
+        tracing::info!("Successfully created proof request {}", proof_id);
+        requests.push(ProofRequest {
+            proof_id,
+            proof_output_id,
+            deadline,
+            start_time,
+        });
+    }
+    Ok(requests)
 }
 
 /// Checks the status of a proof request and returns the ProofRequestResult if it is completed.
@@ -148,7 +199,7 @@ pub async fn check_proof_status<A: ArtifactClient>(
             let completed_proof = artifact_client
                 .download_with_type(&proof_output_id, ArtifactType::Proof)
                 .await
-                .expect("failed to download proof");
+                .map_err(|error| eyre::eyre!("failed to download proof {proof_id}: {error}"))?;
             proof = Some(completed_proof);
         }
         ProofRequestStatus::Failed | ProofRequestStatus::Cancelled => {
@@ -177,12 +228,11 @@ pub async fn check_proof_status<A: ArtifactClient>(
     }
 }
 
-/// Sets up the elf, stdin, and proof output artifacts.
 async fn setup_artifacts<A: ArtifactClient>(
     artifact_client: A,
     elf: ClusterElf,
     stdin: SP1Stdin,
-) -> Result<(Artifact, Artifact, Artifact)> {
+) -> Result<(Artifact, Artifact)> {
     let elf_id = match elf {
         ClusterElf::NewElf(elf) => {
             let elf_id = artifact_client.create_artifact().unwrap();
@@ -199,15 +249,8 @@ async fn setup_artifacts<A: ArtifactClient>(
         .upload_with_type(&stdin_id, ArtifactType::Stdin, stdin)
         .await
         .map_err(|e| eyre::eyre!(e))?;
-    let proof_output_id = artifact_client.create_artifact().unwrap();
 
-    // TODO: what to do with this
-    // // Save the elf id to ELF_ID file in the cargo manifest directory
-    // let elf_id_path = std::env::var("CARGO_MANIFEST_DIR")
-    //     .map(|dir| format!("{}/{}", dir, ELF_ID_PATH))
-    //     .unwrap_or_else(|_| ELF_ID_PATH.to_string());
-    // std::fs::write(&elf_id_path, elf_id.clone().to_id())?;
-    Ok((elf_id, stdin_id, proof_output_id))
+    Ok((elf_id, stdin_id))
 }
 
 pub async fn request_proof<A: ArtifactClient>(
@@ -216,15 +259,82 @@ pub async fn request_proof<A: ArtifactClient>(
     stdin: SP1Stdin,
     config: &ProofRequestConfig,
 ) -> Result<ProofRequestResults> {
-    let proof_request = create_request(artifact_client.clone(), elf, stdin, config).await?;
-    let mut proof_request_result = None;
-    let client = ClusterServiceClient::new(config.cluster_rpc.clone()).await?;
-    while proof_request_result.is_none() {
-        proof_request_result =
-            check_proof_status(artifact_client.clone(), proof_request.clone(), &client).await?;
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let mut results = request_proofs(artifact_client, elf, stdin, NonZeroU16::MIN, config).await?;
+    Ok(results.pop().expect("one proof requested"))
+}
+
+/// Creates every request before polling any of them, allowing the cluster to prove concurrently.
+pub async fn request_proofs<A: ArtifactClient>(
+    artifact_client: A,
+    elf: ClusterElf,
+    stdin: SP1Stdin,
+    count: NonZeroU16,
+    config: &ProofRequestConfig,
+) -> Result<Vec<ProofRequestResults>> {
+    let client = connect(&config.cluster_rpc).await?;
+    let mut pending =
+        create_requests(&client, artifact_client.clone(), elf, stdin, count, config).await?;
+
+    let mut results = Vec::with_capacity(pending.len());
+    while !pending.is_empty() {
+        let mut still_pending = Vec::with_capacity(pending.len());
+        let mut pending_iter = pending.into_iter();
+        while let Some(proof_request) = pending_iter.next() {
+            match check_proof_status(artifact_client.clone(), proof_request.clone(), &client).await
+            {
+                Ok(Some(result)) => results.push(result),
+                Ok(None) => still_pending.push(proof_request),
+                Err(error) => {
+                    still_pending.push(proof_request);
+                    still_pending.extend(pending_iter);
+                    return Err(error_after_cancelling(&client, &still_pending, error).await);
+                }
+            }
+        }
+        pending = still_pending;
+        if !pending.is_empty() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
-    Ok(proof_request_result.unwrap())
+    Ok(results)
+}
+
+async fn cancel_pending_requests(
+    client: &ClusterServiceClient,
+    pending: &[ProofRequest],
+) -> Result<()> {
+    let mut failures = Vec::new();
+    for request in pending {
+        if let Err(error) = client
+            .cancel_proof_request(ProofRequestCancelRequest {
+                proof_id: request.proof_id.clone(),
+            })
+            .await
+        {
+            failures.push(format!("{}: {error}", request.proof_id));
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(eyre::eyre!(
+            "failed to cancel {} proof requests: {}",
+            failures.len(),
+            failures.join("; ")
+        ))
+    }
+}
+
+async fn error_after_cancelling(
+    client: &ClusterServiceClient,
+    pending: &[ProofRequest],
+    error: eyre::Report,
+) -> eyre::Report {
+    match cancel_pending_requests(client, pending).await {
+        Ok(()) => error,
+        Err(cancel_error) => eyre::eyre!("{error:#}; batch cleanup also failed: {cancel_error:#}"),
+    }
 }
 
 /// Request a proof from the cluster. Waits for the proof to complete.
@@ -233,11 +343,21 @@ pub async fn request_proof_with_config(
     stdin: SP1Stdin,
     config: &ProofRequestConfig,
 ) -> Result<ProofRequestResults> {
+    let mut results = request_proofs_with_config(elf, stdin, NonZeroU16::MIN, config).await?;
+    Ok(results.pop().expect("one proof requested"))
+}
+
+pub async fn request_proofs_with_config(
+    elf: ClusterElf,
+    stdin: SP1Stdin,
+    count: NonZeroU16,
+    config: &ProofRequestConfig,
+) -> Result<Vec<ProofRequestResults>> {
     match &config.artifact_store {
         ArtifactStoreConfig::Redis { nodes } => {
             tracing::info!("using redis artifact store");
             let artifact_client = RedisArtifactClient::new(nodes.clone(), 16);
-            request_proof(artifact_client, elf, stdin, config).await
+            request_proofs(artifact_client, elf, stdin, count, config).await
         }
         ArtifactStoreConfig::S3 { bucket, region } => {
             tracing::info!("using s3 artifact store");
@@ -250,7 +370,7 @@ pub async fn request_proof_with_config(
                 ),
             )
             .await;
-            request_proof(artifact_client, elf, stdin, config).await
+            request_proofs(artifact_client, elf, stdin, count, config).await
         }
     }
 }
@@ -293,6 +413,18 @@ pub async fn request_proof_from_env(
     elf: ClusterElf,
     stdin: SP1Stdin,
 ) -> Result<ProofRequestResults> {
+    let mut results =
+        request_proofs_from_env(mode, timeout_hours, elf, stdin, NonZeroU16::MIN).await?;
+    Ok(results.pop().expect("one proof requested"))
+}
+
+pub async fn request_proofs_from_env(
+    mode: ProofMode,
+    timeout_hours: u64,
+    elf: ClusterElf,
+    stdin: SP1Stdin,
+    count: NonZeroU16,
+) -> Result<Vec<ProofRequestResults>> {
     let config = request_config_from_env(mode, timeout_hours);
-    request_proof_with_config(elf, stdin, &config).await
+    request_proofs_with_config(elf, stdin, count, &config).await
 }

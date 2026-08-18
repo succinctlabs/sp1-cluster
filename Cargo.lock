@@ -8468,6 +8468,7 @@ dependencies = [
  "sp1-prover-types",
  "sp1-sdk",
  "tokio",
+ "tonic 0.12.3",
  "tracing",
 ]
 

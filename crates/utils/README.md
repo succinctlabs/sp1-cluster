@@ -4,24 +4,7 @@ This crate provides a set of utilities for requesting proofs from the SP1 Cluste
 
 ## Quick start
 
-Your machine should have 64 GB of RAM, and an NVIDIA GPU. 4090, 5090, or L4 are recommended. 
-
-Put the following variables in your .env
-
-```bash
-CLI_CLUSTER_RPC=http://localhost:50051
-CLI_REDIS_NODES=redis://:redispassword@localhost:6379/0
-```
-
-Start a local docker compose in the background. This uses a local redis artifact store.
-```bash
-docker compose -f infra/docker-compose.local.yml up -d
-```
-
-Then run the following command to request a proof:
-```bash
-cargo run --bin sp1-cluster-cli bench input v6-fib-program.bin v6-fib-stdin.bin --mode compressed
-```
+See the project [benchmarking workflow](../../README.md#benchmarking) for the local cluster and CLI setup.
 
 ## Requester env vars
 
@@ -34,4 +17,4 @@ Use either the S3 env vars or the Redis env vars, but not both.
 
 ## Usage
 
-The basic usage of this crate is to use the `request_proof_from_env` function, which reads environment variables, requests a proof, and waits for its completion.
+Call `request_proof_from_env` to read the environment, request a proof, and wait for it.

@@ -35,3 +35,28 @@ async fn main() {
         tracing::info!("Error: {:?}", e);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Cli;
+
+    #[test]
+    fn count_rejects_zero_and_values_above_the_batch_limit() {
+        for count in ["0", "65536"] {
+            let result = Cli::try_parse_from([
+                "test",
+                "bench",
+                "fibonacci",
+                "20",
+                "--cluster-rpc",
+                "http://127.0.0.1:50051",
+                "--count",
+                count,
+            ]);
+
+            assert!(result.is_err(), "accepted --count {count}");
+        }
+    }
+}
