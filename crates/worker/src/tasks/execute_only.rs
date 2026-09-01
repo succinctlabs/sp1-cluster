@@ -45,7 +45,8 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
         let proof_id = data.proof_id.clone();
 
         // Execute the program.
-        let mut context = SP1Context::default();
+        let (stderr_tx, stderr_rx) = tokio::sync::watch::channel(String::new());
+        let mut context = SP1Context::builder().stderr_channel(stderr_tx).build();
         // Stop execution if the cycle limit is reached, + 1 to account for >= executor max_cycles check.
         // saturating_add so the u64::MAX "unlimited" sentinel doesn't wrap to 0 (which would enforce a
         // 0-cycle limit and make every request unfulfillable) in release builds.
@@ -68,11 +69,6 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
                 .unwrap_or_else(|e| ExecutionError::Other(e.to_string()))
         });
 
-        // `failure_message` (a bounded `Err(ExecutionError)` detail) and `exit_code`
-        // (non-zero halt) are additive enrichment serialized alongside the
-        // `ExecutionResult` into `extra_data`; consumers that don't know them
-        // ignore them. The actual guest panic payload/location is NOT captured
-        // here (that needs a separate SP1 executor stderr-capture change).
         let (result_obj, failure_message, exit_code): (
             ExecutionResult,
             Option<String>,
@@ -100,7 +96,7 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
                         gas: execution_report.gas().unwrap_or(0),
                         public_values_hash: vec![],
                     },
-                    None,
+                    stderr_failure_message(&stderr_rx),
                     Some(exit_code),
                 )
             }
@@ -190,8 +186,13 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
 /// conservative and free of unbounded logs.
 const FAILURE_MESSAGE_MAX: usize = 2048;
 
-/// Bound an `Err(ExecutionError)` display string to [`FAILURE_MESSAGE_MAX`] bytes
-/// on a UTF-8 char boundary. Not a substitute for receiver-side sanitization.
+fn stderr_failure_message(stderr_rx: &tokio::sync::watch::Receiver<String>) -> Option<String> {
+    let stderr = stderr_rx.borrow();
+    (!stderr.trim().is_empty()).then(|| bound_failure_message(&stderr))
+}
+
+/// Bound a failure message to [`FAILURE_MESSAGE_MAX`] bytes on a UTF-8 char boundary.
+/// Not a substitute for receiver-side sanitization.
 fn bound_failure_message(message: &str) -> String {
     if message.len() <= FAILURE_MESSAGE_MAX {
         return message.to_string();
@@ -277,16 +278,28 @@ mod tests {
     }
 
     #[test]
-    fn non_zero_exit_serializes_exit_code() {
+    fn non_zero_exit_serializes_captured_stderr_and_exit_code() {
+        let panic = "panicked at guest/src/main.rs:12:3:\nassertion failed";
+        let (stderr_tx, stderr_rx) = tokio::sync::watch::channel(String::new());
+        stderr_tx.send_replace(panic.to_string());
         let extra = build_execute_extra_data(
             &failed_result(ExecuteFailureCause::HaltWithNonZeroExitCode as i32),
-            None,
+            stderr_failure_message(&stderr_rx).as_deref(),
             Some(101),
         )
         .unwrap();
         let v: Value = serde_json::from_str(&extra).unwrap();
         assert_eq!(v["exit_code"], 101);
-        assert!(v.get("failure_message").is_none());
+        assert_eq!(v["failure_message"], panic);
+    }
+
+    #[test]
+    fn empty_stderr_is_not_a_failure_message() {
+        let (_, stderr_rx) = tokio::sync::watch::channel(String::new());
+        assert!(stderr_failure_message(&stderr_rx).is_none());
+
+        let (_, stderr_rx) = tokio::sync::watch::channel(" \n".to_string());
+        assert!(stderr_failure_message(&stderr_rx).is_none());
     }
 
     #[test]
