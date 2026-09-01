@@ -1193,9 +1193,6 @@ mod tests {
         assert_eq!(parse::<U256>(Some("")), None);
         assert_eq!(parse::<U256>(Some("not a number")), None);
         assert_eq!(parse::<U256>(None), None);
-        assert_eq!(
-            parse(Some("125000000")),
-            Some(U256::from(125_000_000u64))
-        );
+        assert_eq!(parse(Some("125000000")), Some(U256::from(125_000_000u64)));
     }
 }
