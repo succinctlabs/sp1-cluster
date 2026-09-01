@@ -110,13 +110,9 @@ pub struct Bidder {
     prove_usd_cache: Arc<RwLock<Option<ProvePrice>>>,
     /// The network's published performance requirements. `None` (RPC unavailable, not
     /// yet fetched, or enforcement disabled) degrades to unclamped bidding.
+    /// Clamps every prover on the gas-aware admission path, high-availability
+    /// included.
     requirements: Arc<RwLock<Option<PerformanceRequirements>>>,
-    /// Whether the whitelister judges this prover against the performance
-    /// requirements (whitelisted and not high-availability). Exempt provers bid
-    /// unclamped up to the requester's deadline — they are the network's catch-all
-    /// for requests the governed provers decline. Starts `true` so an unknown status
-    /// errs toward clamping.
-    governed: Arc<RwLock<bool>>,
     /// Unix timestamp until which this prover is suspended; 0 when not suspended.
     /// While set in the future, the bidder skips bidding entirely.
     suspended_until: Arc<RwLock<u64>>,
@@ -166,7 +162,6 @@ impl Bidder {
             tick_size: U256::ZERO,
             prove_usd_cache: Arc::new(RwLock::new(None)),
             requirements: Arc::new(RwLock::new(None)),
-            governed: Arc::new(RwLock::new(true)),
             suspended_until: Arc::new(RwLock::new(0)),
         }
     }
@@ -292,7 +287,7 @@ impl Bidder {
         }
     }
 
-    /// Refresh the governed flag and suspension cache from `GetProverStatus`.
+    /// Refresh the suspension cache from `GetProverStatus`.
     async fn sync_prover_status(&self, prover: &[u8]) {
         match self
             .network
@@ -304,8 +299,6 @@ impl Bidder {
         {
             Ok(resp) => {
                 let status = resp.into_inner();
-                *self.governed.write().await =
-                    status.is_whitelisted && !status.is_high_availability;
                 self.record_suspension_status(status.suspended_until.unwrap_or(0))
                     .await;
             }
@@ -488,14 +481,13 @@ impl Bidder {
         expected_gas: u64,
         requirements: Option<&PerformanceRequirements>,
     ) -> u64 {
-        let Some(req) = requirements else {
-            return request.deadline.saturating_sub(time_now());
-        };
-        let perf = requirements::perf_deadline(request.created_at, expected_gas, req);
-        if perf < request.deadline {
+        let perf = requirements
+            .map(|req| requirements::perf_deadline(request.created_at, expected_gas, req));
+        let (duration, perf_clamped) = clamped_request_duration(time_now(), request.deadline, perf);
+        if perf_clamped {
             self.metrics.perf_clamped.increment(1);
         }
-        perf.min(request.deadline).saturating_sub(time_now())
+        duration
     }
 
     /// Decide whether to bid on a biddable request under gas-aware admission, sizing it
@@ -772,15 +764,9 @@ impl Bidder {
         // same price snapshot.
         let bid_amount = self.effective_bid_amount().await;
 
-        // Snapshot the published performance requirements once per pass. `None` — RPC
-        // unavailable, enforcement disabled, or this prover exempt from it (not
-        // whitelisted, or high-availability) — leaves deadlines unclamped: exempt
-        // provers are free to serve requests up to the requester's own deadline.
-        let network_requirements = if *self.governed.read().await {
-            self.requirements.read().await.clone()
-        } else {
-            None
-        };
+        // Snapshot the published performance requirements once per pass. `None`
+        // (RPC unavailable or enforcement disabled) leaves deadlines unclamped.
+        let network_requirements = self.requirements.read().await.clone();
 
         let mut failure_tasks = Vec::new();
         for request in requests {
@@ -889,6 +875,15 @@ fn is_expected_bid_rejection(e: &anyhow::Error) -> bool {
         ) || (s.code() == tonic::Code::Unavailable
             && s.message().contains("failed nonce verification"))
     })
+}
+
+/// Pure logic behind [`Bidder::effective_request_duration`]. Returns seconds
+/// left to fulfill and whether the performance budget clamped the deadline.
+fn clamped_request_duration(now: u64, deadline: u64, perf_deadline: Option<u64>) -> (u64, bool) {
+    let Some(perf) = perf_deadline else {
+        return (deadline.saturating_sub(now), false);
+    };
+    (perf.min(deadline).saturating_sub(now), perf < deadline)
 }
 
 /// Fetch PROVE/USD and write it into the cache on success. Returns the µUSD value for the
@@ -1065,6 +1060,31 @@ mod tests {
         for e in &cases {
             assert!(!is_expected_bid_rejection(e), "should be a fault: {e}");
         }
+    }
+
+    /// No published requirements → requester deadline, unclamped.
+    #[test]
+    fn no_requirements_uses_requester_deadline() {
+        assert_eq!(clamped_request_duration(100, 500, None), (400, false));
+    }
+
+    /// An open budget clamps to the earlier perf deadline.
+    #[test]
+    fn open_budget_clamps_to_perf_deadline() {
+        assert_eq!(clamped_request_duration(100, 500, Some(300)), (200, true));
+    }
+
+    /// A perf deadline past the requester's own never clamps.
+    #[test]
+    fn late_perf_deadline_does_not_clamp() {
+        assert_eq!(clamped_request_duration(100, 500, Some(900)), (400, false));
+    }
+
+    /// An elapsed budget zeroes the duration, so admission rejects as
+    /// infeasible.
+    #[test]
+    fn elapsed_budget_zeroes_duration() {
+        assert_eq!(clamped_request_duration(400, 500, Some(300)), (0, true));
     }
 
     /// Reference anchor reused across the outcome tests: $0.20/BPGU at PROVE=$0.40 → 500M wei.
