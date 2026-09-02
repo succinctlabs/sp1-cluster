@@ -9599,7 +9599,7 @@ dependencies = [
 [[package]]
 name = "spn-artifact-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
+source = "git+https://github.com/succinctlabs/network?branch=main#9e8960764335bf30ccf5360af5ad0d5649382379"
 dependencies = [
  "prost 0.13.5",
  "prost-build",
@@ -9611,7 +9611,7 @@ dependencies = [
 [[package]]
 name = "spn-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
+source = "git+https://github.com/succinctlabs/network?branch=main#9e8960764335bf30ccf5360af5ad0d5649382379"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -9632,12 +9632,12 @@ dependencies = [
 [[package]]
 name = "spn-bidding"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
+source = "git+https://github.com/succinctlabs/network?branch=main#9e8960764335bf30ccf5360af5ad0d5649382379"
 
 [[package]]
 name = "spn-metrics"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
+source = "git+https://github.com/succinctlabs/network?branch=main#9e8960764335bf30ccf5360af5ad0d5649382379"
 dependencies = [
  "axum 0.7.9",
  "eyre",
@@ -9656,7 +9656,7 @@ dependencies = [
 [[package]]
 name = "spn-network-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?rev=7f7369878#7f7369878d20759a45d546ec8c7328fca9492322"
+source = "git+https://github.com/succinctlabs/network?branch=main#9e8960764335bf30ccf5360af5ad0d5649382379"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -9674,7 +9674,7 @@ dependencies = [
 [[package]]
 name = "spn-pricing"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
+source = "git+https://github.com/succinctlabs/network?branch=main#9e8960764335bf30ccf5360af5ad0d5649382379"
 dependencies = [
  "alloy-primitives",
  "async-trait",
@@ -9685,7 +9685,7 @@ dependencies = [
 [[package]]
 name = "spn-utils"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=main#96be7d2328729d56dcb66578e593184c160945c3"
+source = "git+https://github.com/succinctlabs/network?branch=main#9e8960764335bf30ccf5360af5ad0d5649382379"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",

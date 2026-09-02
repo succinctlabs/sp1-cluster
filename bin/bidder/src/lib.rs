@@ -774,6 +774,20 @@ impl Bidder {
             let mode = request.mode();
             let request_id = hex::encode(&request.request_id);
 
+            let floor_price_per_pgu =
+                parse(request.floor_price_per_pgu.as_deref()).unwrap_or(U256::ZERO);
+            let max_price_per_pgu =
+                parse(request.max_price_per_pgu.as_deref()).unwrap_or(U256::MAX);
+
+            let bid_amount = bid_amount.max(floor_price_per_pgu);
+            if bid_amount > max_price_per_pgu {
+                info!(
+                    "Skipping request 0x{}: our bid {} exceeds max price {}",
+                    request_id, bid_amount, max_price_per_pgu
+                );
+                continue;
+            }
+
             // In aggressive mode, skip capacity/time checks but optionally enforce min deadline.
             if self.aggressive_mode {
                 if let Some(min_deadline) = self.min_deadline_secs {
@@ -1004,6 +1018,13 @@ async fn fetch_tick_size(network: &mut ProverNetworkClient<Channel>) -> Result<U
     Ok(U256::from(tick))
 }
 
+fn parse<T: std::str::FromStr>(value: Option<&str>) -> Option<T> {
+    match value {
+        None | Some("") => None,
+        Some(value) => value.parse::<T>().ok(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1185,5 +1206,13 @@ mod tests {
         let tick = U256::from(10_000_000u64);
         let out = bid_amount_outcome(Some(&cfg), Some((1_000_000_000, 10)), static_bid(), tick);
         assert_eq!(out, BidAmountOutcome::Static(static_bid()));
+    }
+
+    #[test]
+    fn test_parse() {
+        assert_eq!(parse::<U256>(Some("")), None);
+        assert_eq!(parse::<U256>(Some("not a number")), None);
+        assert_eq!(parse::<U256>(None), None);
+        assert_eq!(parse(Some("125000000")), Some(U256::from(125_000_000u64)));
     }
 }
