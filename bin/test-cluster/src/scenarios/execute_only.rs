@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use anyhow::Context;
 use sp1_sdk::{SP1ProofMode, SP1Stdin};
 
 use crate::assert::{assert_execution_result, task_statuses, wait_proof_status, ExpectedExecution};
@@ -105,6 +106,25 @@ async fn run() -> anyhow::Result<()> {
         er.failure_cause() == ExecutionFailureCause::HaltWithNonZeroExitCode,
         "expected pinned failure cause HaltWithNonZeroExitCode, got {:?}",
         er.failure_cause()
+    );
+    let extra_data = pr
+        .extra_data
+        .as_deref()
+        .context("execute-only failure has no extra_data")?;
+    let extra: serde_json::Value = serde_json::from_str(extra_data)?;
+    let failure_message = extra["failure_message"]
+        .as_str()
+        .context("execute-only failure has no failure_message")?;
+    anyhow::ensure!(
+        failure_message.contains("panicked at"),
+        "expected panic location in failure_message, got {failure_message:?}"
+    );
+    let exit_code = extra["exit_code"]
+        .as_u64()
+        .context("execute-only failure has no exit_code")?;
+    anyhow::ensure!(
+        exit_code != 0,
+        "expected non-zero exit_code, got {exit_code}"
     );
     tracing::info!("execution failure cause: {:?}", er.failure_cause());
 
