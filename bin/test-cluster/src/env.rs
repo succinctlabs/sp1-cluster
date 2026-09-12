@@ -59,7 +59,7 @@ pub struct Minio {
 
 impl Minio {
     pub async fn start(token: CancellationToken) -> anyhow::Result<Self> {
-        let image = "minio/minio";
+        let image = "quay.io/minio/minio";
         let tag = "latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e";
         let user = "minioadmin".to_string();
         let password = "miniopassword".to_string();
