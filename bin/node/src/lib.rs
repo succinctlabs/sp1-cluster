@@ -13,10 +13,12 @@ use sp1_cluster_worker::client::WorkerServiceClient;
 use sp1_cluster_worker::config::cluster_worker_config;
 use sp1_cluster_worker::metrics::WorkerMetrics;
 use sp1_cluster_worker::SP1ClusterWorker;
+use sp1_prover::build::{groth16_circuit_artifacts_dir, plonk_circuit_artifacts_dir};
 use sp1_prover::worker::{TaskMetadata, WorkerClient};
 use sp1_prover::SP1ProverComponents;
 use sp1_sdk::install::try_install_circuit_artifacts;
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -34,8 +36,12 @@ pub async fn run(
         tokio::spawn(gather_memory_metrics(metrics, token.clone()));
     }
 
-    if node_config.worker_type != WorkerType::Gpu {
+    // The wrap tasks (`Groth16Wrap` / `PlonkWrap`) are CPU tasks, so any worker
+    // that is not GPU-only can be handed one. A GPU-only worker never is, which
+    // is why the download has always been skipped for it.
+    if serves_wrap_tasks(node_config.worker_type) {
         download_artifacts_for_cpu_workers().await?;
+        verify_wrap_artifacts()?;
     }
 
     // Connect to server only after artifacts are ready.
@@ -81,6 +87,96 @@ async fn download_artifacts_for_cpu_workers() -> eyre::Result<()> {
         "Circuit artifacts ready after {:.1} seconds",
         elapsed.as_secs_f64()
     );
+
+    Ok(())
+}
+
+/// Whether this worker can be handed a `Groth16Wrap` or `PlonkWrap` task.
+///
+/// Both map to `WorkerType::Cpu` (`WorkerType::from_task_type`), and the
+/// coordinator only offers a task to a worker whose type matches or is `All`.
+/// A GPU-only worker is therefore never assigned a wrap, which is why it has
+/// no use for the wrap artifacts. `WorkerType::None` is excluded too: the
+/// coordinator assigns it no tasks at all, so it has no reason to pull the
+/// artifacts down.
+fn serves_wrap_tasks(worker_type: WorkerType) -> bool {
+    matches!(worker_type, WorkerType::Cpu | WorkerType::All)
+}
+
+/// The files the gnark FFI opens by exact name inside the artifact directory.
+///
+/// Taken from `sp1-recursion-gnark-ffi`'s Go side (`go/sp1/prove_groth16.go`,
+/// `go/sp1/prove_plonk.go`), which opens each with `os.Open` and `panic`s when
+/// one is absent. `sp1-prover`'s `get_groth16_vkey_hash` reads `groth16_vk.bin`
+/// too. A Go panic is not catchable from Rust — it aborts the process — so a
+/// node that reaches the wrap without these dies mid-task and loses every task
+/// it holds, including other proofs' work.
+const GROTH16_ARTIFACT_FILES: &[&str] = &[
+    "constraints.json",
+    "groth16_circuit.bin",
+    "groth16_pk.bin",
+    "groth16_vk.bin",
+];
+
+const PLONK_ARTIFACT_FILES: &[&str] = &[
+    "constraints.json",
+    "plonk_circuit.bin",
+    "plonk_pk.bin",
+    "plonk_vk.bin",
+];
+
+/// The entries of `required` that are absent from `dir`.
+///
+/// The install's `.complete` marker is deliberately not consulted: it records
+/// that *an* extraction finished, not that these files are present. A cache
+/// baked into an image, or a hand-populated `SP1_*_CIRCUIT_PATH`, can carry a
+/// complete-looking directory without them.
+fn missing_artifact_files(dir: &Path, required: &[&str]) -> Vec<String> {
+    required
+        .iter()
+        .filter(|name| !dir.join(name).is_file())
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
+/// Fails fast, before the worker connects, when the wrap artifacts are unusable.
+///
+/// Without this the failure surfaces later and much worse: gnark panics inside
+/// whichever node happens to draw the first wrap, taking that node's process
+/// down with it. Naming the missing files and the directory here turns a
+/// mid-proof crash into a startup error the operator can act on.
+fn verify_wrap_artifacts() -> eyre::Result<()> {
+    // `sp1_prover` resolves these through `anyhow`; normalise to `eyre` here so
+    // this crate doesn't need `anyhow` as a direct dependency.
+    let systems: [(&str, &str, eyre::Result<PathBuf>, &[&str]); 2] = [
+        (
+            "groth16",
+            "SP1_GROTH16_CIRCUIT_PATH",
+            groth16_circuit_artifacts_dir().map_err(|e| eyre::eyre!("{e}")),
+            GROTH16_ARTIFACT_FILES,
+        ),
+        (
+            "plonk",
+            "SP1_PLONK_CIRCUIT_PATH",
+            plonk_circuit_artifacts_dir().map_err(|e| eyre::eyre!("{e}")),
+            PLONK_ARTIFACT_FILES,
+        ),
+    ];
+
+    for (system, env_var, dir, required) in systems {
+        let dir = dir?;
+        let missing = missing_artifact_files(&dir, required);
+        if !missing.is_empty() {
+            eyre::bail!(
+                "{system} wrap artifacts are incomplete at {} (missing: {}). The wrap step \
+                 passes this directory straight to gnark, which aborts the node process when a \
+                 file is missing. Delete the directory and restart to re-download, or set \
+                 {env_var} to a complete artifact set.",
+                dir.display(),
+                missing.join(", "),
+            );
+        }
+    }
 
     Ok(())
 }
@@ -1058,5 +1154,106 @@ mod tests {
             Ok(true),
             "the completion was swallowed by the cancel"
         );
+    }
+}
+
+/// The wrap pre-flight. These exercise the file check directly rather than the
+/// real `~/.sp1/circuits` tree, so they run on any machine.
+#[cfg(test)]
+mod artifact_tests {
+    use super::*;
+
+    fn touch(dir: &Path, name: &str) {
+        std::fs::write(dir.join(name), []).unwrap();
+    }
+
+    #[test]
+    fn a_complete_artifact_set_reports_nothing_missing() {
+        for required in [GROTH16_ARTIFACT_FILES, PLONK_ARTIFACT_FILES] {
+            let dir = tempfile::tempdir().unwrap();
+            for name in required {
+                touch(dir.path(), name);
+            }
+
+            assert!(
+                missing_artifact_files(dir.path(), required).is_empty(),
+                "a fully populated directory must pass the pre-flight"
+            );
+        }
+    }
+
+    #[test]
+    fn every_absent_file_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "constraints.json");
+        touch(dir.path(), "groth16_pk.bin");
+
+        assert_eq!(
+            missing_artifact_files(dir.path(), GROTH16_ARTIFACT_FILES),
+            vec!["groth16_circuit.bin", "groth16_vk.bin"]
+        );
+    }
+
+    /// The state that panics gnark: the install finished, so the marker is
+    /// there, but the files it opens are not. The marker must not be trusted.
+    #[test]
+    fn the_install_marker_does_not_stand_in_for_the_files() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), ".complete");
+
+        assert_eq!(
+            missing_artifact_files(dir.path(), GROTH16_ARTIFACT_FILES).len(),
+            GROTH16_ARTIFACT_FILES.len(),
+            "a marker-only directory must not pass the pre-flight"
+        );
+    }
+
+    #[test]
+    fn an_absent_version_directory_reports_every_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let absent_version = dir.path().join("v6.1.0");
+
+        assert_eq!(
+            missing_artifact_files(&absent_version, PLONK_ARTIFACT_FILES).len(),
+            PLONK_ARTIFACT_FILES.len()
+        );
+    }
+
+    /// A directory is not a file: gnark opens these, so a directory of the
+    /// right name would fail at `os.Open` the same way a missing file does.
+    #[test]
+    fn a_directory_named_like_an_artifact_does_not_count() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("groth16_circuit.bin")).unwrap();
+
+        assert_eq!(
+            missing_artifact_files(dir.path(), &["groth16_circuit.bin"]),
+            vec!["groth16_circuit.bin"]
+        );
+    }
+
+    /// Pins the names to the gnark side. A rename there would otherwise turn
+    /// this pre-flight into a check for files nobody opens.
+    #[test]
+    fn the_checked_names_are_the_ones_gnark_opens() {
+        assert!(GROTH16_ARTIFACT_FILES.contains(&"groth16_circuit.bin"));
+        assert!(GROTH16_ARTIFACT_FILES.contains(&"groth16_pk.bin"));
+        assert!(GROTH16_ARTIFACT_FILES.contains(&"groth16_vk.bin"));
+        assert!(PLONK_ARTIFACT_FILES.contains(&"plonk_circuit.bin"));
+        assert!(PLONK_ARTIFACT_FILES.contains(&"plonk_pk.bin"));
+        assert!(PLONK_ARTIFACT_FILES.contains(&"plonk_vk.bin"));
+        // The circuit definitions are read via `CONSTRAINTS_JSON` in both.
+        assert!(GROTH16_ARTIFACT_FILES.contains(&"constraints.json"));
+        assert!(PLONK_ARTIFACT_FILES.contains(&"constraints.json"));
+    }
+
+    /// The download and the check must cover the same worker types, or a worker
+    /// that skips the download would also skip the check that catches it.
+    #[test]
+    fn only_a_gpu_only_worker_skips_the_wrap_preflight() {
+        assert!(!serves_wrap_tasks(WorkerType::Gpu));
+        assert!(!serves_wrap_tasks(WorkerType::None));
+        assert!(serves_wrap_tasks(WorkerType::Cpu));
+        assert!(serves_wrap_tasks(WorkerType::All));
     }
 }
