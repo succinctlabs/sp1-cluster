@@ -45,6 +45,24 @@ cd sp1-cluster
 cargo build --release
 ```
 
+### Building on bare metal
+
+The Docker images under `infra/` install a few things a fresh machine won't have. If you build outside Docker you need them too:
+
+* `m4` (GMP is built from source by `gmp-mpfr-sys`, pulled in through `sp1-core-machine`'s `bigint-rug` feature)
+* `cmake` 3.24 or newer
+* `protoc`
+* Go (the Groth16 and PLONK wrap runs through `native-gnark`)
+* `libclang-dev`
+* the CUDA toolkit, for `cargo build --release -p sp1-cluster-node --features gpu`
+
+### Running locally
+
+Two things that are easy to miss when you run the services by hand instead of through `infra/docker-compose.local.yml`:
+
+* **A request needs a CPU-capable worker.** A proof request starts with CPU-type tasks (the controller and the execution), and the coordinator only hands those to workers started with `WORKER_TYPE=CPU` or `WORKER_TYPE=ALL`. With only `WORKER_TYPE=GPU` workers the request sits in `cpu_queue` forever while the GPUs idle.
+* **`ALL` workers need the circuit artifacts.** The Groth16 and PLONK wrap reads them from `SP1_GROTH16_CIRCUIT_PATH` (the Docker images ship them at `/var/cache/sp1/circuits/groth16`). On bare metal, install them before the first wrap, or point that variable at a populated directory. A node that reaches the wrap without them exits with `open .../groth16_circuit.bin: no such file or directory`.
+
 ## Benchmarking
 
 Start `gpu0`. Compose also starts its API, coordinator, Redis, and Postgres dependencies:
