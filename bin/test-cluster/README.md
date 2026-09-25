@@ -21,6 +21,15 @@ not change (long/large scenarios prove rsp on CPU, which is slow).
 
 ## Usage
 
+Build the MinIO test image from the repository root before running a scenario:
+
+```bash
+docker build --platform linux/amd64 -f infra/Dockerfile.minio-test -t sp1-test-minio:RELEASE.2025-09-07T16-13-09Z .
+```
+
+The image uses the official release binary and verifies its pinned SHA-256 checksum.
+ARM hosts need Docker support for amd64 emulation.
+
 ```bash
 export RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold"
 export CARGO_TARGET_DIR=target_release
