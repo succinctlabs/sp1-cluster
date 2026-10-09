@@ -16,6 +16,8 @@ The official multi-GPU proving service implementation for SP1, designed for the 
 [docs-url]: https://cluster-docs.succinct.xyz
 </div>
 
+**Disclaimer.** Use of SP1 Cluster is also subject to the disclaimers and limitations of liability described in the [Legal / Disclaimer](https://docs.succinct.xyz/legal/disclaimer) page.
+
 ## Overview
 
 This project implements a high performance SP1 proving cluster that can scale to thousands of GPUs. The system consists of several key components:
