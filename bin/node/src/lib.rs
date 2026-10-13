@@ -65,16 +65,7 @@ async fn download_artifacts_for_cpu_workers() -> eyre::Result<()> {
     let start_time = std::time::Instant::now();
     tracing::info!("Downloading circuit artifacts before connecting to server");
 
-    let (_, _) = tokio::try_join!(
-        tokio::task::spawn(async move {
-            tracing::info!("Downloading groth16 artifacts");
-            try_install_circuit_artifacts("groth16").await
-        }),
-        tokio::task::spawn(async move {
-            tracing::info!("Downloading plonk artifacts");
-            try_install_circuit_artifacts("plonk").await
-        })
-    )?;
+    tokio::try_join!(install_artifacts("groth16"), install_artifacts("plonk"))?;
 
     let elapsed = start_time.elapsed();
     tracing::info!(
@@ -83,6 +74,19 @@ async fn download_artifacts_for_cpu_workers() -> eyre::Result<()> {
     );
 
     Ok(())
+}
+
+// Flattens the spawned task's own result so `try_join!` fails on the first
+// install error instead of waiting for the other download.
+async fn install_artifacts(kind: &'static str) -> eyre::Result<()> {
+    tracing::info!("Downloading {kind} artifacts");
+    let result = tokio::task::spawn(try_install_circuit_artifacts(kind)).await?;
+    if let Err(e) = &result {
+        tracing::error!("failed to install {kind} circuit artifacts: {e:#}");
+    }
+    result
+        .map(|_| ())
+        .map_err(|e| eyre::eyre!("failed to install {kind} circuit artifacts: {e:#}"))
 }
 
 async fn gather_memory_metrics(metrics: Arc<WorkerMetrics>, token: CancellationToken) {
