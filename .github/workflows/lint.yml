@@ -2,6 +2,8 @@ name: Lint
 
 env:
   FOUNDRY_PROFILE: "ci"
+  GOPROXY: "https://proxy.golang.org,https://goproxy.cn,direct"
+  GOSUMDB: "sum.golang.org"
 
 on:
   push:

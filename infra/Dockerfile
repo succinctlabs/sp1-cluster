@@ -33,6 +33,8 @@ RUN wget -q https://golang.org/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
     tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz && \
     rm go${GO_VERSION}.linux-amd64.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOPROXY="https://proxy.golang.org,https://goproxy.cn,direct" \
+    GOSUMDB="sum.golang.org"
 
 # Install sp1 toolchain
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true

@@ -9,6 +9,8 @@ on:
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  GOPROXY: "https://proxy.golang.org,https://goproxy.cn,direct"
+  GOSUMDB: "sum.golang.org"
   RUST_LOG: info
 
 defaults:
