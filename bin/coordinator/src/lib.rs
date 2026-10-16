@@ -2446,7 +2446,7 @@ mod tests {
 
     // Channel entries are created only for live tasks. Most channel tests
     // must register a live task first.
-    async fn register_running_task(c: &Coordinator<DefaultPolicy>, task_id: &str) {
+    pub(crate) async fn register_running_task(c: &Coordinator<DefaultPolicy>, task_id: &str) {
         let mut state = c.state.write().await;
         insert_proof_with_running_task(&mut state, "p1", task_id, None);
     }

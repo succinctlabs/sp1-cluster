@@ -511,42 +511,43 @@ fn spawn_subscriber_channel_task<P: Send + Sync + 'static>(
                         }
                     },
                     _ = interval.tick() => {
-                        // If no more messages can be sent, return.
-                        if tx.is_closed() {
-                            return;
-                        }
-                        // Loop over map and resend any messages that haven't been acked for 4 seconds.
-                        track_latency!("worker.sub.resend", {
-                            let now = SystemTime::now();
-                            map.retain(|_, (last_acked, msg, retries)| {
-                                if now.duration_since(*last_acked).unwrap_or(Duration::from_secs(0)) > Duration::from_secs(4) {
-                                    *last_acked = now;
-                                    *retries += 1;
-                                    tracing::warn!("Resending message {}", msg.msg_id);
-                                    if tx.send(Ok(msg.clone())).is_err() {
-                                        // Channel is closed, so no message can be sent.
-                                        return false;
+                        // A closed `tx` means the client stream is gone. Skip resends and
+                        // keep `map` intact for a reconnect.
+                        if !tx.is_closed() {
+                            // Loop over map and resend any messages that haven't been acked for 4 seconds.
+                            track_latency!("worker.sub.resend", {
+                                let now = SystemTime::now();
+                                map.retain(|_, (last_acked, msg, retries)| {
+                                    if now.duration_since(*last_acked).unwrap_or(Duration::from_secs(0)) > Duration::from_secs(4) {
+                                        *last_acked = now;
+                                        *retries += 1;
+                                        tracing::warn!("Resending message {}", msg.msg_id);
+                                        if tx.send(Ok(msg.clone())).is_err() {
+                                            // Channel is closed, so no message can be sent.
+                                            return false;
+                                        }
+                                        if *retries > 3 {
+                                            // Remove messages that have failed 3 times.
+                                            tracing::warn!("Max retries for message {} reached", msg.msg_id);
+                                            return false;
+                                        }
                                     }
-                                    if *retries > 3 {
-                                        // Remove messages that have failed 3 times.
-                                        tracing::warn!("Max retries for message {} reached", msg.msg_id);
-                                        return false;
-                                    }
-                                }
-                                true
+                                    true
+                                });
                             });
-                            // If map is empty and outer_rx is closed, then we're done. Remove the
-                            // subscriber.
-                            if map.is_empty() && outer_rx.is_closed() && outer_rx.is_empty() {
-                                // Only remove if this task is still the active one for this subscriber
-                                if let Some(task_id) = current_task_id {
-                                    subscribers.remove_if(&sub_id, |_, subscriber| {
-                                        subscriber.sender_handle.id() == task_id
-                                    });
-                                }
-                                break;
+                        }
+                        // Remove this handler from `subscribers` once the coordinator
+                        // evicts the subscriber, which closes `outer_rx`.
+                        let drained = map.is_empty() || tx.is_closed();
+                        if drained && outer_rx.is_closed() && outer_rx.is_empty() {
+                            // Only remove if this task is still the active one for this subscriber
+                            if let Some(task_id) = current_task_id {
+                                subscribers.remove_if(&sub_id, |_, subscriber| {
+                                    subscriber.sender_handle.id() == task_id
+                                });
                             }
-                        });
+                            break;
+                        }
                     },
                 }
             }
@@ -794,5 +795,120 @@ mod open_wiring_tests {
             .unwrap();
 
         assert_eq!(registered_location(&service, "w2").await, "");
+    }
+}
+
+#[cfg(test)]
+mod subscriber_reconnect_tests {
+    use super::*;
+    use policy::default::DefaultPolicy;
+    use sp1_cluster_common::proto::worker_service_server::WorkerService;
+    use sp1_cluster_common::proto::OpenSubRequest;
+    use tokio_stream::StreamExt;
+
+    const SUB: &str = "sub";
+    const PROOF: &str = "p1";
+    const TASK: &str = "t1";
+
+    async fn open_sub(
+        service: &GenericWorkerService<DefaultPolicy>,
+    ) -> UnboundedReceiverStream<Result<ServerSubMessage, Status>> {
+        let request = Request::new(OpenSubRequest {
+            sub_id: SUB.into(),
+            proof_id: PROOF.into(),
+            task_ids: vec![TASK.into()],
+        });
+        WorkerService::open_sub(service, request)
+            .await
+            .unwrap()
+            .into_inner()
+    }
+
+    /// Mirrors `complete_task`: mark the task done and notify its subscribers.
+    async fn complete_task(service: &GenericWorkerService<DefaultPolicy>) {
+        let subscribers = {
+            let mut state = service.coordinator.state.write().await;
+            let task = state
+                .proofs
+                .get_mut(PROOF)
+                .unwrap()
+                .tasks
+                .get_mut(TASK)
+                .unwrap();
+            task.status = TaskStatus::Succeeded;
+            std::mem::take(&mut task.subscribers)
+        };
+        service.coordinator.notify_subscribers(
+            &subscribers,
+            PROOF.into(),
+            TASK.into(),
+            TaskStatus::Succeeded,
+        );
+    }
+
+    async fn next_task_result(
+        stream: &mut UnboundedReceiverStream<Result<ServerSubMessage, Status>>,
+    ) -> proto::TaskResult {
+        loop {
+            let msg = tokio::time::timeout(Duration::from_secs(5), stream.next())
+                .await
+                .expect("no message within 5s")
+                .expect("stream ended")
+                .unwrap();
+            if let Some(server_sub_message::Message::TaskResult(result)) = msg.message {
+                return result;
+            }
+        }
+    }
+
+    /// The task finishes while the client is gone, and the client returns
+    /// after eviction removed its handler. Resubscribing still delivers the result.
+    #[tokio::test(start_paused = true)]
+    async fn late_reconnect_receives_result_missed_while_disconnected() {
+        let service = GenericWorkerService::<DefaultPolicy>::default();
+        crate::tests::register_running_task(&service.coordinator, TASK).await;
+
+        drop(open_sub(&service).await); // client disconnects
+        tokio::task::yield_now().await;
+        complete_task(&service).await;
+        // coordinator evicts the subscriber
+        service
+            .coordinator
+            .subscribers
+            .get_mut(SUB)
+            .unwrap()
+            .last_update = SystemTime::now() - Duration::from_secs(60);
+        service.coordinator.cleanup_dead_subscribers().await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(!service.subscribers.contains_key(SUB));
+
+        let mut stream = open_sub(&service).await;
+        let result = next_task_result(&mut stream).await;
+        assert_eq!(result.task_id, TASK);
+        assert_eq!(result.task_status, TaskStatus::Succeeded as i32);
+    }
+
+    /// Same, but the client returns before eviction. The new stream reuses
+    /// the old handler's unacked map and still delivers the result.
+    #[tokio::test(start_paused = true)]
+    async fn early_reconnect_receives_result_missed_while_disconnected() {
+        let service = GenericWorkerService::<DefaultPolicy>::default();
+        crate::tests::register_running_task(&service.coordinator, TASK).await;
+
+        drop(open_sub(&service).await); // client disconnects
+        tokio::task::yield_now().await;
+        complete_task(&service).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let unacked = service.subscribers.get(SUB).unwrap().unacked.clone();
+        assert!(!unacked.is_empty());
+
+        let mut stream = open_sub(&service).await;
+        assert!(Arc::ptr_eq(
+            &unacked,
+            &service.subscribers.get(SUB).unwrap().unacked
+        ));
+        let result = next_task_result(&mut stream).await;
+        assert_eq!(result.task_id, TASK);
+        assert_eq!(result.task_status, TaskStatus::Succeeded as i32);
     }
 }
