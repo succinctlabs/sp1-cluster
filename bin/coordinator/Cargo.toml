@@ -18,7 +18,8 @@ eyre.workspace = true
 futures.workspace = true
 hex.workspace = true
 http.workspace = true
-jemallocator.workspace = true
+jemalloc-ctl.workspace = true
+jemallocator = { workspace = true, features = ["stats"] }
 lazy_static.workspace = true
 mti.workspace = true
 opentelemetry_sdk.workspace = true

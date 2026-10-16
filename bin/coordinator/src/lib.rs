@@ -2236,6 +2236,38 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             );
         }
         P::debug_state(&state);
+        self.print_state_sizes(&state);
+    }
+
+    fn print_state_sizes(&self, state: &CoordinatorState<P>) {
+        let tasks: usize = state.proofs.values().map(|p| p.tasks.len()).sum();
+        let subscriptions: usize = self
+            .subscribers
+            .iter()
+            .map(|s| s.active_subscriptions.len())
+            .sum();
+
+        let mut buffered_messages = 0usize;
+        let mut buffered_bytes = 0usize;
+        let mut channel_subscribers = 0usize;
+        for entry in self.task_channels.iter() {
+            let inner = entry.inner.lock().unwrap_or_else(|e| e.into_inner());
+            buffered_messages += inner.buffer.len();
+            buffered_bytes += inner.buffer.iter().map(Vec::capacity).sum::<usize>();
+            channel_subscribers += inner.subscribers.len();
+        }
+
+        tracing::info!(
+            "[coordinator] sizes tasks={} workers={} subscriptions={} task_channels={} \
+             buffered_messages={} buffered_bytes={} channel_subscribers={}",
+            tasks,
+            state.workers.len(),
+            subscriptions,
+            self.task_channels.len(),
+            buffered_messages,
+            buffered_bytes,
+            channel_subscribers,
+        );
     }
 
     /// Cancel expired proofs.

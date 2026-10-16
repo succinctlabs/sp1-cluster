@@ -489,6 +489,63 @@ impl<P: Send + Sync> GenericSubscriberHandler<P> {
     }
 }
 
+fn spawn_server_stats_task<P: Send + Sync + 'static>(
+    subscribers: Arc<DashMap<String, GenericSubscriberHandler<P>>>,
+    token: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            print_subscriber_sizes(&subscribers);
+            print_memory_stats();
+            tokio::select! {
+                _ = tokio::time::sleep(COORDINATOR_PERIODIC_INTERVAL) => {}
+                _ = token.cancelled() => break,
+            }
+        }
+    })
+}
+
+fn print_subscriber_sizes<P: Send + Sync>(
+    subscribers: &DashMap<String, GenericSubscriberHandler<P>>,
+) {
+    let mut finished_handlers = 0usize;
+    let mut unacked = 0usize;
+    for sub in subscribers.iter() {
+        if sub.sender_handle.is_finished() {
+            finished_handlers += 1;
+        }
+        unacked += sub.unacked.len();
+    }
+    tracing::info!(
+        "[coordinator] subscriber sizes handlers={} finished_handlers={} unacked={}",
+        subscribers.len(),
+        finished_handlers,
+        unacked,
+    );
+}
+
+fn print_memory_stats() {
+    match jemalloc_stats() {
+        Ok((allocated, active, resident)) => tracing::info!(
+            "[coordinator] memory jemalloc_allocated={} jemalloc_active={} jemalloc_resident={}",
+            allocated,
+            active,
+            resident,
+        ),
+        Err(e) => tracing::warn!("[coordinator] jemalloc stats unavailable: {}", e),
+    }
+}
+
+fn jemalloc_stats() -> jemalloc_ctl::Result<(usize, usize, usize)> {
+    use jemalloc_ctl::{epoch, stats};
+    epoch::advance()?;
+    Ok((
+        stats::allocated::read()?,
+        stats::active::read()?,
+        stats::resident::read()?,
+    ))
+}
+
 /// Spawn a task to send messages to a subscriber channel.
 fn spawn_subscriber_channel_task<P: Send + Sync + 'static>(
     sub_id: String,
@@ -652,6 +709,8 @@ pub async fn start_coordinator_server_custom<
     spawn_heartbeat_task(service.coordinator.clone(), token.clone());
 
     spawn_coordinator_periodic_task(service.coordinator.clone(), token.clone());
+
+    spawn_server_stats_task(service.subscribers.clone(), token.clone());
 
     tracing::info!(
         "coordinator (version {}) listening on {}",
