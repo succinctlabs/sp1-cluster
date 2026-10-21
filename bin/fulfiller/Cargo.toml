@@ -1,5 +1,6 @@
 [package]
 name = "sp1-cluster-fulfiller"
+publish = false
 description = "Proof request fulfiller for SPN."
 readme = "README.md"
 version = { workspace = true }
