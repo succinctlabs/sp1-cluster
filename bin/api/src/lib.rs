@@ -9,6 +9,7 @@ use std::sync::Arc;
 use alloy::primitives::Bytes;
 use axum::{routing::get, Router};
 use serde::{Deserialize, Serialize};
+use sp1_cluster_common::grpc_web::grpc_web_layer;
 use sp1_cluster_common::proto::cluster_service_server::ClusterServiceServer;
 use sqlx::{prelude::FromRow, types::time::OffsetDateTime};
 use tonic::transport::Server;
@@ -61,7 +62,8 @@ pub async fn run(config: ApiConfig, shutdown: CancellationToken) -> anyhow::Resu
     let grpc_task = tokio::spawn(async move {
         Server::builder()
             .accept_http1(true)
-            .add_service(tonic_web::enable(grpc_service))
+            .layer(grpc_web_layer())
+            .add_service(grpc_service)
             .serve_with_shutdown(grpc_addr, grpc_shutdown.cancelled_owned())
             .await
             .unwrap_or_else(|e| {
