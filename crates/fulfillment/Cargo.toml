@@ -1,5 +1,6 @@
 [package]
 name = "sp1-cluster-fulfillment"
+publish = false
 description = "Proof request fulfillment primitives for SPN."
 version = { workspace = true }
 edition = { workspace = true }

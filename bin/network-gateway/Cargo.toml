@@ -1,5 +1,6 @@
 [package]
 name = "sp1-cluster-network-gateway"
+publish = false
 description = "SDK-compatible ProverNetwork + ArtifactStore gateway for self-hosted sp1-cluster deployments."
 version = { workspace = true }
 edition = { workspace = true }
