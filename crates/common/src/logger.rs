@@ -8,8 +8,10 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::logs;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::{runtime, trace, Resource};
+use tracing_subscriber::filter::FilterExt;
 use tracing_subscriber::fmt::format::FmtSpan;
-use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::layer::{Context, Filter, SubscriberExt};
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
@@ -36,18 +38,58 @@ fn get_otlp_endpoint() -> String {
     env::var("OTLP_ENDPOINT").unwrap_or_else(|_| "http://localhost:4317".to_string())
 }
 
+/// The telemetry layer keeps each event in its span until the span closes.
+/// A long-lived span then grows with each event. This filter passes spans, the
+/// first `MAX_SPAN_EVENTS` events of each span, and after that only the first
+/// ERROR event, which sets the exported span status.
+struct BoundedSpanEvents;
+
+const MAX_SPAN_EVENTS: usize = 128;
+
+#[derive(Default)]
+struct SpanEvents {
+    count: usize,
+    error_recorded: bool,
+}
+
+impl<S> Filter<S> for BoundedSpanEvents
+where
+    S: tracing::Subscriber + for<'span> LookupSpan<'span>,
+{
+    fn enabled(&self, _: &tracing::Metadata<'_>, _: &Context<'_, S>) -> bool {
+        true
+    }
+
+    // Counts here, not in `enabled`: `enabled` can run more than once per event.
+    fn event_enabled(&self, event: &tracing::Event<'_>, cx: &Context<'_, S>) -> bool {
+        let Some(span) = cx.event_span(event) else {
+            return false;
+        };
+        let mut extensions = span.extensions_mut();
+        if extensions.get_mut::<SpanEvents>().is_none() {
+            extensions.insert(SpanEvents::default());
+        }
+        let events = extensions.get_mut::<SpanEvents>().unwrap();
+        let is_error = *event.metadata().level() == tracing::Level::ERROR;
+        let passes = events.count < MAX_SPAN_EVENTS || (is_error && !events.error_recorded);
+        if passes {
+            events.count += 1;
+            events.error_recorded |= is_error;
+        }
+        passes
+    }
+}
+
 pub fn init(resource: Resource) {
     INIT.call_once(|| {
         global::set_text_map_propagator(TraceContextPropagator::new());
 
         let otlp_endpoint = get_otlp_endpoint();
-        let env_filter = build_env_filter();
         let tracing_enabled = std::env::var("TRACING_ENABLED")
             .map(|s| s == "true")
             .unwrap_or(false);
-        let telemetry: Box<dyn Layer<Registry> + Send + Sync> = if !tracing_enabled {
-            Box::new(tracing_opentelemetry::layer().with_filter(env_filter))
-        } else {
+        let telemetry = tracing_enabled.then(|| {
+            let env_filter = build_env_filter();
             let tracer = opentelemetry_otlp::new_pipeline()
                 .tracing()
                 .with_exporter(
@@ -64,12 +106,10 @@ pub fn init(resource: Resource) {
                 )
                 .install_batch(runtime::Tokio)
                 .unwrap();
-            Box::new(
-                tracing_opentelemetry::layer()
-                    .with_tracer(tracer)
-                    .with_filter(env_filter),
-            )
-        };
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(BoundedSpanEvents.and(env_filter))
+        });
 
         let env_filter = build_env_filter();
         let json_logs = std::env::var("LOG_FORMAT")
