@@ -3,20 +3,18 @@ all-features = true
 
 [advisories]
 ignore = [
-  { id = "RUSTSEC-2021-0139", reason = "Transitive through tracing-forest in sp1 6.8. sp1 must drop it first." },
+  { id = "RUSTSEC-2021-0139", reason = "Transitive through tracing-forest in sp1. sp1 must drop it first." },
   { id = "RUSTSEC-2021-0141", reason = "Direct dependency of most sp1-cluster crates. Switching to dotenvy removes it." },
   { id = "RUSTSEC-2024-0384", reason = "Transitive through backoff. Replacing backoff removes it." },
   { id = "RUSTSEC-2024-0436", reason = "Transitive through several crates, including alloy-primitives and dashu-macros. Each one must drop it first." },
   { id = "RUSTSEC-2025-0012", reason = "Direct dependency of sp1-cluster and sp1-sdk. Both must switch to a maintained retry crate." },
-  { id = "RUSTSEC-2025-0119", reason = "Transitive through indicatif 0.17 in sp1-prover 6.8. sp1 must upgrade indicatif first." },
-  { id = "RUSTSEC-2025-0134", reason = "Transitive through tonic 0.12. Upgrading tonic here, in sp1 and in the spn crates removes it." },
+  { id = "RUSTSEC-2025-0119", reason = "Transitive through indicatif 0.17 in sp1-prover. sp1 must upgrade indicatif first." },
   { id = "RUSTSEC-2025-0141", reason = "Direct dependency of sp1-cluster, sp1 and spn crates. Moving to a maintained serializer removes it." },
   { id = "RUSTSEC-2026-0098", reason = "Transitive through aws-sdk-s3 default features. Turning them off here and in spn-artifacts removes it." },
   { id = "RUSTSEC-2026-0099", reason = "Transitive through aws-sdk-s3 default features. Turning them off here and in spn-artifacts removes it." },
   { id = "RUSTSEC-2026-0104", reason = "Transitive through aws-sdk-s3 default features. Turning them off here and in spn-artifacts removes it." },
   { id = "RUSTSEC-2026-0173", reason = "Transitive through alloy-sol-macro 1.5 and dynasm 3. Upgrading both removes it." },
   { id = "RUSTSEC-2026-0258", reason = "Transitive through opentelemetry-otlp 0.16 and the aws-sdk-s3 defaults. Upgrading opentelemetry and turning off those defaults removes it." },
-  { id = "RUSTSEC-2026-0344", reason = "Transitive through object defaults in sp1-core-executor 6.8. An sp1 release with the fix removes it." },
   { id = "RUSTSEC-2026-0346", reason = "Transitive through aws-sdk-s3 default features. Turning them off here and in spn-artifacts removes it." },
   { id = "RUSTSEC-2026-0349", reason = "Transitive through aws-sdk-s3 default features. Turning them off here and in spn-artifacts removes it." },
   { id = "RUSTSEC-2026-0382", reason = "Transitive through aws-sdk-s3 default features. Turning them off here and in spn-artifacts removes it." },

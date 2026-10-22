@@ -27,7 +27,7 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
                 TaskError::Fatal(anyhow::anyhow!("failed to execute prove shard: {}", e))
             })?;
         raw_task_request
-            .recover_if_complete(result, self.worker.artifact_client())
+            .recover_prove_shard_if_complete(result, self.worker.artifact_client())
             .await
     }
 }

@@ -40,7 +40,6 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util.workspace = true
 tonic = { workspace = true }
-tonic-web = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 use tokio::task::JoinHandle;
-use tonic::body::{boxed, empty_body, BoxBody};
+use tonic::body::Body;
 use tower::Service;
 use tracing::Instrument;
 
@@ -24,7 +24,7 @@ pub struct OkService<S> {
 
 impl<S, B> Service<http::Request<B>> for OkService<S>
 where
-    S: Service<http::Request<B>, Response = http::Response<BoxBody>> + Send + 'static,
+    S: Service<http::Request<B>, Response = http::Response<Body>> + Send + 'static,
     S::Future: Send + 'static,
 {
     type Response = S::Response;
@@ -41,8 +41,8 @@ where
         let path = req.uri().path().to_string();
         tracing::debug!("{} {}", method, path);
         match req.uri().path() {
-            "/" => Box::pin(async move { Ok(http::Response::new(boxed("OK".to_string()))) }),
-            "/healthz" => Box::pin(async move { Ok(http::Response::new(empty_body())) }),
+            "/" => Box::pin(async move { Ok(http::Response::new(Body::new("OK".to_string()))) }),
+            "/healthz" => Box::pin(async move { Ok(http::Response::new(Body::empty())) }),
             _ => Box::pin(self.inner.call(req).instrument(tracing::debug_span!(
                 "call",
                 method = ?method,

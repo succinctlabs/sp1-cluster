@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use axum::{routing::get, Router};
 use sp1_cluster_artifact::{ArtifactClient, CompressedUpload};
 use sp1_cluster_common::client::ClusterServiceClient;
+use sp1_cluster_common::grpc_web::grpc_web_layer;
 use sp1_sdk::network::proto::artifact::artifact_store_server::ArtifactStoreServer;
 use sp1_sdk::network::proto::base::network::prover_network_server::ProverNetworkServer;
 use tokio::signal;
@@ -135,8 +136,9 @@ where
         info!("gRPC server listening on {grpc_addr}");
         Server::builder()
             .accept_http1(true)
-            .add_service(tonic_web::enable(prover_network))
-            .add_service(tonic_web::enable(artifact_store))
+            .layer(grpc_web_layer())
+            .add_service(prover_network)
+            .add_service(artifact_store)
             .serve_with_shutdown(grpc_addr, grpc_shutdown)
             .await
             .unwrap_or_else(|e| warn!("gRPC server error: {e}"));

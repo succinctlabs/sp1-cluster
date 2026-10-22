@@ -19,7 +19,6 @@ time.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tonic.workspace = true
-tonic-web.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
