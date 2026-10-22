@@ -39,15 +39,12 @@ p3-field = "=0.3.3-succinct"
 p3-matrix = "=0.3.3-succinct"
 
 # SPN
-#
-# The spn crates track succinctlabs/network#245, which moves them to tonic 0.14.
-# Move them back to branch = "main" after that PR merges.
-spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "farhad/tonic-0.14" }
-spn-bidding = { git = "https://github.com/succinctlabs/network", branch = "farhad/tonic-0.14" }
-spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "farhad/tonic-0.14" }
-spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "farhad/tonic-0.14", features = ["network"] }
-spn-pricing = { git = "https://github.com/succinctlabs/network", branch = "farhad/tonic-0.14" }
-spn-utils = { git = "https://github.com/succinctlabs/network", branch = "farhad/tonic-0.14" }
+spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-bidding = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
+spn-pricing = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
 
 # SP1
 # Keep the entire family on one branch so crossing types share one source.

@@ -9548,7 +9548,7 @@ dependencies = [
 [[package]]
 name = "spn-artifact-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Ftonic-0.14#afe8cdbe789a53a16570d398e3fafb802a341a31"
+source = "git+https://github.com/succinctlabs/network?branch=main#d510605ce3bc5c02d406ba13553d4e427f55d007"
 dependencies = [
  "prost 0.14.3",
  "serde",
@@ -9560,7 +9560,7 @@ dependencies = [
 [[package]]
 name = "spn-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Ftonic-0.14#afe8cdbe789a53a16570d398e3fafb802a341a31"
+source = "git+https://github.com/succinctlabs/network?branch=main#d510605ce3bc5c02d406ba13553d4e427f55d007"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -9581,12 +9581,12 @@ dependencies = [
 [[package]]
 name = "spn-bidding"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Ftonic-0.14#afe8cdbe789a53a16570d398e3fafb802a341a31"
+source = "git+https://github.com/succinctlabs/network?branch=main#d510605ce3bc5c02d406ba13553d4e427f55d007"
 
 [[package]]
 name = "spn-metrics"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Ftonic-0.14#afe8cdbe789a53a16570d398e3fafb802a341a31"
+source = "git+https://github.com/succinctlabs/network?branch=main#d510605ce3bc5c02d406ba13553d4e427f55d007"
 dependencies = [
  "axum 0.7.9",
  "eyre",
@@ -9605,7 +9605,7 @@ dependencies = [
 [[package]]
 name = "spn-network-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Ftonic-0.14#afe8cdbe789a53a16570d398e3fafb802a341a31"
+source = "git+https://github.com/succinctlabs/network?branch=main#d510605ce3bc5c02d406ba13553d4e427f55d007"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -9622,7 +9622,7 @@ dependencies = [
 [[package]]
 name = "spn-pricing"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Ftonic-0.14#afe8cdbe789a53a16570d398e3fafb802a341a31"
+source = "git+https://github.com/succinctlabs/network?branch=main#d510605ce3bc5c02d406ba13553d4e427f55d007"
 dependencies = [
  "alloy-primitives",
  "async-trait",
@@ -9633,7 +9633,7 @@ dependencies = [
 [[package]]
 name = "spn-utils"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=farhad%2Ftonic-0.14#afe8cdbe789a53a16570d398e3fafb802a341a31"
+source = "git+https://github.com/succinctlabs/network?branch=main#d510605ce3bc5c02d406ba13553d4e427f55d007"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
