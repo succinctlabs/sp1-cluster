@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
         postgres_auto_migrate: std::env::var("API_AUTO_MIGRATE").unwrap_or("false".to_string())
             == "true",
         postgres_uri: std::env::var("API_DATABASE_URL").expect("API_DATABASE_URL must be set"),
-        auth: AuthConfig::from_env(None)?,
+        auth: AuthConfig::from_env(Some("API"))?,
     };
     let token = CancellationToken::new();
     tokio::spawn(wait_for_shutdown_signal(token.clone()));
