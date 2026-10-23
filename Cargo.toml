@@ -110,12 +110,12 @@ rustls = { version = "0.23.27", features = ["ring"] }
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.138"
 sqlx = { version = "0.8.5", features = ["runtime-tokio", "tls-native-tls", "macros", "postgres", "time"] }
+subtle = "2.6"
 sys-info = "0.9.1"
 sysinfo = "0.33.1"
 tar = "0.4.44"
 testcontainers = "0.27.3"
 time = { version = "0.3.41", features = ["serde"] }
-subtle = "2.6"
 tokio = { version = "1.53.3", features = ["full", "tracing", "rt-multi-thread"] }
 tokio-blocked = "0.1.0"
 tokio-stream = "0.1"
