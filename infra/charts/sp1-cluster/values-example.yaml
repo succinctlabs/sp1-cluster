@@ -85,7 +85,7 @@ cpu-node:
       cpu: 8
       memory: 96Gi
   image:
-    tag: "base-v2.8.5"
+    tag: "base-v2.9.0"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-GPU machine with a powerful CPU.
@@ -123,7 +123,7 @@ gpu-node:
       # cpu: 32.0
       # memory: 24Gi
   image:
-    tag: "node-gpu-v2.8.5"
+    tag: "node-gpu-v2.9.0"
   imagePullSecrets:
     - name: ghcr-secret
 
@@ -146,7 +146,7 @@ api:
     CLUSTER_AUTH_REQUIRED: "true"
   replicaCount: 1
   image:
-    tag: "base-v2.8.5"
+    tag: "base-v2.9.0"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.
@@ -167,7 +167,7 @@ coordinator:
           key: CLUSTER_ACCESS_TOKEN
     CLUSTER_AUTH_REQUIRED: "true"
   image:
-    tag: "base-v2.8.5"
+    tag: "base-v2.9.0"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.
@@ -224,7 +224,7 @@ fulfiller:
           name: cluster-secrets
           key: PRIVATE_KEY
   image:
-    tag: "base-v2.8.5"
+    tag: "base-v2.9.0"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.
@@ -262,7 +262,7 @@ network-gateway:
     # GATEWAY_AUTH_MODE: verify
     # GATEWAY_AUTH_ALLOWLIST: 0xabc...,0xdef...
   image:
-    tag: "base-v2.8.5"
+    tag: "base-v2.9.0"
   imagePullSecrets:
     - name: ghcr-secret
   # nodeSelector: {}
@@ -287,7 +287,7 @@ bidder:
     BIDDER_CPU_WORKER_MAX_WEIGHTS: "96"
     BIDDER_BID_AMOUNT: 1
   image:
-    tag: "base-v2.8.5"
+    tag: "base-v2.9.0"
   imagePullSecrets:
     - name: ghcr-secret
   # Recommended to place on a non-worker machine.
