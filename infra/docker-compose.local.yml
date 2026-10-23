@@ -68,8 +68,6 @@ services:
       - COORDINATOR_ADDR=0.0.0.0:50051
       - RUST_LOG=debug
       - OTLP_ENDPOINT=http://alloy:4317
-    ports:
-      - "0.0.0.0:50053:50051"
     build:
       context: ..
       dockerfile: infra/Dockerfile

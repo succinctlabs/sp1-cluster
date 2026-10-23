@@ -1,4 +1,5 @@
 use eyre::Result;
+use sp1_cluster_common::auth::{AuthConfig, BearerAuthLayer};
 use std::{
     collections::HashMap,
     pin::Pin,
@@ -8,7 +9,9 @@ use std::{
 };
 use tokio::task::JoinHandle;
 use tonic::body::Body;
-use tower::Service;
+use tonic_web::GrpcWebLayer;
+use tower::layer::util::{Identity, Stack};
+use tower::{Layer, Service, ServiceBuilder};
 use tracing::Instrument;
 
 use crate::{
@@ -17,9 +20,31 @@ use crate::{
 };
 use sp1_cluster_common::proto::{TaskType, WorkerType};
 
+pub type Middleware =
+    ServiceBuilder<Stack<BearerAuthLayer, Stack<GrpcWebLayer, Stack<OkLayer, Identity>>>>;
+
+/// OkService is the outer layer, so health probes do not need a token.
+pub fn middleware(auth: AuthConfig) -> Middleware {
+    ServiceBuilder::new()
+        .layer(OkLayer)
+        .layer(GrpcWebLayer::new())
+        .layer(BearerAuthLayer::new(auth))
+}
+
+#[derive(Clone)]
+pub struct OkLayer;
+
+impl<S> Layer<S> for OkLayer {
+    type Service = OkService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        OkService { inner }
+    }
+}
+
 #[derive(Clone)]
 pub struct OkService<S> {
-    pub inner: S,
+    inner: S,
 }
 
 impl<S, B> Service<http::Request<B>> for OkService<S>
@@ -110,5 +135,43 @@ pub(crate) fn worker_type_from_task_type(task_type: TaskType) -> WorkerType {
     match WorkerType::from_task_type(task_type) {
         WorkerType::Gpu if option_env!("SP1_CLUSTER_CPU_ONLY").is_some() => WorkerType::Cpu,
         worker_type => worker_type,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use http::{Method, Request, Response, StatusCode, Version};
+    use tower::{service_fn, ServiceExt};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn health_probes_skip_auth_but_rpcs_do_not() {
+        let auth = AuthConfig {
+            token: Some("s3cret".into()),
+            required: true,
+        };
+        let service = middleware(auth).service(service_fn(|_: Request<Body>| async {
+            Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
+        }));
+
+        let healthz = Request::builder()
+            .method(Method::GET)
+            .uri("/healthz")
+            .body(Body::empty())
+            .unwrap();
+        let response = service.clone().oneshot(healthz).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get("grpc-status").is_none());
+
+        let rpc = Request::builder()
+            .method(Method::POST)
+            .uri("/worker.WorkerService/GetStats")
+            .version(Version::HTTP_2)
+            .header("content-type", "application/grpc")
+            .body(Body::empty())
+            .unwrap();
+        let response = service.oneshot(rpc).await.unwrap();
+        assert_eq!(response.headers()["grpc-status"], "16");
     }
 }

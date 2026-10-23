@@ -3,13 +3,13 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use sp1_cluster_artifact::{ArtifactClient, ArtifactType};
+use sp1_cluster_common::auth::AuthChannel;
 use sp1_cluster_common::client::ClusterServiceClient;
 use sp1_cluster_common::proto::worker_service_client::WorkerServiceClient as RawCoordinatorClient;
 use sp1_cluster_common::proto::{
     ExecutionStatus, GetStatsResponse, GetTaskStatusesRequest, ProofRequest,
     ProofRequestGetRequest, ProofRequestStatus, TaskStatus,
 };
-use tonic::transport::Channel;
 
 pub const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -189,7 +189,7 @@ pub async fn assert_proof_artifact_downloadable(
 /// Poll coordinator GetStats until `pred` holds (e.g. "a task is active", "one cpu worker
 /// left"). Returns the matching stats snapshot.
 pub async fn wait_stats(
-    coordinator: &mut RawCoordinatorClient<Channel>,
+    coordinator: &mut RawCoordinatorClient<AuthChannel>,
     what: &str,
     timeout: Duration,
     pred: impl Fn(&GetStatsResponse) -> bool,
@@ -213,7 +213,7 @@ pub async fn wait_stats(
 
 /// Snapshot of task statuses for a proof: status -> task id list.
 pub async fn task_statuses(
-    coordinator: &mut RawCoordinatorClient<Channel>,
+    coordinator: &mut RawCoordinatorClient<AuthChannel>,
     proof_id: &str,
 ) -> Result<Vec<(TaskStatus, Vec<String>)>> {
     let resp = coordinator

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use clap::{Args, Subcommand};
 use eyre::Result;
 use sp1_cluster_artifact::{redis::RedisArtifactClient, ArtifactClient, ArtifactType};
+use sp1_cluster_common::auth::token_from_env;
 use sp1_cluster_common::proto::{CreateDummyProofRequest, TaskStatus, TaskType, WorkerType};
 use sp1_cluster_utils::{request_proofs_from_env, ClusterElf, ProofRequestResults};
 use sp1_cluster_worker::client::WorkerServiceClient;
@@ -454,6 +455,7 @@ impl BenchCommand {
             worker_id.clone(),
             worker_type,
             None,
+            token_from_env(Some("CLI")),
         )
         .await
         .map_err(|e| eyre::eyre!("Failed to connect to coordinator: {}", e))?;

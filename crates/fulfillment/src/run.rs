@@ -28,9 +28,12 @@ pub async fn run_fulfiller<A: ArtifactClient + CompressedUpload, N: FulfillmentN
         settings.addresses
     );
 
-    let cluster = ClusterServiceClient::new(settings.cluster_rpc.clone())
-        .await
-        .expect("failed to connect to cluster");
+    let cluster = ClusterServiceClient::new(
+        settings.cluster_rpc.clone(),
+        settings.cluster_access_token.clone(),
+    )
+    .await
+    .expect("failed to connect to cluster");
 
     // Initialize the metrics server.
     // let version_info = get_version!();

@@ -31,6 +31,10 @@ pub struct Config {
     #[arg(long, env = "GATEWAY_CLUSTER_RPC")]
     pub cluster_rpc: String,
 
+    /// Read from env in `main`, so the token stays out of `--help` and the process list.
+    #[arg(skip)]
+    pub cluster_access_token: Option<String>,
+
     /// Artifact store backend: "s3" or "redis".
     #[arg(long, env = "GATEWAY_ARTIFACT_STORE", default_value = "s3")]
     pub artifact_store: String,

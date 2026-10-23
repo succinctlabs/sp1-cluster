@@ -2,7 +2,8 @@
 
 # Expects a secret `cluster-secrets` with the following entries:
 # DATABASE_URL=postgresql://postgres:postgrespassword@postgresql:5432/postgres
-# REDIS_NODES=redis://:redispassword@redis-master:6379/0
+# REDIS_NODES=redis://:<redis password>@redis-master:6379/0
+# CLUSTER_ACCESS_TOKEN=<random secret shared by every cluster component>
 # PRIVATE_KEY=
 #
 # See https://kubernetes.io/docs/tasks/configmap-secret/managing-secret-using-kubectl/#create-a-secret
@@ -12,8 +13,8 @@
 
 global:
   redis:
-    # Change this to a secure password.
-    password: redispassword
+    # Set a secure password; it must match the one in REDIS_NODES above.
+    password: ""
 
 redis-store:
   enabled: true
@@ -70,6 +71,11 @@ cpu-node:
         secretKeyRef:
           name: cluster-secrets
           key: REDIS_NODES
+    CLUSTER_ACCESS_TOKEN:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: CLUSTER_ACCESS_TOKEN
   resources:
     # At least 96 GB of RAM to fit Controller + PlonkWrap concurrently.
     requests:
@@ -100,6 +106,11 @@ gpu-node:
         secretKeyRef:
           name: cluster-secrets
           key: REDIS_NODES
+    CLUSTER_ACCESS_TOKEN:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: CLUSTER_ACCESS_TOKEN
   resources:
     requests:
       # Each GPU pod should have at least 16GB RAM and as many cores as possible.
@@ -127,6 +138,12 @@ api:
         secretKeyRef:
           name: cluster-secrets
           key: DATABASE_URL
+    CLUSTER_ACCESS_TOKEN:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: CLUSTER_ACCESS_TOKEN
+    CLUSTER_AUTH_REQUIRED: "true"
   replicaCount: 1
   image:
     tag: "base-v2.8.5"
@@ -143,6 +160,12 @@ coordinator:
     COORDINATOR_CLUSTER_RPC: http://api-grpc:50051
     COORDINATOR_METRICS_ADDR: 0.0.0.0:9090
     COORDINATOR_ADDR: 0.0.0.0:50051
+    CLUSTER_ACCESS_TOKEN:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: CLUSTER_ACCESS_TOKEN
+    CLUSTER_AUTH_REQUIRED: "true"
   image:
     tag: "base-v2.8.5"
   imagePullSecrets:
@@ -178,8 +201,13 @@ fulfiller:
   # The fulfiller is only necessary for fulfilling proofs on the Prover Network.
   enabled: false
   extraEnv:
-    FULFILLER_CLUSTER_RPC: http://coordinator-grpc:50051
+    FULFILLER_CLUSTER_RPC: http://api-grpc:50051
     FULFILLER_LOG_FORMAT: Pretty
+    CLUSTER_ACCESS_TOKEN:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: CLUSTER_ACCESS_TOKEN
     FULFILLER_CLUSTER_ARTIFACT_STORE: redis
     # Ensure these five env vars are set correctly.
     FULFILLER_RPC_GRPC_ADDR: https://rpc.sepolia.succinct.xyz
@@ -216,6 +244,11 @@ network-gateway:
     # Example: https://gw.example.com
     GATEWAY_PUBLIC_HTTP_URL: http://network-gateway-http:8081
     GATEWAY_CLUSTER_RPC: http://api-grpc:50051
+    CLUSTER_ACCESS_TOKEN:
+      valueFrom:
+        secretKeyRef:
+          name: cluster-secrets
+          key: CLUSTER_ACCESS_TOKEN
     GATEWAY_ARTIFACT_STORE: redis
     GATEWAY_REDIS_NODES:
       valueFrom:

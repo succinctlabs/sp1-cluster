@@ -211,6 +211,7 @@ All flags are also environment variables with the `GATEWAY_` prefix.
 | `GATEWAY_HTTP_ADDR` | `0.0.0.0:8081` | HTTP listen address (artifact proxy + `/healthz`). |
 | `GATEWAY_PUBLIC_HTTP_URL` | `http://localhost:8081` | Base URL embedded in `artifact_uri`/`program_uri`/`proof_uri` handed back to SDK callers. Must be reachable *from* the caller. |
 | `GATEWAY_CLUSTER_RPC` | *(required)* | `bin/api` gRPC endpoint. |
+| `GATEWAY_CLUSTER_ACCESS_TOKEN` | `CLUSTER_ACCESS_TOKEN` | Bearer token sent on every cluster RPC. |
 | `GATEWAY_ARTIFACT_STORE` | `s3` | Backend: `s3` or `redis`. |
 | `GATEWAY_S3_BUCKET` / `GATEWAY_S3_REGION` / `GATEWAY_S3_CONCURRENCY` | — | Required when `s3`. |
 | `GATEWAY_REDIS_NODES` (comma-separated) / `GATEWAY_REDIS_POOL_MAX_SIZE` | — | Required when `redis`. |

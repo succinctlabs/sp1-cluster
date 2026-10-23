@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use sp1_cluster_artifact::{ArtifactClient, ArtifactType, InMemoryArtifactClient};
 use sp1_cluster_common::{
+    auth::BearerInterceptor,
     client::ClusterServiceClient,
     proto as cluster_pb,
     proto::{
@@ -213,7 +214,7 @@ async fn e2e_register_program_request_proof_download() {
         .unwrap()
         .connect_lazy();
     let cluster = ClusterServiceClient {
-        rpc: InnerClusterClient::new(channel),
+        rpc: InnerClusterClient::with_interceptor(channel, BearerInterceptor::default()),
         backoff: Default::default(),
     };
 
@@ -226,6 +227,7 @@ async fn e2e_register_program_request_proof_download() {
         http_addr: format!("127.0.0.1:{http_port}"),
         public_http_url: public_http_url.clone(),
         cluster_rpc: cluster_rpc.clone(),
+        cluster_access_token: None,
         artifact_store: "unused".into(),
         s3_bucket: None,
         s3_region: None,

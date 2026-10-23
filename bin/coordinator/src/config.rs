@@ -1,6 +1,7 @@
 // use crate::autoscaler::AutoscalerSettings;
 use config::{Config, Environment};
 use serde::Deserialize;
+use sp1_cluster_common::auth::AuthConfig;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Settings {
@@ -20,6 +21,9 @@ pub struct Settings {
     /// requeue (`COORDINATOR_WORKER_HEARTBEAT_TIMEOUT_SECS`, default 30).
     #[serde(default = "default_worker_heartbeat_timeout_secs")]
     pub worker_heartbeat_timeout_secs: u64,
+    /// Set in `Settings::new`, because the token falls back to unprefixed `CLUSTER_ACCESS_TOKEN`.
+    #[serde(skip)]
+    pub auth: AuthConfig,
 }
 
 fn default_worker_heartbeat_timeout_secs() -> u64 {
@@ -43,7 +47,9 @@ impl Settings {
     pub fn new() -> Result<Self, config::ConfigError> {
         let builder = Config::builder().add_source(Environment::with_prefix("COORDINATOR"));
         let config = builder.build()?;
-        let settings = config.try_deserialize::<Settings>()?;
+        let mut settings = config.try_deserialize::<Settings>()?;
+        settings.auth = AuthConfig::from_env(Some("COORDINATOR"))
+            .map_err(|e| config::ConfigError::Message(e.to_string()))?;
         Ok(settings)
     }
 }
