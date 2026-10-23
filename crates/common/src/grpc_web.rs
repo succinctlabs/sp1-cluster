@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use http::{header::CONTENT_TYPE, HeaderName};
+use http::{
+    header::{AUTHORIZATION, CONTENT_TYPE},
+    HeaderName,
+};
 use tonic::Status;
 use tonic_web::GrpcWebLayer;
 use tower::layer::util::Stack;
@@ -23,6 +26,7 @@ pub fn grpc_web_layer() -> Stack<GrpcWebLayer, CorsLayer> {
         ])
         .allow_headers([
             HeaderName::from_static("x-grpc-web"),
+            AUTHORIZATION,
             CONTENT_TYPE,
             HeaderName::from_static("x-user-agent"),
             HeaderName::from_static("grpc-timeout"),

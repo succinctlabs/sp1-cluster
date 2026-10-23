@@ -185,6 +185,7 @@ async fn run_batch(cluster: BarrierCluster, count: u16) -> eyre::Result<Vec<Proo
 
     let config = ProofRequestConfig {
         cluster_rpc: format!("http://{addr}"),
+        cluster_access_token: None,
         mode: ProofMode::Compressed,
         timeout_hours: 1,
         artifact_store: ArtifactStoreConfig::Redis { nodes: vec![] },
@@ -267,6 +268,7 @@ async fn unreachable_cluster_gives_up() {
 
     let config = ProofRequestConfig {
         cluster_rpc: format!("http://{addr}"),
+        cluster_access_token: None,
         mode: ProofMode::Compressed,
         timeout_hours: 1,
         artifact_store: ArtifactStoreConfig::Redis { nodes: vec![] },

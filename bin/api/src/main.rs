@@ -1,5 +1,6 @@
 use opentelemetry_sdk::Resource;
 use sp1_cluster_api::ApiConfig;
+use sp1_cluster_common::auth::AuthConfig;
 use sp1_cluster_common::logger;
 use sp1_cluster_common::shutdown::wait_for_shutdown_signal;
 use tokio_util::sync::CancellationToken;
@@ -18,6 +19,7 @@ async fn main() -> anyhow::Result<()> {
         postgres_auto_migrate: std::env::var("API_AUTO_MIGRATE").unwrap_or("false".to_string())
             == "true",
         postgres_uri: std::env::var("API_DATABASE_URL").expect("API_DATABASE_URL must be set"),
+        auth: AuthConfig::from_env(None)?,
     };
     let token = CancellationToken::new();
     tokio::spawn(wait_for_shutdown_signal(token.clone()));

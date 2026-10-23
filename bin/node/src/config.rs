@@ -1,4 +1,5 @@
 use rand::Rng;
+use sp1_cluster_common::auth::token_from_env;
 
 use sp1_cluster_common::proto::WorkerType;
 use sp1_cluster_worker::location;
@@ -19,6 +20,7 @@ pub struct NodeConfig {
     pub worker_id: String,
     pub worker_type: WorkerType,
     pub coordinator_rpc: String,
+    pub cluster_access_token: Option<String>,
     pub cluster: String,
     pub task_timeout: Duration,
     pub drain_timeout: Duration,
@@ -33,6 +35,7 @@ impl Default for NodeConfig {
             worker_id: format!("unknown_{:032x}", rand::rng().random::<u128>()),
             worker_type: WorkerType::All,
             coordinator_rpc: Default::default(),
+            cluster_access_token: None,
             cluster: "unknown".to_string(),
             task_timeout: DEFAULT_TASK_TIMEOUT,
             drain_timeout: DEFAULT_DRAIN_TIMEOUT,
@@ -70,6 +73,7 @@ impl NodeConfig {
             },
             coordinator_rpc: std::env::var("NODE_COORDINATOR_RPC")
                 .unwrap_or("http://[::1]:50051".to_string()),
+            cluster_access_token: token_from_env(Some("NODE")),
             cluster,
             task_timeout: DEFAULT_TASK_TIMEOUT,
             drain_timeout: DEFAULT_DRAIN_TIMEOUT,

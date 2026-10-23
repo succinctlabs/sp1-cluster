@@ -44,6 +44,7 @@ pub async fn run(
         node_config.worker_id.clone(),
         node_config.worker_type,
         node_config.location.clone(),
+        node_config.cluster_access_token.clone(),
     )
     .await?;
 

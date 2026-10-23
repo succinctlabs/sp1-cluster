@@ -33,11 +33,12 @@ pub async fn run<A>(cfg: Config, client: A) -> Result<()>
 where
     A: ArtifactClient + CompressedUpload + 'static,
 {
-    let cluster = ClusterServiceClient::new(cfg.cluster_rpc.clone())
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!("failed to connect to cluster RPC {}: {e}", cfg.cluster_rpc)
-        })?;
+    let cluster =
+        ClusterServiceClient::new(cfg.cluster_rpc.clone(), cfg.cluster_access_token.clone())
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!("failed to connect to cluster RPC {}: {e}", cfg.cluster_rpc)
+            })?;
     let auth = build_auth(&cfg)?;
     let program_store = build_program_store(&cfg)?;
     serve(
@@ -62,11 +63,12 @@ pub async fn run_with_shutdown<A>(
 where
     A: ArtifactClient + CompressedUpload + 'static,
 {
-    let cluster = ClusterServiceClient::new(cfg.cluster_rpc.clone())
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!("failed to connect to cluster RPC {}: {e}", cfg.cluster_rpc)
-        })?;
+    let cluster =
+        ClusterServiceClient::new(cfg.cluster_rpc.clone(), cfg.cluster_access_token.clone())
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!("failed to connect to cluster RPC {}: {e}", cfg.cluster_rpc)
+            })?;
     let auth = build_auth(&cfg)?;
     let program_store = build_program_store(&cfg)?;
     serve(

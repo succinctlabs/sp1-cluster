@@ -6,6 +6,7 @@ use eyre::Result;
 use rand::Rng;
 use sp1_cluster_artifact::s3::{S3ArtifactClient, S3DownloadMode};
 use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_common::auth::token_from_env;
 use sp1_cluster_utils::{request_config_from_env, ArtifactStoreConfig};
 use sp1_cluster_worker::client::WorkerServiceClient;
 use sp1_cluster_worker::utils::{current_context, task_metadata};
@@ -61,10 +62,15 @@ impl BuildVkeys {
         })
         .expect("Invalid worker type");
 
-        let mut cluster_client =
-            WorkerServiceClient::new(cluster_rpc, node_id.clone(), worker_type, None)
-                .await
-                .unwrap();
+        let mut cluster_client = WorkerServiceClient::new(
+            cluster_rpc,
+            node_id.clone(),
+            worker_type,
+            None,
+            token_from_env(Some("CLI")),
+        )
+        .await
+        .unwrap();
 
         // NOTE: Only run this script using the AWS cluster (not local cluster with Redicis artifact store).
         // We throw out most of the config, but we want to just extract the

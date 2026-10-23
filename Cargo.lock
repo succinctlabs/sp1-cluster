@@ -8360,6 +8360,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sp1-prover-types",
+ "subtle",
  "tokio",
  "tokio-blocked",
  "tokio-util",

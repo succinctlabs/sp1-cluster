@@ -1496,6 +1496,7 @@ mod tests {
     use super::*;
     use crate::program_store::InMemoryProgramStore;
     use sp1_cluster_artifact::InMemoryArtifactClient;
+    use sp1_cluster_common::auth::BearerInterceptor;
     use sp1_cluster_common::proto::cluster_service_client::ClusterServiceClient as InnerClusterClient;
     use tonic::transport::Endpoint;
 
@@ -1505,7 +1506,7 @@ mod tests {
     fn dummy_cluster_client() -> ClusterServiceClient {
         let channel = Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
         ClusterServiceClient {
-            rpc: InnerClusterClient::new(channel),
+            rpc: InnerClusterClient::with_interceptor(channel, BearerInterceptor::default()),
             backoff: Default::default(),
         }
     }

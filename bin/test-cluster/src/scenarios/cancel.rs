@@ -153,7 +153,7 @@ async fn run_active() -> anyhow::Result<()> {
 async fn cancel_everywhere(
     api: &sp1_cluster_common::client::ClusterServiceClient,
     coordinator: &mut sp1_cluster_common::proto::worker_service_client::WorkerServiceClient<
-        tonic::transport::Channel,
+        sp1_cluster_common::auth::AuthChannel,
     >,
     proof_id: &str,
 ) -> anyhow::Result<()> {

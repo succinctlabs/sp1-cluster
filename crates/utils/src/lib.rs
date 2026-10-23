@@ -10,6 +10,7 @@ use sp1_cluster_artifact::{
     ArtifactClient, ArtifactType,
 };
 use sp1_cluster_common::{
+    auth::token_from_env,
     client::ClusterServiceClient,
     proto::{self, ProofRequestCancelRequest, ProofRequestStatus},
 };
@@ -19,6 +20,7 @@ use sp1_sdk::{network::proto::types::ProofMode, ProofFromNetwork, SP1Stdin};
 pub struct ProofRequestConfig {
     /// The RPC Url to connect to.
     pub cluster_rpc: String,
+    pub cluster_access_token: Option<String>,
     /// The proof mode to use.
     pub mode: ProofMode,
     /// The timeout for each proof request in hours.
@@ -59,10 +61,11 @@ pub enum ClusterElf {
 /// warnings with nothing to show for it.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-async fn connect(cluster_rpc: &str) -> Result<ClusterServiceClient> {
+async fn connect(config: &ProofRequestConfig) -> Result<ClusterServiceClient> {
+    let cluster_rpc = &config.cluster_rpc;
     tokio::time::timeout(
         CONNECT_TIMEOUT,
-        ClusterServiceClient::new(cluster_rpc.to_string()),
+        ClusterServiceClient::new(cluster_rpc.to_string(), config.cluster_access_token.clone()),
     )
     .await
     .map_err(|_| {
@@ -81,7 +84,7 @@ pub async fn create_request<A: ArtifactClient>(
     stdin: SP1Stdin,
     config: &ProofRequestConfig,
 ) -> Result<ProofRequest> {
-    let client = connect(&config.cluster_rpc).await?;
+    let client = connect(config).await?;
     let mut requests = create_requests(
         &client,
         artifact_client,
@@ -271,7 +274,7 @@ pub async fn request_proofs<A: ArtifactClient>(
     count: NonZeroU16,
     config: &ProofRequestConfig,
 ) -> Result<Vec<ProofRequestResults>> {
-    let client = connect(&config.cluster_rpc).await?;
+    let client = connect(config).await?;
     let mut pending =
         create_requests(&client, artifact_client.clone(), elf, stdin, count, config).await?;
 
@@ -401,6 +404,7 @@ pub fn request_config_from_env(proof_mode: ProofMode, timeout_hours: u64) -> Pro
 
     ProofRequestConfig {
         cluster_rpc,
+        cluster_access_token: token_from_env(Some("CLI")),
         mode: proof_mode,
         timeout_hours,
         artifact_store: artifact_store_config,

@@ -5,6 +5,7 @@ use sp1_cluster_artifact::{
     redis::RedisArtifactClient,
     s3::{S3ArtifactClient, S3DownloadMode},
 };
+use sp1_cluster_common::auth::token_from_env;
 use sp1_cluster_common::logger;
 use sp1_cluster_network_gateway::{config::Config, run};
 use tracing::info;
@@ -19,7 +20,8 @@ async fn main() -> Result<()> {
         .unwrap();
     logger::init(Resource::empty());
 
-    let cfg = Config::parse();
+    let mut cfg = Config::parse();
+    cfg.cluster_access_token = token_from_env(Some("GATEWAY"));
     info!(
         grpc_addr = %cfg.grpc_addr,
         http_addr = %cfg.http_addr,

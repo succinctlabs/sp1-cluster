@@ -5,7 +5,7 @@ use crate::cluster::{
 use crate::config::Settings;
 use crate::latency::print_latency;
 use crate::metrics::initialize_metrics;
-use crate::util::{spawn_coordinator_periodic_task, spawn_heartbeat_task, OkService};
+use crate::util::{middleware, spawn_coordinator_periodic_task, spawn_heartbeat_task};
 use dashmap::DashMap;
 use jemallocator::Jemalloc;
 use mti::prelude::{MagicTypeIdExt, V7};
@@ -21,7 +21,6 @@ use std::net::SocketAddr;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Status};
-use tonic_web::GrpcWebLayer;
 
 #[global_allocator]
 pub static ALLOCATOR: Jemalloc = Jemalloc;
@@ -607,7 +606,9 @@ pub async fn start_coordinator_server_custom<
 
     let (completed_tx, completed_rx) = mpsc::unbounded_channel::<ProofResult<P>>();
     let task_map = Arc::new(DashMap::<String, TaskState>::new());
-    let api_client = Arc::new(ClusterServiceClient::new(config.cluster_rpc.clone()).await?);
+    let api_client = Arc::new(
+        ClusterServiceClient::new(config.cluster_rpc.clone(), config.auth.token.clone()).await?,
+    );
 
     service.coordinator.set_proofs_tx(completed_tx).await;
     service
@@ -659,10 +660,6 @@ pub async fn start_coordinator_server_custom<
         addr
     );
 
-    let middleware = tower::ServiceBuilder::new()
-        .layer_fn(|s| OkService { inner: s })
-        .layer(GrpcWebLayer::new());
-
     let coordinator = service.coordinator.clone();
     let coordinator_for_shutdown = service.coordinator.clone();
 
@@ -671,7 +668,7 @@ pub async fn start_coordinator_server_custom<
         .tcp_keepalive(Some(Duration::from_secs(20)))
         .http2_keepalive_interval(Some(Duration::from_secs(15)))
         .http2_keepalive_timeout(Some(Duration::from_secs(35)))
-        .layer(middleware)
+        .layer(middleware(config.auth.clone()))
         .add_service(
             sp1_cluster_common::proto::worker_service_server::WorkerServiceServer::new(service),
         )

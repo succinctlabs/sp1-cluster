@@ -3,6 +3,9 @@
 #
 # Same machine as manager: docker compose up
 # Remote machine: MANAGER_HOST=<ip> docker compose up
+# CLUSTER_ACCESS_TOKEN and REDIS_PASSWORD must match the manager's.
+# REDIS_PASSWORD goes into a redis:// URL, so use URL-safe characters only.
+# Traffic to the manager has no encryption. Keep both machines on a private network or VPN.
 
 # Docker's json-file driver never rotates by default.
 x-logging: &default-logging
@@ -36,7 +39,7 @@ services:
   # redis:
   #   image: bitnamisecure/redis:latest
   #   environment:
-  #     - REDIS_PASSWORD=redispassword
+  #     - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD}
   #     - REDIS_AOF_ENABLED=no
   #     # Keep below the cgroup limit; RSS overshoots maxmemory via fragmentation.
   #     - REDIS_EXTRA_FLAGS=--maxmemory 96gb
@@ -62,7 +65,8 @@ services:
       # Must be <= container memory in GB (see deploy.resources.limits.memory below).
       - WORKER_MAX_WEIGHT_OVERRIDE=24
       - NODE_ARTIFACT_STORE=redis
-      - NODE_REDIS_NODES=redis://:redispassword@${MANAGER_HOST:-host.docker.internal}:6379/0
+      - NODE_REDIS_NODES=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@${MANAGER_HOST:-host.docker.internal}:6379/0
+      - CLUSTER_ACCESS_TOKEN=${CLUSTER_ACCESS_TOKEN:?set CLUSTER_ACCESS_TOKEN}
       - WORKER_TYPE=GPU
       - RUST_LOG=debug,tower=info,h2=info,tonic-web=info,hyper-util=info
       - TRACING_ENABLED=true
@@ -150,7 +154,8 @@ services:
   #     - NODE_COORDINATOR_RPC=http://${MANAGER_HOST:-host.docker.internal}:50053
   #     - WORKER_MAX_WEIGHT_OVERRIDE=48
   #     - NODE_ARTIFACT_STORE=redis
-  #     - NODE_REDIS_NODES=redis://:redispassword@${MANAGER_HOST:-host.docker.internal}:6379/0
+  #     - NODE_REDIS_NODES=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@${MANAGER_HOST:-host.docker.internal}:6379/0
+  #     - CLUSTER_ACCESS_TOKEN=${CLUSTER_ACCESS_TOKEN:?set CLUSTER_ACCESS_TOKEN}
   #     - WORKER_TYPE=CPU
   #     - SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16
   #     - SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk

@@ -4,6 +4,7 @@ use eyre::Result;
 use mti::prelude::{MagicTypeIdExt, V7};
 use rand::seq::IteratorRandom;
 use sp1_cluster_artifact::ArtifactId;
+use sp1_cluster_common::auth::{AuthChannel, BearerInterceptor};
 use sp1_cluster_common::client::reconnect_with_backoff;
 use sp1_cluster_common::consts::task_weight;
 use sp1_cluster_common::proto::{
@@ -20,7 +21,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio_stream::{Stream, StreamExt};
-use tonic::transport::Channel;
 use tonic::Status;
 
 /// Retry policies. Each call site picks one explicitly — no shared default,
@@ -49,7 +49,7 @@ mod retry {
 
 #[derive(Clone)]
 pub struct WorkerServiceClient {
-    pub client: InnerWorkerClient<Channel>,
+    pub client: InnerWorkerClient<AuthChannel>,
     pub worker_id: String,
     pub worker_type: WorkerType,
     /// Where this worker runs, or `None` if it could not be determined. Sent
@@ -63,10 +63,12 @@ impl WorkerServiceClient {
         worker_id: String,
         worker_type: WorkerType,
         location: Option<String>,
+        token: Option<String>,
     ) -> Result<WorkerServiceClient> {
         let channel = reconnect_with_backoff(&addr).await?;
 
-        let client = InnerWorkerClient::new(channel.clone());
+        let client =
+            InnerWorkerClient::with_interceptor(channel, BearerInterceptor::new(token.as_deref())?);
 
         Ok(Self {
             client,

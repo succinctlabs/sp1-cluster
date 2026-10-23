@@ -1,6 +1,7 @@
 use alloy_primitives::{Address, B256};
 use config::{Config, ConfigError, Environment};
 use serde::Deserialize;
+use sp1_cluster_common::auth::token_from_env;
 use spn_utils::{deserialize_domain, LogFormat};
 
 #[derive(Debug, Deserialize)]
@@ -10,6 +11,9 @@ pub struct FulfillerSettings {
     pub sp1_private_key: String,
     pub use_aws_kms: bool,
     pub cluster_rpc: String,
+    /// Set in `new`, because the token falls back to unprefixed `CLUSTER_ACCESS_TOKEN`.
+    #[serde(skip)]
+    pub cluster_access_token: Option<String>,
     pub version: String,
     pub log_format: LogFormat,
     #[serde(deserialize_with = "deserialize_domain")]
@@ -49,7 +53,7 @@ fn default_refresh_interval_sec() -> u64 {
 
 impl FulfillerSettings {
     pub fn new(prefix: &str) -> Result<Self, ConfigError> {
-        let settings: Self = Config::builder()
+        let mut settings: Self = Config::builder()
             .add_source(
                 Environment::with_prefix(prefix)
                     .list_separator(",")
@@ -59,6 +63,7 @@ impl FulfillerSettings {
             )
             .build()?
             .try_deserialize()?;
+        settings.cluster_access_token = token_from_env(Some(prefix));
 
         Ok(settings)
     }

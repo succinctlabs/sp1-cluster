@@ -9,6 +9,7 @@ use std::sync::Arc;
 use alloy::primitives::Bytes;
 use axum::{routing::get, Router};
 use serde::{Deserialize, Serialize};
+use sp1_cluster_common::auth::{AuthConfig, BearerAuthLayer};
 use sp1_cluster_common::grpc_web::grpc_web_layer;
 use sp1_cluster_common::proto::cluster_service_server::ClusterServiceServer;
 use sqlx::{prelude::FromRow, types::time::OffsetDateTime};
@@ -30,6 +31,7 @@ pub struct ApiConfig {
     pub grpc_addr: String,
     pub postgres_uri: String,
     pub postgres_auto_migrate: bool,
+    pub auth: AuthConfig,
 }
 
 pub async fn run(config: ApiConfig, shutdown: CancellationToken) -> anyhow::Result<()> {
@@ -63,6 +65,7 @@ pub async fn run(config: ApiConfig, shutdown: CancellationToken) -> anyhow::Resu
         Server::builder()
             .accept_http1(true)
             .layer(grpc_web_layer())
+            .layer(BearerAuthLayer::new(config.auth.clone()))
             .add_service(grpc_service)
             .serve_with_shutdown(grpc_addr, grpc_shutdown.cancelled_owned())
             .await
