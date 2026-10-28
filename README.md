@@ -47,6 +47,24 @@ cd sp1-cluster
 cargo build --release
 ```
 
+### Building on bare metal
+
+The Docker images under `infra/` install a few things a fresh machine won't have. If you build outside Docker you need them too:
+
+* `m4` (GMP is built from source by `gmp-mpfr-sys`, pulled in through `sp1-core-machine`'s `bigint-rug` feature)
+* `cmake` 3.24 or newer
+* `protoc`
+* Go (the Groth16 and PLONK wrap runs through `native-gnark`)
+* `libclang-dev`
+* the CUDA toolkit, for `cargo build --release -p sp1-cluster-node --features gpu`
+
+### Running locally
+
+Two things that are easy to miss when you run the services by hand instead of through `infra/docker-compose.local.yml`:
+
+* **A request needs a CPU-capable worker.** A proof request starts with CPU-type tasks (the controller and the execution), and the coordinator only hands those to workers started with `WORKER_TYPE=CPU` or `WORKER_TYPE=ALL`. With only `WORKER_TYPE=GPU` workers the request sits in `cpu_queue` forever while the GPUs idle.
+* **CPU and ALL workers download circuit artifacts at startup.** They download missing or incomplete artifacts before connecting to the coordinator. A failed download stops startup. Groth16 uses `SP1_GROTH16_CIRCUIT_PATH`, and PLONK uses `SP1_PLONK_CIRCUIT_PATH`. These default to `~/.sp1/circuits/groth16` and `~/.sp1/circuits/plonk`. SP1 adds a circuit-version subdirectory to each base path. The Docker images create empty cache directories at `/var/cache/sp1/circuits/groth16` and `/var/cache/sp1/circuits/plonk`. Give the worker write access to both cache directories.
+
 ## Benchmarking
 
 Start `gpu0`. Compose also starts its API, coordinator, Redis, and Postgres dependencies:
