@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use prost::Message;
 use sp1_cluster_artifact::ArtifactType;
-use sp1_cluster_common::proto::ProofRequest;
+use sp1_cluster_common::{client::drain_pages, proto::ProofRequest};
 use sp1_cluster_fulfillment::{
     network::{CancelableKind, FulfillmentNetwork, NetworkRequest},
     prover_info::build_report_prover_info_body,
@@ -277,22 +277,40 @@ impl FulfillmentNetwork for MainnetFulfiller {
             .collect();
 
         let responses = join_all(queries.into_iter().map(|(request, kind)| {
-            let mut network = self.network.clone();
+            let network = &self.network;
             async move {
-                network
-                    .get_filtered_proof_requests(request)
-                    .await
-                    .map(|response| (response, kind))
+                let pages = drain_pages(limit, |offset| {
+                    let mut network = network.clone();
+                    let request = spn_network_types::GetFilteredProofRequestsRequest {
+                        page: Some(offset / limit + 1),
+                        ..request.clone()
+                    };
+                    async move {
+                        network
+                            .get_filtered_proof_requests(request)
+                            .await
+                            .map(|response| response.into_inner().requests)
+                    }
+                })
+                .await;
+                (pages, kind)
             }
         }))
         .await;
 
-        // Dedupe in case a status transition races the parallel queries.
+        // A request can move from Assigned to Unfulfillable between the two query reads.
+        // Both queries can then return its ID, so cancel it only once.
         let mut seen = std::collections::HashSet::new();
         let mut requests = Vec::new();
-        for response in responses {
-            let (response, kind) = response?;
-            for request in response.into_inner().requests {
+        for (pages, kind) in responses {
+            let page_requests = match pages {
+                Ok(page_requests) => page_requests.items,
+                Err(error) => {
+                    tracing::warn!("failed to list {kind:?} cancelable requests: {error}");
+                    continue;
+                }
+            };
+            for request in page_requests {
                 if seen.insert(request.request_id.clone()) {
                     requests.push((NetworkProofRequest(request), kind));
                 }

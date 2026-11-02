@@ -3,12 +3,14 @@ use crate::{
     proto::{
         self, cluster_service_client::ClusterServiceClient as InnerClusterClient,
         ProofRequestCancelRequest, ProofRequestCreateRequest, ProofRequestGetRequest,
-        ProofRequestListRequest, ProofRequestUpdateRequest,
+        ProofRequestListRequest, ProofRequestStatus, ProofRequestUpdateRequest,
     },
     util::backoff_retry,
 };
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
 use eyre::Result;
+use futures::{stream, StreamExt};
+use std::collections::HashSet;
 use std::future::Future;
 use std::time::Duration;
 use tonic::transport::{Channel, Endpoint};
@@ -19,6 +21,8 @@ use tonic::{Response, Status};
 /// each attempt turns the hang into a fast, retryable failure. 5s sits above a normal call (~ms) and
 /// under the 10s backoff budget, so it fires only on a real stall yet still leaves room to retry.
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
+
+const STATUS_LOOKUP_FAN_OUT: usize = 8;
 
 /// One gRPC attempt under [`ATTEMPT_TIMEOUT`], body unwrapped. A timeout becomes a transient
 /// `DeadlineExceeded` so `backoff_retry` re-issues it.
@@ -146,14 +150,22 @@ impl ClusterServiceClient {
         &self,
         request: ProofRequestListRequest,
     ) -> Result<Vec<proto::ProofRequest>> {
-        let rows = drain_pages(PROOF_REQUEST_PAGE_SIZE, |offset| {
+        Ok(self.get_proof_request_pages(request).await?.items)
+    }
+
+    async fn get_proof_request_pages(
+        &self,
+        request: ProofRequestListRequest,
+    ) -> Result<PageResult<proto::ProofRequest>> {
+        let mut listed = drain_pages(PROOF_REQUEST_PAGE_SIZE, |offset| {
             let mut request = request.clone();
             request.limit = Some(PROOF_REQUEST_PAGE_SIZE);
             request.offset = Some(offset);
             self.get_proof_requests(request)
         })
         .await?;
-        Ok(dedup_by_id(rows))
+        listed.items = dedup_by_id(listed.items);
+        Ok(listed)
     }
 
     pub async fn update_proof_request(&self, request: ProofRequestUpdateRequest) -> Result<()> {
@@ -178,6 +190,27 @@ impl ClusterServiceClient {
             })
             .await?;
         Ok(result.proof_request)
+    }
+
+    pub async fn get_pending_proof_request_ids(
+        &self,
+        proof_ids: &[String],
+        minimum_deadline: u64,
+    ) -> Result<HashSet<String>> {
+        if proof_ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let listed = self
+            .get_proof_request_pages(ProofRequestListRequest {
+                proof_status: vec![ProofRequestStatus::Pending.into()],
+                minimum_deadline: Some(minimum_deadline),
+                ..Default::default()
+            })
+            .await?;
+        pending_request_ids(listed, proof_ids, |proof_id| {
+            self.get_proof_request(ProofRequestGetRequest { proof_id })
+        })
+        .await
     }
 
     /// Replace the API's cluster component build manifest (full snapshot). Called
@@ -215,6 +248,50 @@ impl ClusterServiceClient {
     }
 }
 
+async fn pending_request_ids<F, Fut>(
+    listed: PageResult<proto::ProofRequest>,
+    proof_ids: &[String],
+    fetch: F,
+) -> Result<HashSet<String>>
+where
+    F: Fn(String) -> Fut,
+    Fut: Future<Output = Result<Option<proto::ProofRequest>>>,
+{
+    let candidates: HashSet<_> = proof_ids.iter().collect();
+    let mut pending: HashSet<_> = listed
+        .items
+        .into_iter()
+        .filter(|request| candidates.contains(&request.id))
+        .map(|request| request.id)
+        .collect();
+    if listed.is_complete {
+        return Ok(pending);
+    }
+
+    // The page cap can hide Pending requests. Read missing candidates by ID before skipping them.
+    let missing: Vec<_> = proof_ids
+        .iter()
+        .filter(|id| !pending.contains(*id))
+        .cloned()
+        .collect();
+    let mut checks =
+        stream::iter(missing.into_iter().map(fetch)).buffer_unordered(STATUS_LOOKUP_FAN_OUT);
+    while let Some(result) = checks.next().await {
+        if let Some(request) = result? {
+            if request.proof_status == ProofRequestStatus::Pending as i32 {
+                pending.insert(request.id);
+            }
+        }
+    }
+    Ok(pending)
+}
+
+#[derive(Debug)]
+pub struct PageResult<T> {
+    pub items: Vec<T>,
+    pub is_complete: bool,
+}
+
 /// Matches the server-side cap on `limit`, so each fetch is one full page.
 const PROOF_REQUEST_PAGE_SIZE: u32 = 1000;
 
@@ -225,13 +302,15 @@ const MAX_PAGES: u32 = 100;
 const PAGE_WARN_THRESHOLD: u32 = 10;
 
 /// Collects pages from `fetch(offset)` until a short page marks the end.
-/// At the page cap it logs an error and returns the rows it has, so callers
-/// keep partial progress. Rows past the cap stay invisible until the match
-/// set shrinks, so treat absence as transient.
-async fn drain_pages<T, F, Fut>(page_size: u32, fetch: F) -> Result<Vec<T>>
+/// At the page cap it returns the collected rows with `is_complete = false`.
+/// Callers must check missing IDs separately when the listing is incomplete.
+pub async fn drain_pages<T, E, F, Fut>(
+    page_size: u32,
+    fetch: F,
+) -> std::result::Result<PageResult<T>, E>
 where
     F: Fn(u32) -> Fut,
-    Fut: Future<Output = Result<Vec<T>>>,
+    Fut: Future<Output = std::result::Result<Vec<T>, E>>,
 {
     let mut all = Vec::new();
     for page_idx in 0..MAX_PAGES {
@@ -239,7 +318,10 @@ where
         let full_page = page.len() as u32 == page_size;
         all.extend(page);
         if !full_page {
-            return Ok(all);
+            return Ok(PageResult {
+                items: all,
+                is_complete: true,
+            });
         }
         if page_idx + 1 == PAGE_WARN_THRESHOLD {
             tracing::warn!(
@@ -249,10 +331,13 @@ where
         }
     }
     tracing::error!(
-        "proof request listing exceeded {MAX_PAGES} pages of {page_size}; \
-         returning a partial set (is the server ignoring offset?)"
+        "proof request listing reached {MAX_PAGES} full pages of {page_size}; \
+         returning an incomplete listing"
     );
-    Ok(all)
+    Ok(PageResult {
+        items: all,
+        is_complete: false,
+    })
 }
 
 /// Drops rows already seen and keeps the first occurrence. Pages are separate
@@ -295,7 +380,8 @@ mod tests {
 
         let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, fetch).await.unwrap();
 
-        assert_eq!(all, (0..total).collect::<Vec<_>>());
+        assert!(all.is_complete);
+        assert_eq!(all.items, (0..total).collect::<Vec<_>>());
         assert_eq!(*offsets.lock().unwrap(), vec![0, 1000, 2000]);
     }
 
@@ -305,7 +391,8 @@ mod tests {
 
         let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, fetch).await.unwrap();
 
-        assert_eq!(all.len(), PROOF_REQUEST_PAGE_SIZE as usize);
+        assert!(all.is_complete);
+        assert_eq!(all.items.len(), PROOF_REQUEST_PAGE_SIZE as usize);
         assert_eq!(*offsets.lock().unwrap(), vec![0, 1000]);
     }
 
@@ -313,12 +400,19 @@ mod tests {
     async fn hitting_the_page_cap_returns_a_partial_set() {
         // Always a full page regardless of offset.
         let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, |_offset| {
-            std::future::ready(Ok(vec![0u32; PROOF_REQUEST_PAGE_SIZE as usize]))
+            std::future::ready(Ok::<_, eyre::Report>(vec![
+                0u32;
+                PROOF_REQUEST_PAGE_SIZE as usize
+            ]))
         })
         .await
         .unwrap();
 
-        assert_eq!(all.len(), (MAX_PAGES * PROOF_REQUEST_PAGE_SIZE) as usize);
+        assert!(!all.is_complete);
+        assert_eq!(
+            all.items.len(),
+            (MAX_PAGES * PROOF_REQUEST_PAGE_SIZE) as usize
+        );
     }
 
     /// Filtered-churn shape: a row completing mid-fetch re-serves the boundary
@@ -346,5 +440,67 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.to_string(), "boom");
+    }
+
+    fn proof_request(id: impl Into<String>, status: ProofRequestStatus) -> proto::ProofRequest {
+        proto::ProofRequest {
+            id: id.into(),
+            proof_status: status as i32,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_pending_list_needs_no_individual_reads() {
+        let listed = PageResult {
+            items: vec![
+                proof_request("pending", ProofRequestStatus::Pending),
+                proof_request("unrelated", ProofRequestStatus::Pending),
+            ],
+            is_complete: true,
+        };
+        let ids = ["pending".into(), "absent".into()];
+        let pending = pending_request_ids(listed, &ids, |_| async {
+            panic!("a complete listing needs no individual reads")
+        })
+        .await
+        .unwrap();
+        assert_eq!(pending, HashSet::from(["pending".into()]));
+    }
+
+    #[tokio::test]
+    async fn partial_pending_list_checks_missing_candidates() {
+        let listed = PageResult {
+            items: vec![proof_request("listed", ProofRequestStatus::Pending)],
+            is_complete: false,
+        };
+        let ids: Vec<String> = [
+            "listed",
+            "pending",
+            "completed",
+            "failed",
+            "cancelled",
+            "missing",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let reads = std::cell::RefCell::new(HashSet::new());
+        let pending = pending_request_ids(listed, &ids, |id| {
+            assert!(reads.borrow_mut().insert(id.clone()));
+            let status = match id.as_str() {
+                "pending" => Some(ProofRequestStatus::Pending),
+                "completed" => Some(ProofRequestStatus::Completed),
+                "failed" => Some(ProofRequestStatus::Failed),
+                "cancelled" => Some(ProofRequestStatus::Cancelled),
+                "missing" => None,
+                _ => panic!("listed requests need no individual read"),
+            };
+            std::future::ready(Ok(status.map(|status| proof_request(id, status))))
+        })
+        .await
+        .unwrap();
+        assert_eq!(pending, HashSet::from(["listed".into(), "pending".into()]));
+        assert_eq!(reads.into_inner(), ids[1..].iter().cloned().collect());
     }
 }

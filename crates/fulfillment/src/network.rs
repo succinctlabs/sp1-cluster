@@ -13,8 +13,9 @@ pub enum CancelableKind {
     /// `Assigned + Unexecutable`: the network still expects an answer, so the
     /// cluster owes a `fail_fulfillment` before aborting the proof.
     Unexecutable,
-    /// The network already flipped the request terminal (`Unfulfillable`);
-    /// failing it again is a wasteful no-op. Cluster abort only.
+    /// The network has ended this request and expects no proof.
+    /// The cancellation query returns it until its deadline, even after the cluster cancels it.
+    /// Check for `Pending` in the cluster to avoid sending the same cancellation again.
     Unfulfillable,
     /// The network already marked the request `Fulfilled` — another path (e.g.
     /// the SPN proxy delivering a mainnet proof) succeeded while our cluster
@@ -30,10 +31,9 @@ impl CancelableKind {
         matches!(self, Self::Unexecutable)
     }
 
-    /// Whether cancelling is conditional on the request still being in the
-    /// cluster's in-flight (Pending) set.
+    /// Require the cluster request to have `Pending` status before sending a cancellation.
     pub fn gated_on_in_flight(self) -> bool {
-        matches!(self, Self::Fulfilled)
+        matches!(self, Self::Unfulfillable | Self::Fulfilled)
     }
 }
 
