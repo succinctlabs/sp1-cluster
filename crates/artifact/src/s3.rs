@@ -413,9 +413,7 @@ impl ArtifactClient for S3ArtifactClient {
         artifact_type: ArtifactType,
     ) -> Result<Vec<u8>> {
         let compressed = self.par_download_file(artifact_type, artifact.id()).await?;
-        let decoded = zstd::decode_all(compressed.as_slice())
-            .map_err(|e| anyhow!("Failed to decompress artifact: {}", e))?;
-        Ok(decoded)
+        crate::decompress(&compressed, crate::max_bytes(artifact_type))
     }
 
     async fn exists(

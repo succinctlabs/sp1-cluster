@@ -827,9 +827,7 @@ impl ArtifactClient for RedisArtifactClient {
             }
         })?;
 
-        let decoded = zstd::decode_all(compressed.as_slice())
-            .map_err(|e| anyhow!("Failed to decompress artifact: {}", e))?;
-        Ok(decoded)
+        crate::decompress(&compressed, crate::max_bytes(artifact_type))
     }
 
     async fn exists(&self, artifact: &impl ArtifactId, _: ArtifactType) -> Result<bool> {
