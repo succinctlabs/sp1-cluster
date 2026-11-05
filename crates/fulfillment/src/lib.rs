@@ -6,7 +6,7 @@ use futures::{future::join_all, StreamExt, TryFutureExt};
 use sp1_cluster_artifact::{ArtifactClient, ArtifactType, CompressedUpload};
 use sp1_cluster_common::{
     client::ClusterServiceClient,
-    failure::ProvingFailure,
+    failure::{ProgramError, ProvingFailure},
     proto::{
         ExecutionResult, ProofRequest, ProofRequestCancelRequest, ProofRequestCreateRequest,
         ProofRequestListRequest, ProofRequestStatus, ProofRequestUpdateRequest,
@@ -41,8 +41,8 @@ const VK_MISMATCH_STRINGS: &[&str] = &[
 
 /// Derive the network's `ProofRequestError` from the worker's `extra_data`.
 /// An `ExecutionResult` with non-zero `failure_cause` means execute_only itself
-/// faulted -> `EXECUTION_FAILURE`. A `ProvingFailure` payload means a
-/// post-execute task failed -> `PROVING_FAILURE`.
+/// faulted -> `EXECUTION_FAILURE`. A `ProvingFailure` payload maps to the
+/// program error it names, else -> `PROVING_FAILURE`.
 pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
     let s = extra_data?;
     if let Ok(er) = serde_json::from_str::<ExecutionResult>(s) {
@@ -50,7 +50,12 @@ pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
             return Some(ProofRequestError::ExecutionFailure as i32);
         }
     }
-    ProvingFailure::from_extra_data(s).map(|_| ProofRequestError::ProvingFailure as i32)
+    let error = match ProvingFailure::from_extra_data(s)?.program_error {
+        Some(ProgramError::TooLarge) => ProofRequestError::ProgramTooLarge,
+        Some(ProgramError::Invalid) => ProofRequestError::InvalidProgram,
+        None => ProofRequestError::ProvingFailure,
+    };
+    Some(error as i32)
 }
 
 /// The maximum age of the API-held cluster component manifest before the fulfiller
@@ -986,6 +991,30 @@ pub fn extract_artifact_name(s3_url: &str) -> Result<String> {
 mod tests {
     use super::*;
     use sp1_cluster_common::proto::ClusterComponentInfo;
+
+    #[test]
+    fn request_error_from_extra_data_maps_program_errors() {
+        let extra = |program_error| {
+            ProvingFailure {
+                task_type: sp1_cluster_common::proto::TaskType::ExecuteOnly,
+                reason: String::new(),
+                program_error,
+            }
+            .to_extra_data()
+        };
+        assert_eq!(
+            request_error_from_extra_data(Some(&extra(Some(ProgramError::TooLarge)))),
+            Some(ProofRequestError::ProgramTooLarge as i32)
+        );
+        assert_eq!(
+            request_error_from_extra_data(Some(&extra(Some(ProgramError::Invalid)))),
+            Some(ProofRequestError::InvalidProgram as i32)
+        );
+        assert_eq!(
+            request_error_from_extra_data(Some(&extra(None))),
+            Some(ProofRequestError::ProvingFailure as i32)
+        );
+    }
 
     /// The full routing matrix: only `Unexecutable` owes the network a
     /// `fail_fulfillment`, and only `Fulfilled` gates the cluster abort on the
