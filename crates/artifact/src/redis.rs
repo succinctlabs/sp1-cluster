@@ -7,6 +7,7 @@ use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions};
 use deadpool_redis::{Config, Connection as RedisConnection, Pool, PoolConfig, Runtime};
 use mti::prelude::{MagicTypeIdExt, V7};
+use serde::de::DeserializeOwned;
 use sp1_cluster_common::util::backoff_retry;
 use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType, ShardPermit};
 use tokio::sync::{Mutex, OnceCell, Semaphore};
@@ -837,6 +838,15 @@ impl ArtifactClient for RedisArtifactClient {
         })?;
 
         Ok(crate::decompress(&compressed, artifact_type)?)
+    }
+
+    async fn download_with_type<T: DeserializeOwned + Send + Sync + 'static>(
+        &self,
+        artifact: &impl ArtifactId,
+        artifact_type: ArtifactType,
+    ) -> Result<T> {
+        let bytes = self.download_raw(artifact, artifact_type).await?;
+        crate::deserialize(bytes, artifact_type).await
     }
 
     async fn exists(&self, artifact: &impl ArtifactId, _: ArtifactType) -> Result<bool> {

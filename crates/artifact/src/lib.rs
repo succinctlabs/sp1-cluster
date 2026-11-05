@@ -4,6 +4,7 @@ pub mod s3_rest;
 pub mod s3_sdk;
 
 use anyhow::Result;
+use serde::de::DeserializeOwned;
 pub use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType, InMemoryArtifactClient};
 use std::fmt;
 use std::io::Read;
@@ -15,14 +16,14 @@ const MAX_PROGRAM_BYTES: u64 = 512 * 1024 * 1024;
 #[derive(Debug)]
 pub enum ArtifactError {
     TooLarge(ArtifactType),
-    Corrupt(ArtifactType, std::io::Error),
+    Corrupt(ArtifactType, anyhow::Error),
 }
 
 impl fmt::Display for ArtifactError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TooLarge(t) => write!(f, "{t:?} exceeds {} bytes", max_bytes(*t)),
-            Self::Corrupt(t, e) => write!(f, "{t:?} failed to decompress: {e}"),
+            Self::Corrupt(t, e) => write!(f, "{t:?} is corrupt: {e}"),
         }
     }
 }
@@ -36,9 +37,17 @@ fn decompress(compressed: &[u8], artifact_type: ArtifactType) -> Result<Vec<u8>,
             d.take(max_bytes(artifact_type).saturating_add(1))
                 .read_to_end(&mut decoded)
         })
-        .map_err(|e| ArtifactError::Corrupt(artifact_type, e))?;
+        .map_err(|e| ArtifactError::Corrupt(artifact_type, e.into()))?;
     check_size(decoded.len() as u64, artifact_type)?;
     Ok(decoded)
+}
+
+async fn deserialize<T: DeserializeOwned + Send + 'static>(
+    bytes: Vec<u8>,
+    artifact_type: ArtifactType,
+) -> Result<T> {
+    let deserialized = tokio::task::spawn_blocking(move || bincode::deserialize(&bytes)).await?;
+    Ok(deserialized.map_err(|e| ArtifactError::Corrupt(artifact_type, e.into()))?)
 }
 
 fn check_size(size: u64, artifact_type: ArtifactType) -> Result<(), ArtifactError> {
@@ -110,5 +119,16 @@ mod tests {
     fn check_size_only_caps_programs() {
         assert!(check_size(MAX_PROGRAM_BYTES + 1, ArtifactType::Stdin).is_ok());
         assert!(check_size(MAX_PROGRAM_BYTES + 1, ArtifactType::Program).is_err());
+    }
+
+    #[tokio::test]
+    async fn deserialize_rejects_invalid_bincode() {
+        let err = deserialize::<Vec<u8>>(b"not bincode".to_vec(), ArtifactType::Program)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err.downcast_ref(),
+            Some(ArtifactError::Corrupt(ArtifactType::Program, _))
+        ));
     }
 }

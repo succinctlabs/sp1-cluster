@@ -6,7 +6,7 @@ use futures::{future::join_all, StreamExt, TryFutureExt};
 use sp1_cluster_artifact::{ArtifactClient, ArtifactType, CompressedUpload};
 use sp1_cluster_common::{
     client::ClusterServiceClient,
-    failure::{ProgramError, ProvingFailure},
+    failure::ProvingFailure,
     proto::{
         ExecutionResult, ProofRequest, ProofRequestCancelRequest, ProofRequestCreateRequest,
         ProofRequestListRequest, ProofRequestStatus, ProofRequestUpdateRequest,
@@ -42,7 +42,7 @@ const VK_MISMATCH_STRINGS: &[&str] = &[
 /// Derive the network's `ProofRequestError` from the worker's `extra_data`.
 /// An `ExecutionResult` with non-zero `failure_cause` means execute_only itself
 /// faulted -> `EXECUTION_FAILURE`. A `ProvingFailure` payload maps to the
-/// program error it names, else -> `PROVING_FAILURE`.
+/// error code it names, else -> `PROVING_FAILURE`.
 pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
     let s = extra_data?;
     if let Ok(er) = serde_json::from_str::<ExecutionResult>(s) {
@@ -50,12 +50,8 @@ pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
             return Some(ProofRequestError::ExecutionFailure as i32);
         }
     }
-    let error = match ProvingFailure::from_extra_data(s)?.program_error {
-        Some(ProgramError::TooLarge) => ProofRequestError::ProgramTooLarge,
-        Some(ProgramError::Invalid) => ProofRequestError::InvalidProgram,
-        None => ProofRequestError::ProvingFailure,
-    };
-    Some(error as i32)
+    let error = ProvingFailure::from_extra_data(s)?.error;
+    Some(error.unwrap_or(ProofRequestError::ProvingFailure as i32))
 }
 
 /// The maximum age of the API-held cluster component manifest before the fulfiller
@@ -993,22 +989,19 @@ mod tests {
     use sp1_cluster_common::proto::ClusterComponentInfo;
 
     #[test]
-    fn request_error_from_extra_data_maps_program_errors() {
-        let extra = |program_error| {
+    fn request_error_from_extra_data_passes_the_error_code_through() {
+        let extra = |error| {
             ProvingFailure {
                 task_type: sp1_cluster_common::proto::TaskType::ExecuteOnly,
                 reason: String::new(),
-                program_error,
+                error,
             }
             .to_extra_data()
         };
+        let invalid_program = ProofRequestError::InvalidProgram as i32;
         assert_eq!(
-            request_error_from_extra_data(Some(&extra(Some(ProgramError::TooLarge)))),
-            Some(ProofRequestError::ProgramTooLarge as i32)
-        );
-        assert_eq!(
-            request_error_from_extra_data(Some(&extra(Some(ProgramError::Invalid)))),
-            Some(ProofRequestError::InvalidProgram as i32)
+            request_error_from_extra_data(Some(&extra(Some(invalid_program)))),
+            Some(invalid_program)
         );
         assert_eq!(
             request_error_from_extra_data(Some(&extra(None))),

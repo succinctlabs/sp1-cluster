@@ -9,15 +9,9 @@ use crate::proto::TaskType;
 pub struct ProvingFailure {
     pub task_type: TaskType,
     pub reason: String,
+    /// The network's `ProofRequestError` code for a failure that must not be retried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub program_error: Option<ProgramError>,
-}
-
-/// A program the worker refused, which fails the same way on every retry.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProgramError {
-    TooLarge,
-    Invalid,
+    pub error: Option<i32>,
 }
 
 impl ProvingFailure {
@@ -44,20 +38,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn program_error_round_trips_through_extra_data() {
+    fn error_code_round_trips_through_extra_data() {
         let failure = ProvingFailure {
             task_type: TaskType::ExecuteOnly,
             reason: "Program exceeds 536870912 bytes".into(),
-            program_error: Some(ProgramError::TooLarge),
+            error: Some(7),
         };
         let parsed = ProvingFailure::from_extra_data(&failure.to_extra_data()).unwrap();
-        assert_eq!(parsed.program_error, Some(ProgramError::TooLarge));
+        assert_eq!(parsed.error, Some(7));
     }
 
     #[test]
-    fn extra_data_without_program_error_still_parses() {
+    fn extra_data_without_error_code_still_parses() {
         let extra = r#"{"proving_failure":{"task_type":"ProveShard","reason":"GPU OOM"}}"#;
-        let parsed = ProvingFailure::from_extra_data(extra).unwrap();
-        assert_eq!(parsed.program_error, None);
+        assert_eq!(ProvingFailure::from_extra_data(extra).unwrap().error, None);
     }
 }

@@ -8,11 +8,12 @@ use lazy_static::lazy_static;
 use opentelemetry::Context;
 use opentelemetry::{global, trace::TraceContextExt};
 use sp1_cluster_artifact::{ArtifactClient, ArtifactError, ArtifactType};
-use sp1_cluster_common::failure::{ProgramError, ProvingFailure};
+use sp1_cluster_common::failure::ProvingFailure;
 use sp1_cluster_common::proto::{ProofRequestStatus, TaskStatus, TaskType, WorkerTask};
 use sp1_prover::worker::{ProofId, SP1Worker, TaskId, TaskMetadata, WorkerClient};
 use sp1_prover::SP1ProverComponents;
 use sp1_prover_types::network_base_types::ProofMode;
+use sp1_sdk::network::proto::types::ProofRequestError;
 use std::time::Instant;
 use std::{collections::HashMap, env, sync::Arc};
 use tracing::info_span;
@@ -270,14 +271,14 @@ pub async fn try_unclaim_proof<W: WorkerClient, E: std::fmt::Debug>(
     task_id: Option<TaskId>,
     task_type: TaskType,
     err: &E,
-    program_error: Option<ProgramError>,
+    error: Option<ProofRequestError>,
 ) {
     log::info!("Unclaiming proof {proof_id}");
 
     let payload = ProvingFailure {
         task_type,
         reason: format!("{err:?}"),
-        program_error,
+        error: error.map(|e| e as i32),
     }
     .to_extra_data();
 
@@ -289,10 +290,10 @@ pub async fn try_unclaim_proof<W: WorkerClient, E: std::fmt::Debug>(
     }
 }
 
-fn program_error(err: &anyhow::Error) -> Option<ProgramError> {
+fn program_error(err: &anyhow::Error) -> Option<ProofRequestError> {
     match err.downcast_ref::<ArtifactError>()? {
-        ArtifactError::TooLarge(ArtifactType::Program) => Some(ProgramError::TooLarge),
-        ArtifactError::Corrupt(ArtifactType::Program, _) => Some(ProgramError::Invalid),
+        ArtifactError::TooLarge(ArtifactType::Program) => Some(ProofRequestError::ProgramTooLarge),
+        ArtifactError::Corrupt(ArtifactType::Program, _) => Some(ProofRequestError::InvalidProgram),
         _ => None,
     }
 }
@@ -327,12 +328,18 @@ mod tests {
     #[test]
     fn program_error_maps_only_program_artifact_errors() {
         let too_large = anyhow::Error::from(ArtifactError::TooLarge(ArtifactType::Program));
-        assert_eq!(program_error(&too_large), Some(ProgramError::TooLarge));
+        assert_eq!(
+            program_error(&too_large),
+            Some(ProofRequestError::ProgramTooLarge)
+        );
         let corrupt = anyhow::Error::from(ArtifactError::Corrupt(
             ArtifactType::Program,
-            std::io::Error::other("bad frame"),
+            anyhow::anyhow!("bad frame"),
         ));
-        assert_eq!(program_error(&corrupt), Some(ProgramError::Invalid));
+        assert_eq!(
+            program_error(&corrupt),
+            Some(ProofRequestError::InvalidProgram)
+        );
         let stdin = anyhow::Error::from(ArtifactError::TooLarge(ArtifactType::Stdin));
         assert_eq!(program_error(&stdin), None);
         assert_eq!(program_error(&anyhow::anyhow!("gpu oom")), None);
