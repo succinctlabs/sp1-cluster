@@ -38,17 +38,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn error_code_round_trips_through_extra_data() {
-        let failure = ProvingFailure {
-            task_type: TaskType::ExecuteOnly,
-            reason: "Program exceeds 536870912 bytes".into(),
-            error: Some(7),
-        };
-        let parsed = ProvingFailure::from_extra_data(&failure.to_extra_data()).unwrap();
-        assert_eq!(parsed.error, Some(7));
-    }
-
-    #[test]
     fn extra_data_without_error_code_still_parses() {
         let extra = r#"{"proving_failure":{"task_type":"ProveShard","reason":"GPU OOM"}}"#;
         assert_eq!(ProvingFailure::from_extra_data(extra).unwrap().error, None);

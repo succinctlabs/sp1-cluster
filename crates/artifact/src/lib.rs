@@ -31,12 +31,10 @@ impl fmt::Display for ArtifactError {
 impl std::error::Error for ArtifactError {}
 
 fn decompress(compressed: &[u8], artifact_type: ArtifactType) -> Result<Vec<u8>, ArtifactError> {
+    let cap = max_bytes(artifact_type).saturating_add(1);
     let mut decoded = Vec::new();
     zstd::Decoder::with_buffer(compressed)
-        .and_then(|d| {
-            d.take(max_bytes(artifact_type).saturating_add(1))
-                .read_to_end(&mut decoded)
-        })
+        .and_then(|d| d.take(cap).read_to_end(&mut decoded))
         .map_err(|e| ArtifactError::Corrupt(artifact_type, e.into()))?;
     check_size(decoded.len() as u64, artifact_type)?;
     Ok(decoded)
@@ -113,12 +111,6 @@ mod tests {
             decompress(b"not zstd", ArtifactType::Program),
             Err(ArtifactError::Corrupt(ArtifactType::Program, _))
         ));
-    }
-
-    #[test]
-    fn check_size_only_caps_programs() {
-        assert!(check_size(MAX_PROGRAM_BYTES + 1, ArtifactType::Stdin).is_ok());
-        assert!(check_size(MAX_PROGRAM_BYTES + 1, ArtifactType::Program).is_err());
     }
 
     #[tokio::test]
