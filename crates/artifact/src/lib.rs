@@ -3,29 +3,56 @@ pub mod s3;
 pub mod s3_rest;
 pub mod s3_sdk;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 pub use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType, InMemoryArtifactClient};
+use std::fmt;
 use std::io::Read;
 
 /// Programs are customer bytes stored as is, so a small zstd bomb must not exhaust a node's memory.
 const MAX_PROGRAM_BYTES: u64 = 512 * 1024 * 1024;
+
+/// A download refused for its content, which fails the same way on every retry.
+#[derive(Debug)]
+pub enum ArtifactError {
+    TooLarge(ArtifactType),
+    Corrupt(ArtifactType, std::io::Error),
+}
+
+impl fmt::Display for ArtifactError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooLarge(t) => write!(f, "{t:?} exceeds {} bytes", max_bytes(*t)),
+            Self::Corrupt(t, e) => write!(f, "{t:?} failed to decompress: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ArtifactError {}
+
+fn decompress(compressed: &[u8], artifact_type: ArtifactType) -> Result<Vec<u8>, ArtifactError> {
+    let mut decoded = Vec::new();
+    zstd::Decoder::with_buffer(compressed)
+        .and_then(|d| {
+            d.take(max_bytes(artifact_type).saturating_add(1))
+                .read_to_end(&mut decoded)
+        })
+        .map_err(|e| ArtifactError::Corrupt(artifact_type, e))?;
+    check_size(decoded.len() as u64, artifact_type)?;
+    Ok(decoded)
+}
+
+fn check_size(size: u64, artifact_type: ArtifactType) -> Result<(), ArtifactError> {
+    if size > max_bytes(artifact_type) {
+        return Err(ArtifactError::TooLarge(artifact_type));
+    }
+    Ok(())
+}
 
 fn max_bytes(artifact_type: ArtifactType) -> u64 {
     match artifact_type {
         ArtifactType::Program => MAX_PROGRAM_BYTES,
         _ => u64::MAX,
     }
-}
-
-fn decompress(compressed: &[u8], cap: u64) -> Result<Vec<u8>> {
-    let mut decoded = Vec::new();
-    zstd::Decoder::with_buffer(compressed)
-        .and_then(|d| d.take(cap.saturating_add(1)).read_to_end(&mut decoded))
-        .map_err(|e| anyhow!("Failed to decompress artifact: {}", e))?;
-    if decoded.len() as u64 > cap {
-        return Err(anyhow!("Artifact exceeds {cap} bytes"));
-    }
-    Ok(decoded)
 }
 
 /// Upload pre-compressed data directly, bypassing application-layer zstd compression.
@@ -55,15 +82,33 @@ impl CompressedUpload for InMemoryArtifactClient {
 mod tests {
     use super::*;
 
+    fn zeros(len: u64) -> Vec<u8> {
+        let mut compressed = Vec::new();
+        zstd::stream::copy_encode(std::io::repeat(0).take(len), &mut compressed, 3).unwrap();
+        compressed
+    }
+
     #[test]
-    fn decompress_caps_output_at_max_bytes() {
-        let compressed = zstd::encode_all(&[0u8; 16][..], 3).unwrap();
-        assert_eq!(decompress(&compressed, 16).unwrap(), [0u8; 16]);
-        assert!(decompress(&compressed, 15).is_err());
+    fn decompress_caps_program_at_max_bytes() {
+        let at_cap = decompress(&zeros(MAX_PROGRAM_BYTES), ArtifactType::Program).unwrap();
+        assert_eq!(at_cap.len() as u64, MAX_PROGRAM_BYTES);
+        assert!(matches!(
+            decompress(&zeros(MAX_PROGRAM_BYTES + 1), ArtifactType::Program),
+            Err(ArtifactError::TooLarge(ArtifactType::Program))
+        ));
     }
 
     #[test]
     fn decompress_rejects_corrupt_input() {
-        assert!(decompress(b"not zstd", 16).is_err());
+        assert!(matches!(
+            decompress(b"not zstd", ArtifactType::Program),
+            Err(ArtifactError::Corrupt(ArtifactType::Program, _))
+        ));
+    }
+
+    #[test]
+    fn check_size_only_caps_programs() {
+        assert!(check_size(MAX_PROGRAM_BYTES + 1, ArtifactType::Stdin).is_ok());
+        assert!(check_size(MAX_PROGRAM_BYTES + 1, ArtifactType::Program).is_err());
     }
 }

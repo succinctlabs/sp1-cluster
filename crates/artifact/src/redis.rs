@@ -416,7 +416,7 @@ impl RedisArtifactClient {
     /// change. A vanished hash surfaces as a loud absent-field error.
     async fn par_download_file(
         &self,
-        _: ArtifactType,
+        artifact_type: ArtifactType,
         key: &str,
     ) -> Result<Vec<u8>, backoff::Error<anyhow::Error>> {
         let mut conn = self.get_redis_connection(key).await?;
@@ -456,6 +456,9 @@ impl RedisArtifactClient {
                 )));
             }
         }
+        let full_chunks_bytes = (total_chunks - 1) * *CHUNK_SIZE;
+        crate::check_size(full_chunks_bytes as u64, artifact_type)
+            .map_err(|e| backoff::Error::permanent(e.into()))?;
         // Return this connection before the chunk loop borrows more from the
         // same pool — holding it across those acquisitions can wedge a
         // saturated pool.
@@ -815,6 +818,12 @@ impl ArtifactClient for RedisArtifactClient {
         })
         .await
         .map_err(|e| {
+            let e = match e {
+                backoff::Error::Permanent(e) | backoff::Error::Transient { err: e, .. } => e,
+            };
+            if e.is::<crate::ArtifactError>() {
+                return e;
+            }
             let err_msg = e.to_string();
             if err_msg.contains("timed out") {
                 anyhow!(
@@ -827,7 +836,7 @@ impl ArtifactClient for RedisArtifactClient {
             }
         })?;
 
-        crate::decompress(&compressed, crate::max_bytes(artifact_type))
+        Ok(crate::decompress(&compressed, artifact_type)?)
     }
 
     async fn exists(&self, artifact: &impl ArtifactId, _: ArtifactType) -> Result<bool> {

@@ -209,6 +209,7 @@ impl S3ArtifactClient {
             }
         })
         .await?;
+        crate::check_size(size as u64, artifact_type)?;
 
         // If the file is smaller than the chunk size, just download it.
         if size <= CHUNK_SIZE as i64 {
@@ -413,7 +414,7 @@ impl ArtifactClient for S3ArtifactClient {
         artifact_type: ArtifactType,
     ) -> Result<Vec<u8>> {
         let compressed = self.par_download_file(artifact_type, artifact.id()).await?;
-        crate::decompress(&compressed, crate::max_bytes(artifact_type))
+        Ok(crate::decompress(&compressed, artifact_type)?)
     }
 
     async fn exists(
