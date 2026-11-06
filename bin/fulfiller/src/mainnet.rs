@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use prost::Message;
 use sp1_cluster_artifact::ArtifactType;
-use sp1_cluster_common::{client::drain_pages, proto::ProofRequest};
+use sp1_cluster_common::{
+    client::{drain_pages, PageResult},
+    proto::ProofRequest,
+};
 use sp1_cluster_fulfillment::{
     network::{CancelableKind, FulfillmentNetwork, NetworkRequest},
     prover_info::build_report_prover_info_body,
@@ -276,10 +279,11 @@ impl FulfillmentNetwork for MainnetFulfiller {
             })
             .collect();
 
+        let max_pages = network_max_pages(limit);
         let responses = join_all(queries.into_iter().map(|(request, kind)| {
             let network = &self.network;
             async move {
-                let pages = drain_pages(limit, |offset| {
+                let pages = drain_pages(limit, max_pages, |offset| {
                     let mut network = network.clone();
                     let request = spn_network_types::GetFilteredProofRequestsRequest {
                         page: Some(offset / limit + 1),
@@ -298,26 +302,7 @@ impl FulfillmentNetwork for MainnetFulfiller {
         }))
         .await;
 
-        // A request can move from Assigned to Unfulfillable between the two query reads.
-        // Both queries can then return its ID, so cancel it only once.
-        let mut seen = std::collections::HashSet::new();
-        let mut requests = Vec::new();
-        for (pages, kind) in responses {
-            let page_requests = match pages {
-                Ok(page_requests) => page_requests.items,
-                Err(error) => {
-                    tracing::warn!("failed to list {kind:?} cancelable requests: {error}");
-                    continue;
-                }
-            };
-            for request in page_requests {
-                if seen.insert(request.request_id.clone()) {
-                    requests.push((NetworkProofRequest(request), kind));
-                }
-            }
-        }
-
-        Ok(requests)
+        merge_cancelable(responses)
     }
 
     async fn download_artifact(
@@ -393,6 +378,54 @@ impl FulfillmentNetwork for MainnetFulfiller {
     }
 }
 
+// The network RPC rejects any page whose offset passes this bound
+// (network-services `bin/rpc/src/pagination.rs`).
+const NETWORK_MAX_OFFSET: u32 = 10_000;
+
+fn network_max_pages(limit: u32) -> u32 {
+    NETWORK_MAX_OFFSET / limit + 1
+}
+
+type CancelableListing = (
+    std::result::Result<PageResult<spn_network_types::ProofRequest>, tonic::Status>,
+    CancelableKind,
+);
+
+// Skip a failed query so the others still cancel.
+// When every query fails, return the error. An empty list would hide the outage.
+fn merge_cancelable(
+    responses: Vec<CancelableListing>,
+) -> Result<Vec<(NetworkProofRequest, CancelableKind)>> {
+    let mut any_succeeded = false;
+    let mut last_error = None;
+    // A request can move from Assigned to Unfulfillable between the two query reads.
+    // Both queries can then return its ID, so cancel it only once.
+    let mut seen = std::collections::HashSet::new();
+    let mut requests = Vec::new();
+    for (pages, kind) in responses {
+        let page_requests = match pages {
+            Ok(page_requests) => page_requests.items,
+            Err(error) => {
+                tracing::warn!("failed to list {kind:?} cancelable requests: {error}");
+                last_error = Some(error);
+                continue;
+            }
+        };
+        any_succeeded = true;
+        for request in page_requests {
+            if seen.insert(request.request_id.clone()) {
+                requests.push((NetworkProofRequest(request), kind));
+            }
+        }
+    }
+    match last_error {
+        Some(error) if !any_succeeded => Err(anyhow::anyhow!(
+            "every cancelable request query failed: {error}"
+        )),
+        _ => Ok(requests),
+    }
+}
+
 pub struct NetworkProofRequest(pub spn_network_types::ProofRequest);
 
 impl NetworkRequest for NetworkProofRequest {
@@ -438,5 +471,77 @@ impl NetworkRequest for NetworkProofRequest {
 
     fn stdin_private(&self) -> bool {
         self.0.stdin_private
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn listing(
+        ids: &[&[u8]],
+    ) -> std::result::Result<PageResult<spn_network_types::ProofRequest>, tonic::Status> {
+        Ok(PageResult {
+            items: ids
+                .iter()
+                .map(|id| spn_network_types::ProofRequest {
+                    request_id: id.to_vec(),
+                    ..Default::default()
+                })
+                .collect(),
+            is_complete: true,
+        })
+    }
+
+    #[tokio::test]
+    async fn network_paging_stops_inside_the_server_offset_bound() {
+        let limit = 1000;
+        // Fakes the network RPC's offset bound.
+        let fetch = |offset: u32| {
+            let page = offset / limit + 1;
+            std::future::ready(if (page - 1) * limit > 10_000 {
+                Err(tonic::Status::invalid_argument("page too deep"))
+            } else {
+                Ok(vec![0u8; limit as usize])
+            })
+        };
+
+        let listed = drain_pages(limit, network_max_pages(limit), fetch)
+            .await
+            .unwrap();
+
+        assert!(!listed.is_complete);
+        assert_eq!(listed.items.len(), 11 * limit as usize);
+    }
+
+    #[test]
+    fn a_failed_query_does_not_drop_the_others() {
+        let merged = merge_cancelable(vec![
+            (
+                Err(tonic::Status::unavailable("down")),
+                CancelableKind::Unexecutable,
+            ),
+            (listing(&[b"a"]), CancelableKind::Unfulfillable),
+        ])
+        .unwrap();
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].0 .0.request_id, b"a");
+    }
+
+    #[test]
+    fn every_query_failing_fails_the_tick() {
+        let merged = merge_cancelable(vec![
+            (
+                Err(tonic::Status::unavailable("down")),
+                CancelableKind::Unexecutable,
+            ),
+            (
+                Err(tonic::Status::unavailable("down")),
+                CancelableKind::Unfulfillable,
+            ),
+        ]);
+
+        assert!(merged.is_err());
     }
 }

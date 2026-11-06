@@ -157,7 +157,7 @@ impl ClusterServiceClient {
         &self,
         request: ProofRequestListRequest,
     ) -> Result<PageResult<proto::ProofRequest>> {
-        let mut listed = drain_pages(PROOF_REQUEST_PAGE_SIZE, |offset| {
+        let mut listed = drain_pages(PROOF_REQUEST_PAGE_SIZE, MAX_PAGES, |offset| {
             let mut request = request.clone();
             request.limit = Some(PROOF_REQUEST_PAGE_SIZE);
             request.offset = Some(offset);
@@ -268,7 +268,7 @@ where
         return Ok(pending);
     }
 
-    // The page cap can hide Pending requests. Read missing candidates by ID before skipping them.
+    // A capped listing can miss Pending requests, so read each missing candidate by ID.
     let missing: Vec<_> = proof_ids
         .iter()
         .filter(|id| !pending.contains(*id))
@@ -301,11 +301,9 @@ const MAX_PAGES: u32 = 100;
 
 const PAGE_WARN_THRESHOLD: u32 = 10;
 
-/// Collects pages from `fetch(offset)` until a short page marks the end.
-/// At the page cap it returns the collected rows with `is_complete = false`.
-/// Callers must check missing IDs separately when the listing is incomplete.
 pub async fn drain_pages<T, E, F, Fut>(
     page_size: u32,
+    max_pages: u32,
     fetch: F,
 ) -> std::result::Result<PageResult<T>, E>
 where
@@ -313,7 +311,7 @@ where
     Fut: Future<Output = std::result::Result<Vec<T>, E>>,
 {
     let mut all = Vec::new();
-    for page_idx in 0..MAX_PAGES {
+    for page_idx in 0..max_pages {
         let page = fetch(page_idx * page_size).await?;
         let full_page = page.len() as u32 == page_size;
         all.extend(page);
@@ -331,7 +329,7 @@ where
         }
     }
     tracing::error!(
-        "proof request listing reached {MAX_PAGES} full pages of {page_size}; \
+        "proof request listing reached {max_pages} full pages of {page_size}; \
          returning an incomplete listing"
     );
     Ok(PageResult {
@@ -378,7 +376,9 @@ mod tests {
         let total = PROOF_REQUEST_PAGE_SIZE * 2 + 500;
         let (fetch, offsets) = counting_fetch(total);
 
-        let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, fetch).await.unwrap();
+        let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, MAX_PAGES, fetch)
+            .await
+            .unwrap();
 
         assert!(all.is_complete);
         assert_eq!(all.items, (0..total).collect::<Vec<_>>());
@@ -389,7 +389,9 @@ mod tests {
     async fn an_exact_page_boundary_costs_one_empty_confirmation_fetch() {
         let (fetch, offsets) = counting_fetch(PROOF_REQUEST_PAGE_SIZE);
 
-        let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, fetch).await.unwrap();
+        let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, MAX_PAGES, fetch)
+            .await
+            .unwrap();
 
         assert!(all.is_complete);
         assert_eq!(all.items.len(), PROOF_REQUEST_PAGE_SIZE as usize);
@@ -399,7 +401,7 @@ mod tests {
     #[tokio::test]
     async fn hitting_the_page_cap_returns_a_partial_set() {
         // Always a full page regardless of offset.
-        let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, |_offset| {
+        let all = drain_pages(PROOF_REQUEST_PAGE_SIZE, MAX_PAGES, |_offset| {
             std::future::ready(Ok::<_, eyre::Report>(vec![
                 0u32;
                 PROOF_REQUEST_PAGE_SIZE as usize
@@ -433,7 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_page_fetch_error_propagates() {
-        let err = drain_pages(PROOF_REQUEST_PAGE_SIZE, |_offset| {
+        let err = drain_pages(PROOF_REQUEST_PAGE_SIZE, MAX_PAGES, |_offset| {
             std::future::ready(Err::<Vec<u32>, _>(eyre::eyre!("boom")))
         })
         .await

@@ -278,7 +278,6 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
     }
 
     /// Sends prover information in a separate task so the polling loops do not wait for the report.
-    /// Skips the report when `disable_fulfillment` is set.
     fn spawn_report_prover_info(
         self: &Arc<Self>,
         prover: Address,
@@ -617,8 +616,6 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             let self_clone = self.clone();
             Some(async move {
                 let result = async {
-                    // Unexecutable requests still need a failed fulfillment on the network.
-                    // Unfulfillable and Fulfilled requests only need cancellation in the cluster.
                     if kind.should_fail_fulfillment() {
                         self_clone.cancel_on_network(&request_id).await?;
                     }
