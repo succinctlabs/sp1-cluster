@@ -457,8 +457,14 @@ impl RedisArtifactClient {
                 )));
             }
         }
-        let full_chunks_bytes = (total_chunks - 1) * *CHUNK_SIZE;
-        crate::check_size(full_chunks_bytes as u64, artifact_type)
+        let last_chunk_bytes: usize = deadpool_redis::redis::cmd("HSTRLEN")
+            .arg(chunk_key(&key))
+            .arg(total_chunks - 1)
+            .query_async(&mut conn)
+            .await
+            .map_err(transient)?;
+        let stored_bytes = (total_chunks - 1) * *CHUNK_SIZE + last_chunk_bytes;
+        crate::check_size(stored_bytes as u64, artifact_type)
             .map_err(|e| backoff::Error::permanent(e.into()))?;
         // Return this connection before the chunk loop borrows more from the
         // same pool — holding it across those acquisitions can wedge a
@@ -1085,6 +1091,24 @@ mod tests {
                 .await
                 .unwrap()
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis at REDIS_URL"]
+    async fn chunked_download_rejects_a_program_one_byte_over_the_cap() {
+        let fx = Fixture::program("program-over-cap");
+        fx.upload(&vec![0; crate::MAX_PROGRAM_BYTES as usize + 1])
+            .await
+            .unwrap();
+        let result = fx.client.par_download_file(fx.artifact_type, &fx.key).await;
+        let Err(backoff::Error::Permanent(err)) = result else {
+            panic!("expected a permanent error");
+        };
+        assert!(matches!(
+            err.downcast_ref(),
+            Some(crate::ArtifactError::TooLarge(ArtifactType::Program))
+        ));
+        fx.delete().await;
     }
 
     #[tokio::test]
