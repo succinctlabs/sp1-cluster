@@ -33,6 +33,9 @@ impl std::error::Error for ArtifactError {}
 fn decompress(compressed: &[u8], artifact_type: ArtifactType) -> Result<Vec<u8>, ArtifactError> {
     let cap = max_bytes(artifact_type).saturating_add(1);
     let mut decoded = Vec::new();
+    if cap < u64::MAX {
+        decoded.reserve_exact(cap as usize);
+    }
     zstd::Decoder::with_buffer(compressed)
         .and_then(|d| d.take(cap).read_to_end(&mut decoded))
         .map_err(|e| ArtifactError::Corrupt(artifact_type, e.into()))?;
@@ -103,6 +106,12 @@ mod tests {
             decompress(&zeros(MAX_PROGRAM_BYTES + 1), ArtifactType::Program),
             Err(ArtifactError::TooLarge(ArtifactType::Program))
         ));
+    }
+
+    #[test]
+    fn decompress_allocates_no_more_than_the_cap() {
+        let decoded = decompress(&zeros(MAX_PROGRAM_BYTES), ArtifactType::Program).unwrap();
+        assert!(decoded.capacity() as u64 <= MAX_PROGRAM_BYTES + 1);
     }
 
     #[test]
