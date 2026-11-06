@@ -14,6 +14,7 @@ use aws_smithy_async::rt::sleep::default_async_sleep;
 use backoff::{exponential::ExponentialBackoff, ExponentialBackoffBuilder, SystemClock};
 use bytes::Bytes;
 use lazy_static::lazy_static;
+use serde::de::DeserializeOwned;
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Semaphore, task::JoinSet};
 use tracing::instrument;
@@ -209,6 +210,7 @@ impl S3ArtifactClient {
             }
         })
         .await?;
+        crate::check_size(size as u64, artifact_type)?;
 
         // If the file is smaller than the chunk size, just download it.
         if size <= CHUNK_SIZE as i64 {
@@ -413,9 +415,16 @@ impl ArtifactClient for S3ArtifactClient {
         artifact_type: ArtifactType,
     ) -> Result<Vec<u8>> {
         let compressed = self.par_download_file(artifact_type, artifact.id()).await?;
-        let decoded = zstd::decode_all(compressed.as_slice())
-            .map_err(|e| anyhow!("Failed to decompress artifact: {}", e))?;
-        Ok(decoded)
+        Ok(crate::decompress(&compressed, artifact_type)?)
+    }
+
+    async fn download_with_type<T: DeserializeOwned + Send + Sync + 'static>(
+        &self,
+        artifact: &impl ArtifactId,
+        artifact_type: ArtifactType,
+    ) -> Result<T> {
+        let bytes = self.download_raw(artifact, artifact_type).await?;
+        crate::deserialize(bytes, artifact_type).await
     }
 
     async fn exists(

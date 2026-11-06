@@ -7,12 +7,13 @@ use crate::metrics::WorkerMetrics;
 use lazy_static::lazy_static;
 use opentelemetry::Context;
 use opentelemetry::{global, trace::TraceContextExt};
-use sp1_cluster_artifact::ArtifactClient;
+use sp1_cluster_artifact::{ArtifactClient, ArtifactError, ArtifactType};
 use sp1_cluster_common::failure::ProvingFailure;
 use sp1_cluster_common::proto::{ProofRequestStatus, TaskStatus, TaskType, WorkerTask};
 use sp1_prover::worker::{ProofId, SP1Worker, TaskId, TaskMetadata, WorkerClient};
 use sp1_prover::SP1ProverComponents;
 use sp1_prover_types::network_base_types::ProofMode;
+use sp1_sdk::network::proto::types::ProofRequestError;
 use std::time::Instant;
 use std::{collections::HashMap, env, sync::Arc};
 use tracing::info_span;
@@ -224,6 +225,7 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
                         Some(TaskId::new(task.task_id.clone())),
                         task_type,
                         err,
+                        program_error(err),
                     )
                     .await;
 
@@ -243,6 +245,7 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
                         Some(TaskId::new(task.task_id.clone())),
                         task_type,
                         err,
+                        None,
                     )
                     .await;
 
@@ -268,12 +271,14 @@ pub async fn try_unclaim_proof<W: WorkerClient, E: std::fmt::Debug>(
     task_id: Option<TaskId>,
     task_type: TaskType,
     err: &E,
+    error: Option<ProofRequestError>,
 ) {
     log::info!("Unclaiming proof {proof_id}");
 
     let payload = ProvingFailure {
         task_type,
         reason: format!("{err:?}"),
+        error: error.map(|e| e as i32),
     }
     .to_extra_data();
 
@@ -282,6 +287,14 @@ pub async fn try_unclaim_proof<W: WorkerClient, E: std::fmt::Debug>(
         .await
     {
         log::error!("while unclaiming proof: {err:?}");
+    }
+}
+
+fn program_error(err: &anyhow::Error) -> Option<ProofRequestError> {
+    match err.downcast_ref::<ArtifactError>()? {
+        ArtifactError::TooLarge(ArtifactType::Program) => Some(ProofRequestError::ProgramTooLarge),
+        ArtifactError::Corrupt(ArtifactType::Program, _) => Some(ProofRequestError::InvalidProgram),
+        _ => None,
     }
 }
 
@@ -305,5 +318,30 @@ fn test_hook_should_fail(task_type: TaskType) -> bool {
             left.fetch_sub(1, Ordering::SeqCst) > 0
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn program_error_maps_only_program_artifact_errors() {
+        let too_large = anyhow::Error::from(ArtifactError::TooLarge(ArtifactType::Program));
+        assert_eq!(
+            program_error(&too_large),
+            Some(ProofRequestError::ProgramTooLarge)
+        );
+        let corrupt = anyhow::Error::from(ArtifactError::Corrupt(
+            ArtifactType::Program,
+            anyhow::anyhow!("bad frame"),
+        ));
+        assert_eq!(
+            program_error(&corrupt),
+            Some(ProofRequestError::InvalidProgram)
+        );
+        let stdin = anyhow::Error::from(ArtifactError::TooLarge(ArtifactType::Stdin));
+        assert_eq!(program_error(&stdin), None);
+        assert_eq!(program_error(&anyhow::anyhow!("gpu oom")), None);
     }
 }

@@ -9,6 +9,9 @@ use crate::proto::TaskType;
 pub struct ProvingFailure {
     pub task_type: TaskType,
     pub reason: String,
+    /// The network's `ProofRequestError` code for a failure that must not be retried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<i32>,
 }
 
 impl ProvingFailure {
@@ -27,5 +30,16 @@ impl ProvingFailure {
         serde_json::from_str::<Envelope>(s)
             .ok()
             .map(|e| e.proving_failure)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extra_data_without_error_code_still_parses() {
+        let extra = r#"{"proving_failure":{"task_type":"ProveShard","reason":"GPU OOM"}}"#;
+        assert_eq!(ProvingFailure::from_extra_data(extra).unwrap().error, None);
     }
 }
