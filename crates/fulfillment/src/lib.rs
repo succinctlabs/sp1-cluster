@@ -596,21 +596,34 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             .filter(|(_, kind)| kind.gated_on_in_flight())
             .map(|(request, _)| request.request_id())
             .collect();
-        let pending_ids = self
+        // Unexecutable requests owe the network a failed fulfillment, so a cluster
+        // outage must not hold them back. Gated kinds wait for the next tick.
+        let pending_ids = match self
             .cluster
             .get_pending_proof_request_ids(&terminal_ids, time_now())
             .await
-            .map_err(|error| anyhow!("failed to get cancellation candidate statuses: {error}"))?;
+        {
+            Ok(pending_ids) => Some(pending_ids),
+            Err(error) => {
+                warn!("failed to get cancellation candidate statuses, skipping terminal requests: {error}");
+                None
+            }
+        };
 
         let cancellation_tasks = requests.into_iter().filter_map(|(request, kind)| {
             let request_id = request.request_id();
 
-            if kind.gated_on_in_flight() && !pending_ids.contains(&request_id) {
-                debug!(
-                    "skipping terminal request 0x{} without Pending cluster work",
-                    request_id
-                );
-                return None;
+            if kind.gated_on_in_flight() {
+                let pending = pending_ids
+                    .as_ref()
+                    .is_some_and(|ids| ids.contains(&request_id));
+                if !pending {
+                    debug!(
+                        "skipping terminal request 0x{} without Pending cluster work",
+                        request_id
+                    );
+                    return None;
+                }
             }
 
             let self_clone = self.clone();

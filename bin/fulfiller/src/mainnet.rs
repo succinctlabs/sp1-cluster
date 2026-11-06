@@ -4,10 +4,7 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use prost::Message;
 use sp1_cluster_artifact::ArtifactType;
-use sp1_cluster_common::{
-    client::{drain_pages, PageResult},
-    proto::ProofRequest,
-};
+use sp1_cluster_common::proto::ProofRequest;
 use sp1_cluster_fulfillment::{
     network::{CancelableKind, FulfillmentNetwork, NetworkRequest},
     prover_info::build_report_prover_info_body,
@@ -279,14 +276,14 @@ impl FulfillmentNetwork for MainnetFulfiller {
             })
             .collect();
 
-        let max_pages = network_max_pages(limit);
         let responses = join_all(queries.into_iter().map(|(request, kind)| {
             let network = &self.network;
             async move {
-                let pages = drain_pages(limit, max_pages, |offset| {
+                let pages = walk_by_created_at(limit, |to, page| {
                     let mut network = network.clone();
                     let request = spn_network_types::GetFilteredProofRequestsRequest {
-                        page: Some(offset / limit + 1),
+                        to,
+                        page: Some(page),
                         ..request.clone()
                     };
                     async move {
@@ -382,19 +379,68 @@ impl FulfillmentNetwork for MainnetFulfiller {
 // (network-services `bin/rpc/src/pagination.rs`).
 const NETWORK_MAX_OFFSET: u32 = 10_000;
 
-fn network_max_pages(limit: u32) -> u32 {
-    NETWORK_MAX_OFFSET / limit + 1
+// The network RPC lists newest `created_at` first and caps the offset. Unfulfillable rows
+// the cluster already cancelled stay listed, so offset paging alone never reaches older rows.
+// This walk lowers the inclusive `to` bound, in whole seconds, after each full page.
+async fn walk_by_created_at<F, Fut>(
+    limit: u32,
+    fetch: F,
+) -> std::result::Result<Vec<spn_network_types::ProofRequest>, tonic::Status>
+where
+    F: Fn(Option<u64>, u32) -> Fut,
+    Fut: std::future::Future<
+        Output = std::result::Result<Vec<spn_network_types::ProofRequest>, tonic::Status>,
+    >,
+{
+    let max_page = NETWORK_MAX_OFFSET / limit + 1;
+    let mut seen = std::collections::HashSet::new();
+    let mut rows = Vec::new();
+    let mut to = None;
+    let mut page = 1;
+    loop {
+        let batch = fetch(to, page).await?;
+        let full_page = batch.len() as u32 == limit;
+        let oldest = batch.iter().map(|row| row.created_at).min();
+        for row in batch {
+            if seen.insert(row.request_id.clone()) {
+                rows.push(row);
+            }
+        }
+        if !full_page {
+            return Ok(rows);
+        }
+        let Some(oldest) = oldest else {
+            return Ok(rows);
+        };
+        // The oldest second can continue past this page, so `to` keeps all of it.
+        // If `to` rose, the walk could loop over rows it already read.
+        let next_to = match to {
+            Some(current) => current.min(oldest + 1),
+            None => oldest + 1,
+        };
+        if to != Some(next_to) {
+            to = Some(next_to);
+            page = 1;
+        } else if page < max_page {
+            page += 1;
+        } else {
+            tracing::warn!(
+                "more than {NETWORK_MAX_OFFSET} cancelable requests share second {}; \
+                 returning an incomplete listing",
+                next_to - 1
+            );
+            return Ok(rows);
+        }
+    }
 }
-
-type CancelableListing = (
-    std::result::Result<PageResult<spn_network_types::ProofRequest>, tonic::Status>,
-    CancelableKind,
-);
 
 // Skip a failed query so the others still cancel.
 // When every query fails, return the error. An empty list would hide the outage.
 fn merge_cancelable(
-    responses: Vec<CancelableListing>,
+    responses: Vec<(
+        std::result::Result<Vec<spn_network_types::ProofRequest>, tonic::Status>,
+        CancelableKind,
+    )>,
 ) -> Result<Vec<(NetworkProofRequest, CancelableKind)>> {
     let mut any_succeeded = false;
     let mut last_error = None;
@@ -404,7 +450,7 @@ fn merge_cancelable(
     let mut requests = Vec::new();
     for (pages, kind) in responses {
         let page_requests = match pages {
-            Ok(page_requests) => page_requests.items,
+            Ok(page_requests) => page_requests,
             Err(error) => {
                 tracing::warn!("failed to list {kind:?} cancelable requests: {error}");
                 last_error = Some(error);
@@ -477,41 +523,117 @@ impl NetworkRequest for NetworkProofRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
-    fn listing(
-        ids: &[&[u8]],
-    ) -> std::result::Result<PageResult<spn_network_types::ProofRequest>, tonic::Status> {
-        Ok(PageResult {
-            items: ids
+    // Rows 10 ms apart, so no two share a second.
+    fn spread(ids: std::ops::Range<u32>) -> impl Iterator<Item = (u64, u32)> {
+        ids.map(|id| (1_000_000 + u64::from(id) * 10, id))
+    }
+
+    // Rows are `(created_at in milliseconds, id)`, so several rows can share one second.
+    async fn walk(rows: &[(u64, u32)]) -> (Vec<u32>, u32) {
+        let limit = 1000;
+        let calls = Cell::new(0);
+        let fetch = |to: Option<u64>, page: u32| {
+            calls.set(calls.get() + 1);
+            let offset = (page - 1) * limit;
+            if offset > 10_000 {
+                return std::future::ready(Err(tonic::Status::invalid_argument("page too deep")));
+            }
+            let mut matching: Vec<_> = rows
                 .iter()
-                .map(|id| spn_network_types::ProofRequest {
-                    request_id: id.to_vec(),
+                .filter(|(ms, _)| to.is_none_or(|to| *ms <= to * 1000))
+                .collect();
+            matching.sort_by(|a, b| b.cmp(a));
+            std::future::ready(Ok(matching
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .map(|(ms, id)| spn_network_types::ProofRequest {
+                    request_id: id.to_be_bytes().to_vec(),
+                    created_at: ms / 1000,
                     ..Default::default()
                 })
-                .collect(),
-            is_complete: true,
-        })
+                .collect()))
+        };
+
+        let listed = walk_by_created_at(limit, fetch).await.unwrap();
+
+        let mut ids: Vec<u32> = listed
+            .iter()
+            .map(|row| u32::from_be_bytes(row.request_id.as_slice().try_into().unwrap()))
+            .collect();
+        ids.sort_unstable();
+        (ids, calls.get())
+    }
+
+    fn ids(rows: &[(u64, u32)]) -> Vec<u32> {
+        let mut ids: Vec<u32> = rows.iter().map(|(_, id)| *id).collect();
+        ids.sort_unstable();
+        ids
     }
 
     #[tokio::test]
-    async fn network_paging_stops_inside_the_server_offset_bound() {
+    async fn a_short_listing_takes_one_call() {
+        let rows: Vec<_> = spread(0..5).collect();
+
+        let (listed, calls) = walk(&rows).await;
+
+        assert_eq!(listed, ids(&rows));
+        assert_eq!(calls, 1);
+    }
+
+    #[tokio::test]
+    async fn the_walk_reaches_rows_past_the_offset_cap() {
+        let rows: Vec<_> = spread(0..25_000).collect();
+
+        let (listed, _) = walk(&rows).await;
+
+        assert_eq!(listed, ids(&rows));
+    }
+
+    #[tokio::test]
+    async fn a_second_with_more_rows_than_a_page_is_read_in_full() {
+        let crowded = (0..2_500).map(|id| (500_000 + u64::from(id) % 1000, id));
+        let rows: Vec<_> = crowded.chain(spread(2_500..4_500)).collect();
+
+        let (listed, _) = walk(&rows).await;
+
+        assert_eq!(listed, ids(&rows));
+    }
+
+    #[tokio::test]
+    async fn rows_on_whole_second_boundaries_end_the_walk() {
+        let rows: Vec<_> = (0..3_000)
+            .map(|id| ((700 + u64::from(id) / 1000) * 1000, id))
+            .collect();
+
+        let (listed, _) = walk(&rows).await;
+
+        assert_eq!(listed, ids(&rows));
+    }
+
+    // Also what a server that ignores `to` looks like, so the walk must still end.
+    #[tokio::test]
+    async fn a_second_past_the_offset_cap_ends_the_walk() {
         let limit = 1000;
-        // Fakes the network RPC's offset bound.
-        let fetch = |offset: u32| {
-            let page = offset / limit + 1;
-            std::future::ready(if (page - 1) * limit > 10_000 {
-                Err(tonic::Status::invalid_argument("page too deep"))
-            } else {
-                Ok(vec![0u8; limit as usize])
-            })
+        let calls = Cell::new(0);
+        let fetch = |_to: Option<u64>, _page: u32| {
+            calls.set(calls.get() + 1);
+            std::future::ready(Ok((0..limit)
+                .map(|id: u32| spn_network_types::ProofRequest {
+                    request_id: id.to_be_bytes().to_vec(),
+                    created_at: 1_000,
+                    ..Default::default()
+                })
+                .collect()))
         };
 
-        let listed = drain_pages(limit, network_max_pages(limit), fetch)
-            .await
-            .unwrap();
+        let listed = walk_by_created_at(limit, fetch).await.unwrap();
 
-        assert!(!listed.is_complete);
-        assert_eq!(listed.items.len(), 11 * limit as usize);
+        // One call without `to`, then every page the server allows at `to = oldest + 1`.
+        assert_eq!(calls.get(), 1 + NETWORK_MAX_OFFSET / limit + 1);
+        assert_eq!(listed.len(), limit as usize);
     }
 
     #[test]
@@ -521,7 +643,13 @@ mod tests {
                 Err(tonic::Status::unavailable("down")),
                 CancelableKind::Unexecutable,
             ),
-            (listing(&[b"a"]), CancelableKind::Unfulfillable),
+            (
+                Ok(vec![spn_network_types::ProofRequest {
+                    request_id: b"a".to_vec(),
+                    ..Default::default()
+                }]),
+                CancelableKind::Unfulfillable,
+            ),
         ])
         .unwrap();
 
