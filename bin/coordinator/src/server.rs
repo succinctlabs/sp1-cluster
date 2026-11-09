@@ -559,7 +559,7 @@ fn spawn_subscriber_channel_task<P: Send + Sync + 'static>(
 /// This allows spawning additional tasks with access to the coordinator instance.
 pub async fn start_coordinator_server<P: AssignmentPolicy + Default + Send + Sync + 'static>(
 ) -> Result<(Arc<Coordinator<P>>, impl Future<Output = eyre::Result<()>>)> {
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
 
     logger::init(opentelemetry_sdk::Resource::new(vec![]));
 

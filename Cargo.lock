@@ -3260,12 +3260,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dotenv"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
-
-[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8250,7 +8244,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum 0.8.8",
- "dotenv",
+ "dotenvy",
  "opentelemetry_sdk",
  "serde",
  "sp1-cluster-common",
@@ -8298,7 +8292,7 @@ dependencies = [
  "alloy-signer-local",
  "anyhow",
  "config",
- "dotenv",
+ "dotenvy",
  "futures",
  "hex",
  "rustls 0.23.46",
@@ -8321,7 +8315,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "clap",
- "dotenv",
+ "dotenvy",
  "either",
  "eyre",
  "opentelemetry_sdk",
@@ -8382,7 +8376,7 @@ dependencies = [
  "chrono",
  "config",
  "dashmap",
- "dotenv",
+ "dotenvy",
  "eyre",
  "futures",
  "hex",
@@ -8415,7 +8409,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "config",
- "dotenv",
+ "dotenvy",
  "futures",
  "hex",
  "prost 0.14.3",
@@ -8443,7 +8437,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "config",
- "dotenv",
+ "dotenvy",
  "futures",
  "hex",
  "rustls 0.23.46",
@@ -8475,7 +8469,7 @@ dependencies = [
  "bincode",
  "clap",
  "dashmap",
- "dotenv",
+ "dotenvy",
  "futures",
  "hex",
  "mti",
@@ -8504,7 +8498,7 @@ dependencies = [
  "ctrlc",
  "dashmap",
  "dirs 6.0.0",
- "dotenv",
+ "dotenvy",
  "eyre",
  "flate2",
  "jemallocator",
