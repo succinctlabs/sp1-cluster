@@ -14,6 +14,7 @@ use sp1_cluster_common::{
 };
 use sp1_sdk::network::signer::NetworkSigner;
 use spn_network_types::ProofRequestError;
+use std::future::Future;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::JoinSet, time::sleep};
@@ -29,8 +30,6 @@ pub mod run;
 /// Page size for schedulable-request fetches from the network.
 const REQUEST_LIMIT: u32 = 1000;
 
-/// How many submit or fail calls run at once. The paged listing has no
-/// bound, so per-row work needs one.
 const REQUEST_FAN_OUT: usize = 64;
 /// The error strings that should trigger a VERIFICATION_KEY_MISMATCH error.
 const VK_MISMATCH_STRINGS: &[&str] = &[
@@ -227,6 +226,28 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
             "fulfiller build identity",
         );
         self.spawn_report_prover_info(prover, build_identity.clone());
+        tokio::join!(
+            self.run_cancellation_loop(prover),
+            self.run_fulfillment_loop(prover, build_identity),
+        );
+        Ok(())
+    }
+
+    async fn run_cancellation_loop(self: &Arc<Self>, prover: Address) {
+        loop {
+            if let Err(e) = self.cancel_requests(prover).await {
+                error!("cancelling requests: {:?}", e);
+                self.metrics.main_loop_errors.increment(1);
+            }
+            sleep(self.refresh_interval).await;
+        }
+    }
+
+    async fn run_fulfillment_loop(
+        self: &Arc<Self>,
+        prover: Address,
+        build_identity: prover_info::BuildIdentity,
+    ) {
         let mut last_prover_info_report = std::time::Instant::now();
         let report_interval = Duration::from_secs(prover_info::REPORT_INTERVAL_SECS);
 
@@ -246,11 +267,6 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                 error!("failing requests: {:?}", e);
                 self.metrics.main_loop_errors.increment(1);
             }
-            // Check for requests to cancel.
-            if let Err(e) = self.cancel_requests(prover).await {
-                error!("cancelling requests: {:?}", e);
-                self.metrics.main_loop_errors.increment(1);
-            }
             // Check for requests to schedule.
             if let Err(e) = self.schedule_requests(prover).await {
                 error!("scheduling requests: {:?}", e);
@@ -261,11 +277,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         }
     }
 
-    /// Spawns [`Self::report_prover_info`] as a detached background task so this
-    /// best-effort telemetry can never block the fulfiller's startup or its
-    /// submit/fail/cancel/schedule loop — even though the report itself uses
-    /// bounded timeouts. Fire-and-forget: failures are logged inside the task.
-    /// Skipped when fulfillment is disabled (dry-run).
+    /// Sends prover information in a separate task so the polling loops do not wait for the report.
     fn spawn_report_prover_info(
         self: &Arc<Self>,
         prover: Address,
@@ -375,7 +387,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         let submission_tasks = requests.into_iter().map(|request| {
             let self_clone = self.clone();
             let request_id = request.id.clone();
-            let work = async move {
+            async move {
                 match self_clone.submit_request(request).await {
                     Ok(_) => {
                         info!("submitted request 0x{}", request_id);
@@ -420,19 +432,10 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                         }
                     }
                 }
-            };
-            // Spawn inside the buffered future: buffer_unordered bounds how
-            // many start, the JoinHandle keeps a panic in one request from
-            // unwinding into the fulfiller loop.
-            async move {
-                let _ = tokio::spawn(work).await;
             }
         });
 
-        futures::stream::iter(submission_tasks)
-            .buffer_unordered(REQUEST_FAN_OUT)
-            .collect::<Vec<_>>()
-            .await;
+        run_request_tasks(submission_tasks).await;
 
         Ok(())
     }
@@ -520,7 +523,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
 
         let failure_tasks = requests.into_iter().map(|request| {
             let self_clone = self.clone();
-            let work = async move {
+            async move {
                 let request_id = request.id.clone();
                 match self_clone.fail_request(request).await {
                     Ok(_) => {
@@ -533,17 +536,10 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                         self_clone.metrics.request_fail_failures.increment(1);
                     }
                 }
-            };
-            // See submit_requests: spawn for panic isolation, buffer for bound.
-            async move {
-                let _ = tokio::spawn(work).await;
             }
         });
 
-        futures::stream::iter(failure_tasks)
-            .buffer_unordered(REQUEST_FAN_OUT)
-            .collect::<Vec<_>>()
-            .await;
+        run_request_tasks(failure_tasks).await;
 
         Ok(())
     }
@@ -570,11 +566,7 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         Ok(())
     }
 
-    /// Checks for requests in the network that have an ExecutionStatus of UNEXECUTABLE and cancels
-    /// them on the cluster.
     async fn cancel_requests(self: &Arc<Self>, prover: Address) -> Result<()> {
-        // Get all requested unexecutable requests from the network that are assigned to our
-        // address.
         let fulfiller_addresses = self
             .addresses
             .as_ref()
@@ -599,47 +591,44 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
         }
         info!("found {} cancelable requests", requests.len());
 
-        // Fetch the cluster's in-flight (Pending) request IDs so we can tell whether a
-        // `Fulfilled` candidate still has wasted cluster work to abort. Only `Fulfilled`
-        // candidates consult this set, so skip the extra cluster RPC entirely when none
-        // are present (e.g. mainnet, which never produces a `Fulfilled` cancelable).
-        let in_flight: HashSet<String> =
-            if requests.iter().any(|(_, kind)| kind.gated_on_in_flight()) {
-                self.cluster
-                    .get_all_proof_requests(ProofRequestListRequest {
-                        proof_status: vec![ProofRequestStatus::Pending.into()],
-                        minimum_deadline: Some(time_now()),
-                        ..Default::default()
-                    })
-                    .map_err(|e| anyhow!("failed to get requests: {}", e))
-                    .await?
-                    .into_iter()
-                    .map(|r| r.id)
-                    .collect()
-            } else {
-                HashSet::new()
-            };
+        let terminal_ids: Vec<_> = requests
+            .iter()
+            .filter(|(_, kind)| kind.gated_on_in_flight())
+            .map(|(request, _)| request.request_id())
+            .collect();
+        // Unexecutable requests owe the network a failed fulfillment, so a cluster
+        // outage must not hold them back. Gated kinds wait for the next tick.
+        let pending_ids = match self
+            .cluster
+            .get_pending_proof_request_ids(&terminal_ids, time_now())
+            .await
+        {
+            Ok(pending_ids) => Some(pending_ids),
+            Err(error) => {
+                warn!("failed to get cancellation candidate statuses, skipping terminal requests: {error}");
+                None
+            }
+        };
 
-        let failure_tasks = requests.into_iter().filter_map(|(request, kind)| {
+        let cancellation_tasks = requests.into_iter().filter_map(|(request, kind)| {
             let request_id = request.request_id();
 
-            // Skip no-op cancels: a request the network already fulfilled that our cluster
-            // is not proving has nothing to abort and no fulfillment to release.
-            if kind.gated_on_in_flight() && !in_flight.contains(&request_id) {
-                debug!(
-                    "skipping fulfilled request 0x{} not in cluster in-flight set",
-                    request_id
-                );
-                return None;
+            if kind.gated_on_in_flight() {
+                let pending = pending_ids
+                    .as_ref()
+                    .is_some_and(|ids| ids.contains(&request_id));
+                if !pending {
+                    debug!(
+                        "skipping terminal request 0x{} without Pending cluster work",
+                        request_id
+                    );
+                    return None;
+                }
             }
 
             let self_clone = self.clone();
-            Some(tokio::spawn(async move {
+            Some(async move {
                 let result = async {
-                    // Only fail on the network while it still expects an answer. A request
-                    // the network has already finalized (unfulfillable) treats the fail as
-                    // a no-op, and a fulfilled request succeeded — failing either would be
-                    // wrong or wasteful. The cluster unclaim runs either way.
                     if kind.should_fail_fulfillment() {
                         self_clone.cancel_on_network(&request_id).await?;
                     }
@@ -657,10 +646,10 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                         self_clone.metrics.request_cancel_failures.increment(1);
                     }
                 }
-            }))
+            })
         });
 
-        join_all(failure_tasks).await;
+        run_request_tasks(cancellation_tasks).await;
 
         Ok(())
     }
@@ -952,6 +941,21 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
     }
 }
 
+async fn run_request_tasks<F>(tasks: impl IntoIterator<Item = F>)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    futures::stream::iter(tasks)
+        .for_each_concurrent(REQUEST_FAN_OUT, |task| async move {
+            // Spawn inside this callback to keep running tasks within REQUEST_FAN_OUT.
+            // A separate task keeps a request panic from stopping the batch.
+            if let Err(error) = tokio::spawn(task).await {
+                error!("request task failed: {error}");
+            }
+        })
+        .await;
+}
+
 /// Outcome of scheduling one request in the cluster.
 enum ScheduleOutcome {
     Created,
@@ -987,16 +991,13 @@ mod tests {
     use super::*;
     use sp1_cluster_common::proto::ClusterComponentInfo;
 
-    /// The full routing matrix: only `Unexecutable` owes the network a
-    /// `fail_fulfillment`, and only `Fulfilled` gates the cluster abort on the
-    /// request still being in-flight.
     #[test]
     fn cancelable_kind_routing_matrix() {
         use crate::network::CancelableKind::*;
         // (kind, should_fail_fulfillment, gated_on_in_flight)
         for (kind, fail, gate) in [
             (Unexecutable, true, false),
-            (Unfulfillable, false, false),
+            (Unfulfillable, false, true),
             (Fulfilled, false, true),
         ] {
             assert_eq!(kind.should_fail_fulfillment(), fail, "{kind:?}");
