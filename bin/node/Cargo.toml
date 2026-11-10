@@ -42,3 +42,6 @@ tokio.workspace = true
 tokio-util.workspace = true
 tonic.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

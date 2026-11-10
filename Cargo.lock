@@ -8523,6 +8523,7 @@ dependencies = [
  "sp1-sdk",
  "sysinfo 0.33.1",
  "tar",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tonic 0.14.6",
