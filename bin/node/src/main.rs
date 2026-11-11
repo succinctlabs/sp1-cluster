@@ -21,7 +21,7 @@ pub static ALLOCATOR: Jemalloc = Jemalloc;
 async fn main() -> Result<()> {
     std::env::set_var("PROVER_CORE_CACHE_SIZE", "1");
     std::env::set_var("PROVER_COMPRESS_CACHE_SIZE", "1");
-    match dotenv::dotenv() {
+    match dotenvy::dotenv() {
         std::result::Result::Ok(_) => {}
         Err(e) => {
             println!("failed to load .env file: {:?}", e);

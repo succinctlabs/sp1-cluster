@@ -12,7 +12,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    if let Err(e) = dotenv::dotenv() {
+    if let Err(e) = dotenvy::dotenv() {
         eprintln!("not loading .env file: {e}");
     }
     rustls::crypto::ring::default_provider()
