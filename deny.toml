@@ -4,7 +4,6 @@ all-features = true
 [advisories]
 ignore = [
   { id = "RUSTSEC-2021-0139", reason = "Transitive through tracing-forest in sp1. sp1 must drop it first." },
-  { id = "RUSTSEC-2021-0141", reason = "Direct dependency of most sp1-cluster crates. Switching to dotenvy removes it." },
   { id = "RUSTSEC-2024-0384", reason = "Transitive through backoff. Replacing backoff removes it." },
   { id = "RUSTSEC-2024-0436", reason = "Transitive through several crates, including alloy-primitives and dashu-macros. Each one must drop it first." },
   { id = "RUSTSEC-2025-0012", reason = "Direct dependency of sp1-cluster and sp1-sdk. Both must switch to a maintained retry crate." },
