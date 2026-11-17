@@ -457,14 +457,18 @@ impl RedisArtifactClient {
                 )));
             }
         }
-        let last_chunk_bytes: usize = deadpool_redis::redis::cmd("HSTRLEN")
-            .arg(chunk_key(&key))
-            .arg(total_chunks - 1)
+        let mut chunk_lengths = deadpool_redis::redis::pipe();
+        for chunk_idx in 0..total_chunks {
+            chunk_lengths
+                .cmd("HSTRLEN")
+                .arg(chunk_key(&key))
+                .arg(chunk_idx);
+        }
+        let chunk_bytes: Vec<u64> = chunk_lengths
             .query_async(&mut conn)
             .await
             .map_err(transient)?;
-        let stored_bytes = (total_chunks - 1) * *CHUNK_SIZE + last_chunk_bytes;
-        crate::check_size(stored_bytes as u64, artifact_type)
+        crate::check_size(chunk_bytes.iter().sum(), artifact_type)
             .map_err(|e| backoff::Error::permanent(e.into()))?;
         // Return this connection before the chunk loop borrows more from the
         // same pool — holding it across those acquisitions can wedge a
@@ -1108,6 +1112,24 @@ mod tests {
             err.downcast_ref(),
             Some(crate::ArtifactError::TooLarge(ArtifactType::Program))
         ));
+        fx.delete().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis at REDIS_URL"]
+    async fn chunked_download_measures_chunks_smaller_than_the_chunk_size() {
+        let fx = Fixture::program("program-small-chunks");
+        let chunks = crate::MAX_PROGRAM_BYTES as usize / *CHUNK_SIZE + 1;
+        let mut conn = fx.conn().await;
+        for idx in 0..chunks {
+            let _: usize = conn.hset(chunk_key(&fx.key), idx, b"x").await.unwrap();
+        }
+        let _: usize = conn
+            .hset(chunk_key(&fx.key), CHUNK_COUNT_FIELD, chunks)
+            .await
+            .unwrap();
+        drop(conn);
+        assert_eq!(fx.download().await.len(), chunks);
         fx.delete().await;
     }
 
