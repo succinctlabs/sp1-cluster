@@ -3,12 +3,13 @@ use crate::{
     proto::{
         self, cluster_service_client::ClusterServiceClient as InnerClusterClient,
         ProofRequestCancelRequest, ProofRequestCreateRequest, ProofRequestGetRequest,
-        ProofRequestListRequest, ProofRequestUpdateRequest,
+        ProofRequestListRequest, ProofRequestStatus, ProofRequestUpdateRequest,
     },
     util::backoff_retry,
 };
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
 use eyre::Result;
+use std::collections::HashSet;
 use std::future::Future;
 use std::time::Duration;
 use tonic::transport::{Channel, Endpoint};
@@ -178,6 +179,30 @@ impl ClusterServiceClient {
             })
             .await?;
         Ok(result.proof_request)
+    }
+
+    /// Returns the subset of `proof_ids` the cluster still has `Pending`.
+    pub async fn get_pending_proof_request_ids(
+        &self,
+        proof_ids: &[String],
+        minimum_deadline: u64,
+    ) -> Result<HashSet<String>> {
+        if proof_ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let candidates: HashSet<_> = proof_ids.iter().collect();
+        let pending = self
+            .get_all_proof_requests(ProofRequestListRequest {
+                proof_status: vec![ProofRequestStatus::Pending.into()],
+                minimum_deadline: Some(minimum_deadline),
+                ..Default::default()
+            })
+            .await?
+            .into_iter()
+            .filter(|request| candidates.contains(&request.id))
+            .map(|request| request.id)
+            .collect();
+        Ok(pending)
     }
 
     /// Replace the API's cluster component build manifest (full snapshot). Called

@@ -18,6 +18,9 @@ ignore = [
   { id = "RUSTSEC-2026-0346", reason = "Transitive through aws-sdk-s3 default features. Turning them off here and in spn-artifacts removes it." },
   { id = "RUSTSEC-2026-0349", reason = "Transitive through aws-sdk-s3 default features. Turning them off here and in spn-artifacts removes it." },
   { id = "RUSTSEC-2026-0382", reason = "Transitive through aws-sdk-s3 default features. Turning them off here and in spn-artifacts removes it." },
+  { id = "RUSTSEC-2026-0387", reason = "Transitive through aws-sigv4, which uses crypto-bigint 0.4 and 0.5 for SigV4a. The latest aws-sigv4, 1.6.5, still does." },
+  { id = "RUSTSEC-2026-0440", reason = "Transitive through testcontainers in sp1-test-cluster, a test-only binary. Unmaintained, with no known vulnerability." },
+  { id = "RUSTSEC-2026-0441", reason = "Transitive through aws-smithy-http 0.62 in aws-sdk-s3. Unmaintained, with no known vulnerability." },
 ]
 
 [licenses]
