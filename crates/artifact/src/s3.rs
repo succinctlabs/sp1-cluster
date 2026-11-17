@@ -214,12 +214,15 @@ impl S3ArtifactClient {
 
         // If the file is smaller than the chunk size, just download it.
         if size <= CHUNK_SIZE as i64 {
+            if size == 0 {
+                return Ok(Vec::new());
+            }
             let bytes = backoff::future::retry(BACKOFF.clone(), || {
                 let bucket = self.bucket.clone();
                 let key = key.clone();
                 async move {
                     self.s3_dl_mode
-                        .read_bytes(&bucket, &key, None)
+                        .read_bytes(&bucket, &key, Some((0, size - 1)))
                         .await
                         .map_err(classify_download_error)
                 }
