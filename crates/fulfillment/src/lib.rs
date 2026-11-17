@@ -3,7 +3,7 @@ use crate::network::{FulfillmentNetwork, NetworkRequest};
 use alloy_primitives::{Address, B256};
 use anyhow::{anyhow, Result};
 use futures::{future::join_all, StreamExt, TryFutureExt};
-use sp1_cluster_artifact::{ArtifactClient, ArtifactType, CompressedUpload};
+use sp1_cluster_artifact::{ArtifactClient, ArtifactError, ArtifactType, CompressedUpload};
 use sp1_cluster_common::{
     client::ClusterServiceClient,
     failure::ProvingFailure,
@@ -51,6 +51,14 @@ pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
     }
     let error = ProvingFailure::from_extra_data(s)?.error;
     Some(error.unwrap_or(ProofRequestError::ProvingFailure as i32))
+}
+
+/// The network error for an artifact that the fulfiller refused to copy.
+fn too_large_error(e: &anyhow::Error) -> Option<ProofRequestError> {
+    match e.downcast_ref::<ArtifactError>()? {
+        ArtifactError::TooLarge(ArtifactType::Program) => Some(ProofRequestError::ProgramTooLarge),
+        _ => None,
+    }
 }
 
 /// The maximum age of the API-held cluster component manifest before the fulfiller
@@ -773,6 +781,22 @@ impl<A: ArtifactClient + CompressedUpload, N: FulfillmentNetwork> Fulfiller<A, N
                     Err(e) => {
                         error!("failed to schedule request 0x{}: {:?}", request_id_hex, e);
                         self_clone.metrics.request_schedule_failures.increment(1);
+                        if let Some(error) = too_large_error(&e) {
+                            let _nonce_guard = self_clone.nonce_lock.lock().await;
+                            if let Err(e) = self_clone
+                                .network
+                                .fail_request_with_error(
+                                    &request_id_hex,
+                                    Some(error as i32),
+                                    None,
+                                    self_clone.domain.as_slice(),
+                                    &self_clone.signer,
+                                )
+                                .await
+                            {
+                                error!("failed to fail request 0x{}: {:?}", request_id_hex, e);
+                            }
+                        }
                     }
                 }
             })
@@ -991,6 +1015,18 @@ pub fn extract_artifact_name(s3_url: &str) -> Result<String> {
 mod tests {
     use super::*;
     use sp1_cluster_common::proto::ClusterComponentInfo;
+
+    #[test]
+    fn too_large_error_maps_only_an_oversized_program() {
+        let program = anyhow::Error::from(ArtifactError::TooLarge(ArtifactType::Program));
+        assert_eq!(
+            too_large_error(&program),
+            Some(ProofRequestError::ProgramTooLarge)
+        );
+        let stdin = anyhow::Error::from(ArtifactError::TooLarge(ArtifactType::Stdin));
+        assert_eq!(too_large_error(&stdin), None);
+        assert_eq!(too_large_error(&anyhow!("s3 timeout")), None);
+    }
 
     #[test]
     fn request_error_from_extra_data_passes_the_error_code_through() {

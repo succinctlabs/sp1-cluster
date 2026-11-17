@@ -3,7 +3,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::future::join_all;
 use prost::Message;
-use sp1_cluster_artifact::ArtifactType;
+use sp1_cluster_artifact::{ArtifactError, ArtifactType};
 use sp1_cluster_common::proto::ProofRequest;
 use sp1_cluster_fulfillment::{
     network::{CancelableKind, FulfillmentNetwork, NetworkRequest},
@@ -11,7 +11,7 @@ use sp1_cluster_fulfillment::{
     request_error_from_extra_data,
 };
 use sp1_sdk::network::signer::NetworkSigner;
-use spn_artifacts::Artifact;
+use spn_artifacts::{Artifact, ArtifactTooLarge};
 use spn_network_types::error_trace::ErrorTrace;
 
 /// SPN (SP1 Prover Network) implementation of FulfillmentNetwork.
@@ -326,8 +326,13 @@ impl FulfillmentNetwork for MainnetFulfiller {
                         .map(|s| s.parse().unwrap_or(32))
                         .unwrap_or(32),
                 ),
+                sp1_cluster_artifact::max_bytes(artifact_type),
             )
-            .await?;
+            .await
+            .map_err(|e| match e.downcast::<ArtifactTooLarge>() {
+                Ok(_) => ArtifactError::TooLarge(artifact_type).into(),
+                Err(e) => e,
+            })?;
         Ok(bytes.into())
     }
 
