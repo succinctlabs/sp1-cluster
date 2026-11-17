@@ -12,6 +12,9 @@ use std::io::Read;
 /// Programs are customer bytes stored as is, so a small zstd bomb must not exhaust a node's memory.
 const MAX_PROGRAM_BYTES: u64 = 512 * 1024 * 1024;
 
+/// Stdin is customer bytes too, so it gets a cap as well.
+const MAX_STDIN_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
 /// A download refused for its content, which fails the same way on every retry.
 #[derive(Debug)]
 pub enum ArtifactError {
@@ -32,13 +35,24 @@ impl std::error::Error for ArtifactError {}
 
 fn decompress(compressed: &[u8], artifact_type: ArtifactType) -> Result<Vec<u8>, ArtifactError> {
     let cap = max_bytes(artifact_type).saturating_add(1);
+    let corrupt = |e: std::io::Error| ArtifactError::Corrupt(artifact_type, e.into());
+    let mut decoder = zstd::Decoder::with_buffer(compressed).map_err(corrupt)?;
     let mut decoded = Vec::new();
-    if cap < u64::MAX {
-        decoded.reserve_exact(cap as usize);
+    while (decoded.len() as u64) < cap {
+        // Double the buffer up to the cap. A 16 GiB reservation up front can fail on a small node.
+        let room = (decoded.len() as u64)
+            .max(1 << 16)
+            .min(cap - decoded.len() as u64);
+        decoded.reserve_exact(room as usize);
+        let read = decoder
+            .by_ref()
+            .take(room)
+            .read_to_end(&mut decoded)
+            .map_err(corrupt)?;
+        if (read as u64) < room {
+            break;
+        }
     }
-    zstd::Decoder::with_buffer(compressed)
-        .and_then(|d| d.take(cap).read_to_end(&mut decoded))
-        .map_err(|e| ArtifactError::Corrupt(artifact_type, e.into()))?;
     check_size(decoded.len() as u64, artifact_type)?;
     Ok(decoded)
 }
@@ -62,6 +76,7 @@ fn check_size(size: u64, artifact_type: ArtifactType) -> Result<(), ArtifactErro
 pub fn max_bytes(artifact_type: ArtifactType) -> u64 {
     match artifact_type {
         ArtifactType::Program => MAX_PROGRAM_BYTES,
+        ArtifactType::Stdin | ArtifactType::PrivateStdin => MAX_STDIN_BYTES,
         _ => u64::MAX,
     }
 }
@@ -113,6 +128,24 @@ mod tests {
     fn decompress_allocates_no_more_than_the_cap() {
         let decoded = decompress(&zeros(MAX_PROGRAM_BYTES), ArtifactType::Program).unwrap();
         assert!(decoded.capacity() as u64 <= MAX_PROGRAM_BYTES + 1);
+    }
+
+    #[test]
+    fn decompress_returns_input_larger_than_the_first_reservation() {
+        let input: Vec<u8> = (0..200_000u32).map(|i| i as u8).collect();
+        let compressed = zstd::encode_all(input.as_slice(), 3).unwrap();
+        assert_eq!(decompress(&compressed, ArtifactType::Stdin).unwrap(), input);
+    }
+
+    #[test]
+    fn check_size_caps_both_stdin_types_at_max_bytes() {
+        for artifact_type in [ArtifactType::Stdin, ArtifactType::PrivateStdin] {
+            assert!(check_size(MAX_STDIN_BYTES, artifact_type).is_ok());
+            assert!(matches!(
+                check_size(MAX_STDIN_BYTES + 1, artifact_type),
+                Err(ArtifactError::TooLarge(_))
+            ));
+        }
     }
 
     #[test]

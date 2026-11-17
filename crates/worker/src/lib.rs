@@ -225,7 +225,7 @@ impl<W: WorkerClient, A: ArtifactClient, C: SP1ProverComponents> SP1ClusterWorke
                         Some(TaskId::new(task.task_id.clone())),
                         task_type,
                         err,
-                        program_error(err),
+                        artifact_error(err),
                     )
                     .await;
 
@@ -290,10 +290,13 @@ pub async fn try_unclaim_proof<W: WorkerClient, E: std::fmt::Debug>(
     }
 }
 
-fn program_error(err: &anyhow::Error) -> Option<ProofRequestError> {
+fn artifact_error(err: &anyhow::Error) -> Option<ProofRequestError> {
     match err.downcast_ref::<ArtifactError>()? {
         ArtifactError::TooLarge(ArtifactType::Program) => Some(ProofRequestError::ProgramTooLarge),
         ArtifactError::Corrupt(ArtifactType::Program, _) => Some(ProofRequestError::InvalidProgram),
+        ArtifactError::TooLarge(ArtifactType::Stdin | ArtifactType::PrivateStdin) => {
+            Some(ProofRequestError::StdinTooLarge)
+        }
         _ => None,
     }
 }
@@ -326,10 +329,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn program_error_maps_only_program_artifact_errors() {
+    fn artifact_error_maps_only_program_and_stdin_size_errors() {
         let too_large = anyhow::Error::from(ArtifactError::TooLarge(ArtifactType::Program));
         assert_eq!(
-            program_error(&too_large),
+            artifact_error(&too_large),
             Some(ProofRequestError::ProgramTooLarge)
         );
         let corrupt = anyhow::Error::from(ArtifactError::Corrupt(
@@ -337,11 +340,21 @@ mod tests {
             anyhow::anyhow!("bad frame"),
         ));
         assert_eq!(
-            program_error(&corrupt),
+            artifact_error(&corrupt),
             Some(ProofRequestError::InvalidProgram)
         );
-        let stdin = anyhow::Error::from(ArtifactError::TooLarge(ArtifactType::Stdin));
-        assert_eq!(program_error(&stdin), None);
-        assert_eq!(program_error(&anyhow::anyhow!("gpu oom")), None);
+        for stdin_type in [ArtifactType::Stdin, ArtifactType::PrivateStdin] {
+            let stdin = anyhow::Error::from(ArtifactError::TooLarge(stdin_type));
+            assert_eq!(
+                artifact_error(&stdin),
+                Some(ProofRequestError::StdinTooLarge)
+            );
+        }
+        let corrupt_stdin = anyhow::Error::from(ArtifactError::Corrupt(
+            ArtifactType::Stdin,
+            anyhow::anyhow!("bad frame"),
+        ));
+        assert_eq!(artifact_error(&corrupt_stdin), None);
+        assert_eq!(artifact_error(&anyhow::anyhow!("gpu oom")), None);
     }
 }
