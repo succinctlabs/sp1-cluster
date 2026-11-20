@@ -21,6 +21,7 @@ ignore = [
   { id = "RUSTSEC-2026-0387", reason = "Transitive through aws-sigv4, which uses crypto-bigint 0.4 and 0.5 for SigV4a. The latest aws-sigv4, 1.6.5, still does." },
   { id = "RUSTSEC-2026-0440", reason = "Transitive through testcontainers in sp1-test-cluster, a test-only binary. Unmaintained, with no known vulnerability." },
   { id = "RUSTSEC-2026-0441", reason = "Transitive through aws-smithy-http 0.62 in aws-sdk-s3. Unmaintained, with no known vulnerability." },
+  { id = "RUSTSEC-2026-0543", reason = "Direct dependency of sp1-cluster crates, and transitive through sp1 and procfs. Moving to jiff or time removes it, after those crates do the same." },
 ]
 
 [licenses]
