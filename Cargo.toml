@@ -47,21 +47,21 @@ spn-pricing = { git = "https://github.com/succinctlabs/network", branch = "main"
 spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
 
 # SP1
-# Keep the entire family on one release so crossing types share one source.
-sp1-core-executor = "=6.10.0"
-sp1-core-machine = { version = "=6.10.0", features = ["bigint-rug"] }
-sp1-hypercube = "=6.10.0"
-sp1-primitives = "=6.10.0"
-sp1-prover = "=6.10.0"
-sp1-prover-types = "=6.10.0"
-sp1-recursion-circuit = "=6.10.0"
-sp1-recursion-compiler = "=6.10.0"
-sp1-recursion-executor = "=6.10.0"
-sp1-sdk = { version = "=6.10.0", features = ["network"] }
+# Keep the entire family on one rev so crossing types share one source.
+sp1-core-executor = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6" }
+sp1-core-machine = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6", features = ["bigint-rug"] }
+sp1-hypercube = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6" }
+sp1-primitives = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6" }
+sp1-prover = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6" }
+sp1-prover-types = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6" }
+sp1-recursion-circuit = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6" }
+sp1-recursion-compiler = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6" }
+sp1-recursion-executor = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6", features = ["network"] }
 
 # SP1 GPU
-sp1-gpu-cudart = "=6.10.0"
-sp1-gpu-prover = "=6.10.0"
+sp1-gpu-cudart = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6" }
+sp1-gpu-prover = { git = "https://github.com/succinctlabs/sp1", rev = "749b0c6" }
 
 # Misc
 alloy = { version = "=1.1.3", default-features = false, features = ["serde"] }
@@ -132,7 +132,7 @@ tracing-subscriber = "0.3.19"
 # vergen 9.0.6 uses vergen-lib 0.1.x which is compatible
 vergen = "=9.0.6"
 vergen-git2 = { version = "1.0.1", default-features = false, features = ["build", "cargo", "rustc", "si"] }
-zstd = "0.13.3"
+zstd = "0.14.3"
 
 [workspace.metadata.cargo-shear]
 ignored = ["prost", "serde"]
