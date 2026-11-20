@@ -58,7 +58,8 @@ fn check_size(size: u64, artifact_type: ArtifactType) -> Result<(), ArtifactErro
     Ok(())
 }
 
-fn max_bytes(artifact_type: ArtifactType) -> u64 {
+/// The largest stored or decoded size that a download of this type accepts.
+pub fn max_bytes(artifact_type: ArtifactType) -> u64 {
     match artifact_type {
         ArtifactType::Program => MAX_PROGRAM_BYTES,
         _ => u64::MAX,
