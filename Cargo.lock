@@ -7776,7 +7776,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "slop-air"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-air",
 ]
@@ -7795,7 +7795,7 @@ dependencies = [
 [[package]]
 name = "slop-algebra"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "itertools 0.14.0",
  "p3-field",
@@ -7805,44 +7805,44 @@ dependencies = [
 [[package]]
 name = "slop-alloc"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "slop-baby-bear"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "lazy_static",
  "p3-baby-bear",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
 ]
 
 [[package]]
 name = "slop-basefold"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "derive-where",
  "itertools 0.14.0",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-baby-bear",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-merkle-tree",
  "slop-multilinear",
- "slop-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-tensor",
  "slop-utils",
  "thiserror 1.0.69",
@@ -7851,22 +7851,22 @@ dependencies = [
 [[package]]
 name = "slop-basefold-prover"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "derive-where",
  "itertools 0.14.0",
  "rand 0.8.8",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-baby-bear",
  "slop-basefold",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-dft",
  "slop-fri",
  "slop-futures",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-merkle-tree",
  "slop-multilinear",
  "slop-tensor",
@@ -7891,15 +7891,15 @@ dependencies = [
 [[package]]
 name = "slop-bn254"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "ff 0.13.1",
  "p3-bn254-fr",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
 ]
 
 [[package]]
@@ -7917,18 +7917,18 @@ dependencies = [
 [[package]]
 name = "slop-challenger"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-challenger",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
 ]
 
 [[package]]
 name = "slop-commit"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-commit",
  "serde",
@@ -7938,11 +7938,11 @@ dependencies = [
 [[package]]
 name = "slop-dft"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-dft",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-matrix",
  "slop-tensor",
@@ -7951,7 +7951,7 @@ dependencies = [
 [[package]]
 name = "slop-fri"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-fri",
 ]
@@ -7959,7 +7959,7 @@ dependencies = [
 [[package]]
 name = "slop-futures"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "crossbeam",
  "futures",
@@ -7973,27 +7973,27 @@ dependencies = [
 [[package]]
 name = "slop-jagged"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "itertools 0.14.0",
  "num_cpus",
  "rand 0.8.8",
  "rayon",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-baby-bear",
  "slop-basefold",
  "slop-basefold-prover",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-merkle-tree",
  "slop-multilinear",
  "slop-stacked",
  "slop-sumcheck",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-tensor",
  "slop-utils",
  "thiserror 1.0.69",
@@ -8003,7 +8003,7 @@ dependencies = [
 [[package]]
 name = "slop-keccak-air"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-keccak-air",
 ]
@@ -8026,21 +8026,21 @@ dependencies = [
 [[package]]
 name = "slop-koala-bear"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "lazy_static",
  "p3-koala-bear",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
 ]
 
 [[package]]
 name = "slop-matrix"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-matrix",
 ]
@@ -8048,7 +8048,7 @@ dependencies = [
 [[package]]
 name = "slop-maybe-rayon"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-maybe-rayon",
 ]
@@ -8056,21 +8056,21 @@ dependencies = [
 [[package]]
 name = "slop-merkle-tree"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "itertools 0.14.0",
  "p3-merkle-tree",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-baby-bear",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-futures",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-matrix",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-tensor",
  "slop-utils",
  "thiserror 1.0.69",
@@ -8079,16 +8079,16 @@ dependencies = [
 [[package]]
 name = "slop-multilinear"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "derive-where",
  "num_cpus",
  "rand 0.8.8",
  "rayon",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-matrix",
  "slop-tensor",
@@ -8106,7 +8106,7 @@ dependencies = [
 [[package]]
 name = "slop-poseidon2"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-poseidon2",
 ]
@@ -8120,21 +8120,21 @@ checksum = "91992a8acf6a9a4c52dee00142840d30c8cc9bbb3ff30ca3d56dcde428a591dd"
 [[package]]
 name = "slop-primitives"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 
 [[package]]
 name = "slop-stacked"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "derive-where",
  "itertools 0.14.0",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-basefold",
  "slop-basefold-prover",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-merkle-tree",
  "slop-multilinear",
@@ -8145,15 +8145,15 @@ dependencies = [
 [[package]]
 name = "slop-sumcheck"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "itertools 0.14.0",
  "rayon",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-baby-bear",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-multilinear",
  "thiserror 1.0.69",
 ]
@@ -8170,7 +8170,7 @@ dependencies = [
 [[package]]
 name = "slop-symmetric"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-symmetric",
 ]
@@ -8178,7 +8178,7 @@ dependencies = [
 [[package]]
 name = "slop-tensor"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "arrayvec",
  "derive-where",
@@ -8186,7 +8186,7 @@ dependencies = [
  "rand 0.8.8",
  "rayon",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-matrix",
  "thiserror 1.0.69",
@@ -8196,7 +8196,7 @@ dependencies = [
 [[package]]
 name = "slop-uni-stark"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-uni-stark",
 ]
@@ -8204,7 +8204,7 @@ dependencies = [
 [[package]]
 name = "slop-utils"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "p3-util",
  "tracing-forest",
@@ -8214,21 +8214,21 @@ dependencies = [
 [[package]]
 name = "slop-whir"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "derive-where",
  "itertools 0.14.0",
  "rand 0.8.8",
  "rayon",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-baby-bear",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-dft",
  "slop-jagged",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-matrix",
  "slop-merkle-tree",
  "slop-multilinear",
@@ -8279,14 +8279,14 @@ dependencies = [
 [[package]]
 name = "sp1-build"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "anyhow",
  "cargo_metadata 0.18.1",
  "chrono",
  "clap",
  "dirs 5.0.1",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
 ]
 
 [[package]]
@@ -8620,7 +8620,7 @@ dependencies = [
  "sp1-gpu-cudart",
  "sp1-gpu-prover",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-prover",
  "sp1-prover-types",
  "sp1-sdk",
@@ -8638,7 +8638,7 @@ dependencies = [
 [[package]]
 name = "sp1-core-executor"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "bincode",
  "cfg-if",
@@ -8656,13 +8656,13 @@ dependencies = [
  "serde_arrays",
  "serde_json",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-maybe-rayon",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-curves",
  "sp1-hypercube",
  "sp1-jit",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "strum",
  "subenum",
  "thiserror 1.0.69",
@@ -8675,7 +8675,7 @@ dependencies = [
 [[package]]
 name = "sp1-core-executor-runner"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "base64 0.22.1",
  "bincode",
@@ -8687,7 +8687,7 @@ dependencies = [
  "sp1-core-executor",
  "sp1-core-executor-runner-binary",
  "sp1-jit",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sysinfo 0.30.13",
  "tracing",
  "uuid",
@@ -8696,7 +8696,7 @@ dependencies = [
 [[package]]
 name = "sp1-core-executor-runner-binary"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "bincode",
  "crash-handler",
@@ -8710,7 +8710,7 @@ dependencies = [
 [[package]]
 name = "sp1-core-machine"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "bincode",
  "cfg-if",
@@ -8725,8 +8725,8 @@ dependencies = [
  "serde",
  "serde_json",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-keccak-air",
  "slop-matrix",
  "slop-maybe-rayon",
@@ -8737,7 +8737,7 @@ dependencies = [
  "sp1-derive",
  "sp1-hypercube",
  "sp1-jit",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "static_assertions",
  "struct-reflection",
  "strum",
@@ -8753,7 +8753,7 @@ dependencies = [
 [[package]]
 name = "sp1-curves"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "cfg-if",
  "curve25519-dalek",
@@ -8767,16 +8767,16 @@ dependencies = [
  "p256 0.13.2",
  "rug",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "snowbridge-amcl",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "typenum",
 ]
 
 [[package]]
 name = "sp1-derive"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8786,40 +8786,40 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-air"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "lazy_static",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-matrix",
  "sp1-core-executor",
  "sp1-core-machine",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
 ]
 
 [[package]]
 name = "sp1-gpu-basefold"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "itertools 0.14.0",
  "rand 0.8.8",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-basefold",
  "slop-basefold-prover",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-dft",
  "slop-futures",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-merkle-tree",
  "slop-multilinear",
- "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-tensor",
  "sp1-gpu-challenger",
  "sp1-gpu-cudart",
@@ -8827,40 +8827,40 @@ dependencies = [
  "sp1-gpu-tracegen",
  "sp1-gpu-utils",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "tokio",
 ]
 
 [[package]]
 name = "sp1-gpu-challenger"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-gpu-cudart",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
 ]
 
 [[package]]
 name = "sp1-gpu-commit"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "itertools 0.14.0",
  "rand 0.8.8",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-dft",
  "slop-jagged",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-merkle-tree",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-tensor",
  "sp1-gpu-basefold",
  "sp1-gpu-cudart",
@@ -8877,27 +8877,27 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-cudart"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "crossbeam",
  "futures",
  "itertools 0.14.0",
  "pin-project",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-basefold",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-futures",
  "slop-jagged",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-multilinear",
  "slop-stacked",
  "slop-sumcheck",
  "slop-tensor",
  "sp1-gpu-sys",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -8906,19 +8906,19 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-jagged-assist"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "futures",
  "itertools 0.14.0",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-basefold",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-jagged",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-multilinear",
  "slop-sumcheck",
  "slop-tensor",
@@ -8932,16 +8932,16 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-jagged-sumcheck"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "futures",
  "itertools 0.14.0",
  "num-bigint 0.4.6",
  "rand 0.8.8",
  "rayon",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-jagged",
  "slop-multilinear",
  "slop-sumcheck",
@@ -8954,16 +8954,16 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-jagged-tracegen"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "futures",
  "itertools 0.14.0",
  "rand 0.8.8",
  "rayon",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-futures",
  "slop-jagged",
  "slop-multilinear",
@@ -8982,7 +8982,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-logup-gkr"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "futures",
  "itertools 0.14.0",
@@ -8991,19 +8991,19 @@ dependencies = [
  "serde",
  "serde_json",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-basefold-prover",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-dft",
  "slop-futures",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-merkle-tree",
  "slop-multilinear",
  "slop-sumcheck",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-tensor",
  "sp1-gpu-basefold",
  "sp1-gpu-cudart",
@@ -9018,24 +9018,24 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-merkle-tree"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-futures",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-merkle-tree",
  "slop-multilinear",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-tensor",
  "sp1-gpu-cudart",
  "sp1-gpu-tracegen",
  "sp1-gpu-utils",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "thiserror 1.0.69",
  "tokio",
 ]
@@ -9043,18 +9043,18 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-prover"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "clap",
  "serde",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-basefold",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-futures",
  "slop-jagged",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-core-executor",
  "sp1-core-machine",
  "sp1-gpu-air",
@@ -9068,7 +9068,7 @@ dependencies = [
  "sp1-gpu-shard-prover",
  "sp1-gpu-tracegen",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-prover",
  "sp1-prover-types",
  "sysinfo 0.31.4",
@@ -9078,14 +9078,14 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-shard-prover"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "serde_json",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-basefold",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-futures",
  "slop-jagged",
@@ -9114,15 +9114,15 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-sys"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "cbindgen",
  "cmake",
  "pathdiff",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-core-executor",
  "sp1-core-machine",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-recursion-executor",
  "sp1-recursion-machine",
 ]
@@ -9130,22 +9130,22 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-tracegen"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "futures",
  "rayon",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-futures",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-multilinear",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-tensor",
  "sp1-core-machine",
  "sp1-gpu-cudart",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-recursion-executor",
  "sp1-recursion-machine",
  "tokio",
@@ -9155,7 +9155,7 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-tracing"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "sp1-gpu-cudart",
  "tracing",
@@ -9165,30 +9165,30 @@ dependencies = [
 [[package]]
 name = "sp1-gpu-utils"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-tensor",
  "sp1-gpu-cudart",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
 ]
 
 [[package]]
 name = "sp1-gpu-zerocheck"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "itertools 0.14.0",
  "rand 0.8.8",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-futures",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-matrix",
  "slop-multilinear",
  "slop-sumcheck",
@@ -9200,7 +9200,7 @@ dependencies = [
  "sp1-gpu-tracegen",
  "sp1-gpu-utils",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -9209,7 +9209,7 @@ dependencies = [
 [[package]]
 name = "sp1-hypercube"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "arrayref",
  "deepsize2",
@@ -9223,27 +9223,27 @@ dependencies = [
  "rayon-scan",
  "serde",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-basefold",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-futures",
  "slop-jagged",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-matrix",
  "slop-merkle-tree",
  "slop-multilinear",
- "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-stacked",
  "slop-sumcheck",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-tensor",
  "slop-uni-stark",
  "slop-whir",
  "sp1-derive",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "struct-reflection",
  "strum",
  "thiserror 1.0.69",
@@ -9255,7 +9255,7 @@ dependencies = [
 [[package]]
 name = "sp1-jit"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "dynasmrt",
  "hashbrown 0.14.5",
@@ -9263,7 +9263,7 @@ dependencies = [
  "memfd",
  "memmap2",
  "serde",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "tracing",
  "uuid",
 ]
@@ -9307,7 +9307,7 @@ dependencies = [
 [[package]]
 name = "sp1-primitives"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "bincode",
  "blake3",
@@ -9318,19 +9318,19 @@ dependencies = [
  "num-bigint 0.4.6",
  "serde",
  "sha2",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
 ]
 
 [[package]]
 name = "sp1-prover"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "anyhow",
  "bincode",
@@ -9355,18 +9355,18 @@ dependencies = [
  "serial_test",
  "sha2",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-basefold",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-futures",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-core-executor",
  "sp1-core-executor-runner",
  "sp1-core-machine",
  "sp1-hypercube",
  "sp1-jit",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-prover-types",
  "sp1-recursion-circuit",
  "sp1-recursion-compiler",
@@ -9386,7 +9386,7 @@ dependencies = [
 [[package]]
 name = "sp1-prover-types"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "anyhow",
  "async-scoped",
@@ -9399,7 +9399,7 @@ dependencies = [
  "serde",
  "sp1-core-machine",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "tokio",
  "tonic 0.14.6",
  "tonic-prost",
@@ -9410,7 +9410,7 @@ dependencies = [
 [[package]]
 name = "sp1-recursion-circuit"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "bincode",
  "itertools 0.14.0",
@@ -9418,28 +9418,28 @@ dependencies = [
  "rayon",
  "serde",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-alloc",
  "slop-basefold",
  "slop-basefold-prover",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-commit",
  "slop-jagged",
- "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-koala-bear 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-matrix",
  "slop-merkle-tree",
  "slop-multilinear",
  "slop-stacked",
  "slop-sumcheck",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-tensor",
  "slop-whir",
  "sp1-core-executor",
  "sp1-core-machine",
  "sp1-derive",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-recursion-compiler",
  "sp1-recursion-executor",
  "sp1-recursion-machine",
@@ -9449,18 +9449,18 @@ dependencies = [
 [[package]]
 name = "sp1-recursion-compiler"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "backtrace",
  "cfg-if",
  "itertools 0.14.0",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-bn254 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-core-machine",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-recursion-executor",
  "tracing",
  "vec_map",
@@ -9469,7 +9469,7 @@ dependencies = [
 [[package]]
 name = "sp1-recursion-executor"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "backtrace",
  "cfg-if",
@@ -9477,10 +9477,10 @@ dependencies = [
  "itertools 0.14.0",
  "range-set-blaze",
  "serde",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-maybe-rayon",
- "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-poseidon2 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "smallvec",
  "sp1-derive",
  "sp1-hypercube",
@@ -9492,7 +9492,7 @@ dependencies = [
 [[package]]
 name = "sp1-recursion-gnark-ffi"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "anyhow",
  "bincode",
@@ -9502,10 +9502,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-recursion-compiler",
  "sp1-verifier",
  "tempfile",
@@ -9515,19 +9515,19 @@ dependencies = [
 [[package]]
 name = "sp1-recursion-machine"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "itertools 0.14.0",
  "rand 0.8.8",
  "slop-air",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "slop-basefold",
  "slop-matrix",
  "slop-maybe-rayon",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-derive",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-recursion-executor",
  "strum",
  "tracing",
@@ -9536,7 +9536,7 @@ dependencies = [
 [[package]]
 name = "sp1-sdk"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -9565,7 +9565,7 @@ dependencies = [
  "sp1-core-executor-runner",
  "sp1-core-machine",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-prover",
  "sp1-prover-types",
  "sp1-recursion-executor",
@@ -9608,7 +9608,7 @@ dependencies = [
 [[package]]
 name = "sp1-verifier"
 version = "6.10.0"
-source = "git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large#b3c9c963f9983f7dcb146af70ad00fc9f1f014a9"
+source = "git+https://github.com/succinctlabs/sp1?branch=main#0cd151a8d7beaaad4ad245c8f37515d6b4f72597"
 dependencies = [
  "bincode",
  "blake3",
@@ -9617,12 +9617,12 @@ dependencies = [
  "lazy_static",
  "serde",
  "sha2",
- "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
- "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "slop-algebra 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-challenger 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
+ "slop-symmetric 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-hypercube",
- "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=tobias%2Fproto-stdin-too-large)",
+ "sp1-primitives 6.10.0 (git+https://github.com/succinctlabs/sp1?branch=main)",
  "sp1-recursion-executor",
  "sp1-recursion-machine",
  "strum",
@@ -9662,7 +9662,7 @@ dependencies = [
 [[package]]
 name = "spn-artifact-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fproto-stdin-too-large#698300b148d876797660617239e938976713ff9d"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "prost 0.14.3",
  "serde",
@@ -9674,7 +9674,7 @@ dependencies = [
 [[package]]
 name = "spn-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fproto-stdin-too-large#698300b148d876797660617239e938976713ff9d"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -9696,12 +9696,12 @@ dependencies = [
 [[package]]
 name = "spn-bidding"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fproto-stdin-too-large#698300b148d876797660617239e938976713ff9d"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 
 [[package]]
 name = "spn-metrics"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fproto-stdin-too-large#698300b148d876797660617239e938976713ff9d"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "axum 0.7.9",
  "eyre",
@@ -9720,7 +9720,7 @@ dependencies = [
 [[package]]
 name = "spn-network-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fproto-stdin-too-large#698300b148d876797660617239e938976713ff9d"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -9737,7 +9737,7 @@ dependencies = [
 [[package]]
 name = "spn-pricing"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fproto-stdin-too-large#698300b148d876797660617239e938976713ff9d"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "alloy-primitives",
  "async-trait",
@@ -9748,7 +9748,7 @@ dependencies = [
 [[package]]
 name = "spn-utils"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fproto-stdin-too-large#698300b148d876797660617239e938976713ff9d"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
