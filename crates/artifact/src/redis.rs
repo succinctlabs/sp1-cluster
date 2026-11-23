@@ -437,6 +437,9 @@ impl RedisArtifactClient {
         };
 
         if total_chunks == 0 {
+            let inline_bytes: u64 = conn.strlen(&key).await.map_err(transient)?;
+            crate::check_size(inline_bytes, artifact_type)
+                .map_err(|e| backoff::Error::permanent(e.into()))?;
             let inline: Option<Vec<u8>> = conn.get(&key).await.map_err(transient)?;
             if let Some(result) = inline {
                 tracing::info!("download took {:?}, size: {}", now.elapsed(), result.len());
@@ -1105,6 +1108,40 @@ mod tests {
             .await
             .unwrap();
         let result = fx.client.par_download_file(fx.artifact_type, &fx.key).await;
+        let Err(backoff::Error::Permanent(err)) = result else {
+            panic!("expected a permanent error");
+        };
+        assert!(matches!(
+            err.downcast_ref(),
+            Some(crate::ArtifactError::TooLarge(ArtifactType::Program))
+        ));
+        fx.delete().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis at REDIS_URL"]
+    async fn inline_download_rejects_a_program_one_byte_over_the_cap() {
+        let fx = Fixture::program("program-inline-over-cap");
+        let mut conn = fx.conn().await;
+        let set_max_bulk_len = |bytes: u64| {
+            let mut config = deadpool_redis::redis::cmd("CONFIG");
+            config.arg("SET").arg("proto-max-bulk-len").arg(bytes);
+            config
+        };
+        set_max_bulk_len(2 * crate::MAX_PROGRAM_BYTES)
+            .query_async::<()>(&mut conn)
+            .await
+            .unwrap();
+        let _: usize = conn
+            .setrange(&fx.key, crate::MAX_PROGRAM_BYTES as isize, b"x")
+            .await
+            .unwrap();
+        let result = fx.client.par_download_file(fx.artifact_type, &fx.key).await;
+        set_max_bulk_len(crate::MAX_PROGRAM_BYTES)
+            .query_async::<()>(&mut conn)
+            .await
+            .unwrap();
+        drop(conn);
         let Err(backoff::Error::Permanent(err)) = result else {
             panic!("expected a permanent error");
         };
