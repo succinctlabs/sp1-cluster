@@ -9662,7 +9662,7 @@ dependencies = [
 [[package]]
 name = "spn-artifact-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fcap-artifact-download-size#d4cde152b1b63fce25955ee4c3741eba4c334502"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "prost 0.14.3",
  "serde",
@@ -9674,7 +9674,7 @@ dependencies = [
 [[package]]
 name = "spn-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fcap-artifact-download-size#d4cde152b1b63fce25955ee4c3741eba4c334502"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -9696,12 +9696,12 @@ dependencies = [
 [[package]]
 name = "spn-bidding"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fcap-artifact-download-size#d4cde152b1b63fce25955ee4c3741eba4c334502"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 
 [[package]]
 name = "spn-metrics"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fcap-artifact-download-size#d4cde152b1b63fce25955ee4c3741eba4c334502"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "axum 0.7.9",
  "eyre",
@@ -9720,7 +9720,7 @@ dependencies = [
 [[package]]
 name = "spn-network-types"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fcap-artifact-download-size#d4cde152b1b63fce25955ee4c3741eba4c334502"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "alloy",
  "alloy-primitives",
@@ -9737,7 +9737,7 @@ dependencies = [
 [[package]]
 name = "spn-pricing"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fcap-artifact-download-size#d4cde152b1b63fce25955ee4c3741eba4c334502"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "alloy-primitives",
  "async-trait",
@@ -9748,7 +9748,7 @@ dependencies = [
 [[package]]
 name = "spn-utils"
 version = "0.1.0"
-source = "git+https://github.com/succinctlabs/network?branch=tobias%2Fcap-artifact-download-size#d4cde152b1b63fce25955ee4c3741eba4c334502"
+source = "git+https://github.com/succinctlabs/network?branch=main#112379965d17f708dc3db90aa99485c9667dca0f"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",

@@ -39,12 +39,12 @@ p3-field = "=0.3.3-succinct"
 p3-matrix = "=0.3.3-succinct"
 
 # SPN
-spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "tobias/cap-artifact-download-size" }
-spn-bidding = { git = "https://github.com/succinctlabs/network", branch = "tobias/cap-artifact-download-size" }
-spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "tobias/cap-artifact-download-size" }
-spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "tobias/cap-artifact-download-size", features = ["network"] }
-spn-pricing = { git = "https://github.com/succinctlabs/network", branch = "tobias/cap-artifact-download-size" }
-spn-utils = { git = "https://github.com/succinctlabs/network", branch = "tobias/cap-artifact-download-size" }
+spn-artifacts = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-bidding = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-metrics = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-network-types = { git = "https://github.com/succinctlabs/network", branch = "main", features = ["network"] }
+spn-pricing = { git = "https://github.com/succinctlabs/network", branch = "main" }
+spn-utils = { git = "https://github.com/succinctlabs/network", branch = "main" }
 
 # SP1
 # Keep the entire family on one rev so crossing types share one source.
