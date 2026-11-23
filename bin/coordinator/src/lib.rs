@@ -371,6 +371,7 @@ pub struct Proof<P: AssignmentPolicy> {
     pub created_at: SystemTime,
     pub expires_at: Option<SystemTime>,
     pub active_tasks: u32,
+    pub removed_owners: HashSet<String>,
     pub extra: P::ProofState,
 }
 
@@ -382,6 +383,7 @@ impl<P: AssignmentPolicy> Proof<P> {
             created_at: SystemTime::now(),
             expires_at,
             active_tasks: 0,
+            removed_owners: HashSet::new(),
             extra,
         }
     }
@@ -1426,7 +1428,9 @@ impl<P: AssignmentPolicy> Coordinator<P> {
                 // dead-worker path. Does NOT consume retry budget.
                 stored.dead_worker_requeue_count =
                     stored.dead_worker_requeue_count.saturating_add(1);
-                (proof_extra, stored.clone())
+                let task = stored.clone();
+                proof.removed_owners.insert(worker_id.clone());
+                (proof_extra, task)
             };
             let task_type = task.data.task_type();
             if let Some(metrics) = &self.metrics {
@@ -1746,8 +1750,12 @@ impl<P: AssignmentPolicy> Coordinator<P> {
             tracing::error!("Proof {} not found", proof_id);
             return Err(Status::not_found(format!("Proof {proof_id} not found")));
         };
-        // The request names no task, so owning any task of the proof is enough.
-        Self::ensure_worker_owns_any_task_of_proof(&state, &worker_id, &proof_id)?;
+        // A removed worker's copy of a task can still finish, and the proof it finishes is
+        // valid work. Any other worker must own a task of the proof. The request names no
+        // task, so any task is enough.
+        if !proof.removed_owners.contains(&worker_id) {
+            Self::ensure_worker_owns_any_task_of_proof(&state, &worker_id, &proof_id)?;
+        }
         let metadata = P::get_proof_result_metadata(proof);
         drop(state);
         tracing::info!("Completed proof {}", proof_id);
@@ -4125,7 +4133,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evicted_worker_cannot_complete_a_proof_through_a_redelivered_task() {
+    async fn evicted_worker_can_still_complete_the_proof() {
         let c = Arc::new(coordinator());
         let (tx, mut rx) = mpsc::unbounded_channel();
         c.set_proofs_tx(tx).await;
@@ -4140,24 +4148,37 @@ mod tests {
             let state = c.state.clone().write_owned().await;
             c.assign_tasks(state).await.unwrap();
         }
-        // The evicted worker reconnects under its old id.
-        insert_live_worker(&mut *c.state.write().await, "w1");
 
-        let stale = c
-            .complete_proof("w1".into(), "p1".into(), Some("forged".into()))
+        c.complete_proof("w1".into(), "p1".into(), Some("result".into()))
+            .await
+            .unwrap();
+
+        let result = rx.try_recv().expect("the success must reach the sender");
+        assert!(result.success);
+        assert_eq!(result.extra_data.as_deref(), Some("result"));
+    }
+
+    #[tokio::test]
+    async fn worker_that_never_owned_a_task_cannot_complete_the_proof() {
+        let c = Arc::new(coordinator());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        c.set_proofs_tx(tx).await;
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            insert_worker_holding(&mut state, "w1", "p1", "t1");
+            insert_live_worker(&mut state, "w2");
+        }
+
+        let outsider = c
+            .complete_proof("w2".into(), "p1".into(), Some("forged".into()))
             .await;
 
         assert!(
-            matches!(stale, Err(ref e) if e.code() == tonic::Code::FailedPrecondition),
-            "got: {stale:?}"
+            matches!(outsider, Err(ref e) if e.code() == tonic::Code::FailedPrecondition),
+            "got: {outsider:?}"
         );
         assert!(rx.try_recv().is_err(), "no result may go out");
-        assert_eq!(
-            c.state.read().await.proofs["p1"].tasks["t1"]
-                .worker
-                .as_deref(),
-            Some("w2")
-        );
     }
 
     /// Eviction requeues a task but leaves the evicted worker's copy running. The coordinator
@@ -4246,6 +4267,38 @@ mod tests {
             .try_recv()
             .expect("the owner's failure must reach the sender");
         assert!(!result.success);
+    }
+
+    #[tokio::test]
+    async fn worker_failure_on_a_succeeded_task_is_ignored_for_any_worker() {
+        let c = Arc::new(coordinator());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        c.set_proofs_tx(tx).await;
+        {
+            let mut state = c.state.write().await;
+            insert_proof_with_running_gpu_task(&mut state, "p1", "t1", Some("w1"));
+            mark_task_succeeded(&mut state, "p1", "t1");
+        }
+
+        c.fail_proof_from_worker("unknown".into(), "p1".into(), Some("t1".into()), None)
+            .await
+            .expect("a duplicate's failure is ignored before the owner check");
+
+        assert!(c.state.read().await.proofs.contains_key("p1"));
+        assert!(rx.try_recv().is_err(), "no result may go out");
+    }
+
+    #[tokio::test]
+    async fn worker_failure_on_a_missing_proof_is_ignored_for_any_worker() {
+        let c = Arc::new(coordinator());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        c.set_proofs_tx(tx).await;
+
+        c.fail_proof_from_worker("unknown".into(), "gone".into(), Some("t1".into()), None)
+            .await
+            .expect("a failure for a proof that is already gone is a no-op");
+
+        assert!(rx.try_recv().is_err(), "no result may go out");
     }
 
     /// An execution error unclaims the proof, then the reporter's `fail_task` lands on
