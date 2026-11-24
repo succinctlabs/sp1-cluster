@@ -57,6 +57,9 @@ pub fn request_error_from_extra_data(extra_data: Option<&str>) -> Option<i32> {
 fn too_large_error(e: &anyhow::Error) -> Option<ProofRequestError> {
     match e.downcast_ref::<ArtifactError>()? {
         ArtifactError::TooLarge(ArtifactType::Program) => Some(ProofRequestError::ProgramTooLarge),
+        ArtifactError::TooLarge(ArtifactType::Stdin | ArtifactType::PrivateStdin) => {
+            Some(ProofRequestError::StdinTooLarge)
+        }
         _ => None,
     }
 }
@@ -1017,14 +1020,21 @@ mod tests {
     use sp1_cluster_common::proto::ClusterComponentInfo;
 
     #[test]
-    fn too_large_error_maps_only_an_oversized_program() {
+    fn too_large_error_maps_only_an_oversized_program_or_stdin() {
         let program = anyhow::Error::from(ArtifactError::TooLarge(ArtifactType::Program));
         assert_eq!(
             too_large_error(&program),
             Some(ProofRequestError::ProgramTooLarge)
         );
-        let stdin = anyhow::Error::from(ArtifactError::TooLarge(ArtifactType::Stdin));
-        assert_eq!(too_large_error(&stdin), None);
+        for stdin_type in [ArtifactType::Stdin, ArtifactType::PrivateStdin] {
+            let stdin = anyhow::Error::from(ArtifactError::TooLarge(stdin_type));
+            assert_eq!(
+                too_large_error(&stdin),
+                Some(ProofRequestError::StdinTooLarge)
+            );
+        }
+        let proof = anyhow::Error::from(ArtifactError::TooLarge(ArtifactType::Proof));
+        assert_eq!(too_large_error(&proof), None);
         assert_eq!(too_large_error(&anyhow!("s3 timeout")), None);
     }
 
