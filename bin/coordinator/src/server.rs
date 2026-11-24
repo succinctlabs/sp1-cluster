@@ -251,7 +251,7 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
                 let request = request.into_inner();
                 async move {
                     coordinator
-                        .complete_proof(request.proof_id, request.extra_data)
+                        .complete_proof(request.worker_id, request.proof_id, request.extra_data)
                         .await
                 }
             })
@@ -271,7 +271,12 @@ impl<P: AssignmentPolicy + Send + Sync + 'static>
                 let coordinator = self.coordinator.clone();
                 async move {
                     coordinator
-                        .fail_proof(inner.proof_id, inner.task_id, true, inner.extra_data)
+                        .fail_proof_from_worker(
+                            inner.worker_id,
+                            inner.proof_id,
+                            inner.task_id,
+                            inner.extra_data,
+                        )
                         .await
                 }
             })
