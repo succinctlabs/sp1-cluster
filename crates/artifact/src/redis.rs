@@ -437,10 +437,23 @@ impl RedisArtifactClient {
         };
 
         if total_chunks == 0 {
-            let inline_bytes: u64 = conn.strlen(&key).await.map_err(transient)?;
-            crate::check_size(inline_bytes, artifact_type)
-                .map_err(|e| backoff::Error::permanent(e.into()))?;
-            let inline: Option<Vec<u8>> = conn.get(&key).await.map_err(transient)?;
+            let inline: Option<Vec<u8>> = match crate::max_bytes(artifact_type) {
+                u64::MAX => conn.get(&key).await.map_err(transient)?,
+                cap => {
+                    // GETRANGE returns at most one byte past the cap, and EXISTS
+                    // in the same MULTI tells an empty value from an absent one.
+                    let (exists, bytes): (bool, Vec<u8>) = deadpool_redis::redis::pipe()
+                        .atomic()
+                        .exists(&key)
+                        .getrange(&key, 0, cap as isize)
+                        .query_async(&mut conn)
+                        .await
+                        .map_err(transient)?;
+                    crate::check_size(bytes.len() as u64, artifact_type)
+                        .map_err(|e| backoff::Error::permanent(e.into()))?;
+                    exists.then_some(bytes)
+                }
+            };
             if let Some(result) = inline {
                 tracing::info!("download took {:?}, size: {}", now.elapsed(), result.len());
                 return Ok(result);
@@ -1150,6 +1163,19 @@ mod tests {
             Some(crate::ArtifactError::TooLarge(ArtifactType::Program))
         ));
         fx.delete().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis at REDIS_URL"]
+    async fn inline_program_download_tells_an_empty_value_from_an_absent_one() {
+        let fx = Fixture::program("program-inline");
+        for data in [&b"elf"[..], &[]] {
+            fx.upload(data).await.unwrap();
+            assert_eq!(fx.download().await, data);
+        }
+        fx.delete().await;
+        let absent = fx.client.par_download_file(fx.artifact_type, &fx.key).await;
+        assert!(absent.is_err());
     }
 
     #[tokio::test]
