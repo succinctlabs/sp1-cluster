@@ -7,6 +7,7 @@ use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
 use deadpool_redis::redis::{AsyncCommands, SetExpiry, SetOptions};
 use deadpool_redis::{Config, Connection as RedisConnection, Pool, PoolConfig, Runtime};
 use mti::prelude::{MagicTypeIdExt, V7};
+use serde::de::DeserializeOwned;
 use sp1_cluster_common::util::backoff_retry;
 use sp1_prover_types::{ArtifactClient, ArtifactId, ArtifactType, ShardPermit};
 use tokio::sync::{Mutex, OnceCell, Semaphore};
@@ -416,7 +417,7 @@ impl RedisArtifactClient {
     /// change. A vanished hash surfaces as a loud absent-field error.
     async fn par_download_file(
         &self,
-        _: ArtifactType,
+        artifact_type: ArtifactType,
         key: &str,
     ) -> Result<Vec<u8>, backoff::Error<anyhow::Error>> {
         let mut conn = self.get_redis_connection(key).await?;
@@ -436,7 +437,23 @@ impl RedisArtifactClient {
         };
 
         if total_chunks == 0 {
-            let inline: Option<Vec<u8>> = conn.get(&key).await.map_err(transient)?;
+            let inline: Option<Vec<u8>> = match crate::max_bytes(artifact_type) {
+                u64::MAX => conn.get(&key).await.map_err(transient)?,
+                cap => {
+                    // GETRANGE returns at most one byte past the cap, and EXISTS
+                    // in the same MULTI tells an empty value from an absent one.
+                    let (exists, bytes): (bool, Vec<u8>) = deadpool_redis::redis::pipe()
+                        .atomic()
+                        .exists(&key)
+                        .getrange(&key, 0, cap as isize)
+                        .query_async(&mut conn)
+                        .await
+                        .map_err(transient)?;
+                    crate::check_size(bytes.len() as u64, artifact_type)
+                        .map_err(|e| backoff::Error::permanent(e.into()))?;
+                    exists.then_some(bytes)
+                }
+            };
             if let Some(result) = inline {
                 tracing::info!("download took {:?}, size: {}", now.elapsed(), result.len());
                 return Ok(result);
@@ -456,6 +473,19 @@ impl RedisArtifactClient {
                 )));
             }
         }
+        let mut chunk_lengths = deadpool_redis::redis::pipe();
+        for chunk_idx in 0..total_chunks {
+            chunk_lengths
+                .cmd("HSTRLEN")
+                .arg(chunk_key(&key))
+                .arg(chunk_idx);
+        }
+        let chunk_bytes: Vec<u64> = chunk_lengths
+            .query_async(&mut conn)
+            .await
+            .map_err(transient)?;
+        crate::check_size(chunk_bytes.iter().sum(), artifact_type)
+            .map_err(|e| backoff::Error::permanent(e.into()))?;
         // Return this connection before the chunk loop borrows more from the
         // same pool — holding it across those acquisitions can wedge a
         // saturated pool.
@@ -815,6 +845,12 @@ impl ArtifactClient for RedisArtifactClient {
         })
         .await
         .map_err(|e| {
+            let e = match e {
+                backoff::Error::Permanent(e) | backoff::Error::Transient { err: e, .. } => e,
+            };
+            if e.is::<crate::ArtifactError>() {
+                return e;
+            }
             let err_msg = e.to_string();
             if err_msg.contains("timed out") {
                 anyhow!(
@@ -827,9 +863,16 @@ impl ArtifactClient for RedisArtifactClient {
             }
         })?;
 
-        let decoded = zstd::decode_all(compressed.as_slice())
-            .map_err(|e| anyhow!("Failed to decompress artifact: {}", e))?;
-        Ok(decoded)
+        Ok(crate::decompress(&compressed, artifact_type)?)
+    }
+
+    async fn download_with_type<T: DeserializeOwned + Send + Sync + 'static>(
+        &self,
+        artifact: &impl ArtifactId,
+        artifact_type: ArtifactType,
+    ) -> Result<T> {
+        let bytes = self.download_raw(artifact, artifact_type).await?;
+        crate::deserialize(bytes, artifact_type).await
     }
 
     async fn exists(&self, artifact: &impl ArtifactId, _: ArtifactType) -> Result<bool> {
@@ -1068,6 +1111,89 @@ mod tests {
                 .await
                 .unwrap()
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis at REDIS_URL"]
+    async fn chunked_download_rejects_a_program_one_byte_over_the_cap() {
+        let fx = Fixture::program("program-over-cap");
+        fx.upload(&vec![0; crate::MAX_PROGRAM_BYTES as usize + 1])
+            .await
+            .unwrap();
+        let result = fx.client.par_download_file(fx.artifact_type, &fx.key).await;
+        let Err(backoff::Error::Permanent(err)) = result else {
+            panic!("expected a permanent error");
+        };
+        assert!(matches!(
+            err.downcast_ref(),
+            Some(crate::ArtifactError::TooLarge(ArtifactType::Program))
+        ));
+        fx.delete().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis at REDIS_URL"]
+    async fn inline_download_rejects_a_program_one_byte_over_the_cap() {
+        let fx = Fixture::program("program-inline-over-cap");
+        let mut conn = fx.conn().await;
+        let set_max_bulk_len = |bytes: u64| {
+            let mut config = deadpool_redis::redis::cmd("CONFIG");
+            config.arg("SET").arg("proto-max-bulk-len").arg(bytes);
+            config
+        };
+        set_max_bulk_len(2 * crate::MAX_PROGRAM_BYTES)
+            .query_async::<()>(&mut conn)
+            .await
+            .unwrap();
+        let _: usize = conn
+            .setrange(&fx.key, crate::MAX_PROGRAM_BYTES as isize, b"x")
+            .await
+            .unwrap();
+        let result = fx.client.par_download_file(fx.artifact_type, &fx.key).await;
+        set_max_bulk_len(crate::MAX_PROGRAM_BYTES)
+            .query_async::<()>(&mut conn)
+            .await
+            .unwrap();
+        drop(conn);
+        let Err(backoff::Error::Permanent(err)) = result else {
+            panic!("expected a permanent error");
+        };
+        assert!(matches!(
+            err.downcast_ref(),
+            Some(crate::ArtifactError::TooLarge(ArtifactType::Program))
+        ));
+        fx.delete().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis at REDIS_URL"]
+    async fn inline_program_download_tells_an_empty_value_from_an_absent_one() {
+        let fx = Fixture::program("program-inline");
+        for data in [&b"elf"[..], &[]] {
+            fx.upload(data).await.unwrap();
+            assert_eq!(fx.download().await, data);
+        }
+        fx.delete().await;
+        let absent = fx.client.par_download_file(fx.artifact_type, &fx.key).await;
+        assert!(absent.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Redis at REDIS_URL"]
+    async fn chunked_download_measures_chunks_smaller_than_the_chunk_size() {
+        let fx = Fixture::program("program-small-chunks");
+        let chunks = crate::MAX_PROGRAM_BYTES as usize / *CHUNK_SIZE + 1;
+        let mut conn = fx.conn().await;
+        for idx in 0..chunks {
+            let _: usize = conn.hset(chunk_key(&fx.key), idx, b"x").await.unwrap();
+        }
+        let _: usize = conn
+            .hset(chunk_key(&fx.key), CHUNK_COUNT_FIELD, chunks)
+            .await
+            .unwrap();
+        drop(conn);
+        assert_eq!(fx.download().await.len(), chunks);
+        fx.delete().await;
     }
 
     #[tokio::test]
