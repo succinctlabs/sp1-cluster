@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 #
 # Build Stage
 #
@@ -108,8 +109,8 @@ RUN --mount=type=ssh \
   git config --global --unset-all url."${GIT_URL_BASE}".insteadOf || true && \
   unset PRIVATE_TOKEN GIT_URL_BASE || true
 
-# Runtime stage
-FROM --platform=linux/amd64 nvidia/cuda:13.0.1-runtime-ubuntu22.04 AS runtime
+# The binary links only libcudart, so the base image is enough.
+FROM --platform=linux/amd64 nvidia/cuda:13.0.1-base-ubuntu22.04 AS runtime
 
 RUN \
   apt-get update -y && \
@@ -133,8 +134,10 @@ ENV IMAGE_TAG=$IMAGE_TAG
 RUN groupadd --gid 1001 appgroup && \
   useradd --uid 1001 --gid appgroup --shell /bin/false --create-home appuser
 
-# Copy the built application binaries from the build stage
-COPY --from=build /sp1-cluster-node /app/sp1-cluster-node
+COPY --from=build --chown=appuser:appgroup --chmod=755 /sp1-cluster-node /app/sp1-cluster-node
+
+# Fail the build if the binary links a library the base image lacks.
+RUN out="$(ldd /app/sp1-cluster-node)" && ! printf '%s\n' "$out" | grep 'not found'
 
 # Circuit artifact cache. Only WORKER_TYPE=ALL reads it, because the wrap step
 # runs here.
@@ -142,10 +145,6 @@ ENV SP1_GROTH16_CIRCUIT_PATH=/var/cache/sp1/circuits/groth16 \
   SP1_PLONK_CIRCUIT_PATH=/var/cache/sp1/circuits/plonk
 RUN mkdir -p "$SP1_GROTH16_CIRCUIT_PATH" "$SP1_PLONK_CIRCUIT_PATH" && \
   chown -R appuser:appgroup /var/cache/sp1
-
-# Set ownership to the non-root user and ensure the binary is executable
-RUN chown appuser:appgroup /app/sp1-cluster-node && \
-  chmod +x /app/sp1-cluster-node
 
 # Set the user to the non-root user
 USER appuser
