@@ -2,7 +2,7 @@ use std::{net::SocketAddr, str::FromStr};
 
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::{Context, Result};
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use sp1_cluster_bidder::{config::Settings, grpc, metrics::BidderMetrics, Bidder};
 use spn_metrics::{
     server::{MetricServer, MetricServerConfig},

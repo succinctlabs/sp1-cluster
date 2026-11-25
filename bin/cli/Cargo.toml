@@ -7,7 +7,7 @@ edition = "2021"
 [dependencies]
 bincode.workspace = true
 clap.workspace = true
-dotenv.workspace = true
+dotenvy.workspace = true
 eyre.workspace = true
 opentelemetry_sdk.workspace = true
 sp1-cluster-artifact = { workspace = true }

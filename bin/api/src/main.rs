@@ -9,7 +9,7 @@ use tracing::info;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     logger::init(Resource::empty());
-    if let Err(e) = dotenv::dotenv() {
+    if let Err(e) = dotenvy::dotenv() {
         eprintln!("not loading .env file: {e}");
     }
     info!("Loaded environment variables");

@@ -28,7 +28,7 @@ axum = { workspace = true }
 bincode = { workspace = true }
 clap = { workspace = true }
 dashmap = { workspace = true }
-dotenv = { workspace = true }
+dotenvy = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 mti = { workspace = true }

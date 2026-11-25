@@ -1,6 +1,6 @@
 use crate::mainnet::MainnetFulfiller;
 use anyhow::Result;
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use sp1_cluster_artifact::{
     redis::RedisArtifactClient,
     s3::{S3ArtifactClient, S3DownloadMode},

@@ -23,7 +23,7 @@ alloy-signer-local = { workspace = true }
 anyhow = { workspace = true }
 async-trait.workspace = true
 config = { workspace = true }
-dotenv = { workspace = true }
+dotenvy = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 rustls = { workspace = true, features = ["ring"] }

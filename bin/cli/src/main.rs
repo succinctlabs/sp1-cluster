@@ -22,7 +22,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = dotenv::dotenv() {
+    if let Err(e) = dotenvy::dotenv() {
         eprintln!("not loading .env file: {}", e);
     }
     sp1_sdk::setup_logger();
